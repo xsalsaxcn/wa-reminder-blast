@@ -1,37 +1,28 @@
-export default function Topbar({ title }) {
-  return (
-    <header className="sticky top-0 z-20 border-b border-[#e7ecf5] bg-white/82 px-6 py-4 backdrop-blur-xl lg:px-8">
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-xs font-bold uppercase tracking-[0.24em] text-[#8b94a7]">Medical Operations Console</p>
-          <h1 className="truncate text-xl font-bold tracking-tight text-[#172033]">{title}</h1>
-        </div>
+﻿export default function Topbar({ user }) {
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    window.location.href = '/login'
+  }
 
-        <div className="hidden flex-1 justify-center md:flex">
-          <div className="relative w-full max-w-md">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#98a2b3]">⌕</span>
-            <input
-              className="h-11 w-full rounded-2xl border border-[#e7ecf5] bg-[#f8fafc] pl-11 pr-4 text-sm outline-none transition focus:border-[#b8b2ff] focus:bg-white focus:ring-4 focus:ring-[#eeeefe]"
-              placeholder="Cari database, log, atau menu..."
-            />
-          </div>
+  return (
+    <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/80 px-6 py-4 backdrop-blur lg:px-8">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-slate-500">Welcome back</p>
+          <h2 className="text-xl font-bold text-slate-900">{user?.username || 'User'}</h2>
         </div>
 
         <div className="flex items-center gap-3">
-          <button className="relative flex h-11 w-11 items-center justify-center rounded-2xl border border-[#e7ecf5] bg-white text-[#667085] shadow-sm">
-            ◌
-            <span className="absolute right-2.5 top-2.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-[#12b8a6]" />
-          </button>
-
-          <div className="flex items-center gap-3 rounded-2xl border border-[#e7ecf5] bg-white px-3 py-2 shadow-sm">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#6d5dfc] to-[#12b8a6] text-sm font-bold text-white">
-              A
-            </div>
-            <div className="hidden leading-tight sm:block">
-              <div className="text-sm font-bold text-[#172033]">Admin</div>
-              <div className="text-xs text-[#718096]">Master User</div>
-            </div>
+          <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-500 md:block">
+            Role: <span className="font-bold text-indigo-600">{user?.role}</span>
           </div>
+
+          <button
+            onClick={logout}
+            className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+          >
+            Logout
+          </button>
         </div>
       </div>
     </header>
