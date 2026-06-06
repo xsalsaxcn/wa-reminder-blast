@@ -11,7 +11,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { username, password } = req.body
+    const { username, password } = req.body || {}
 
     if (!username || !password) {
       return res.status(400).json({
@@ -22,14 +22,18 @@ export default async function handler(req, res) {
 
     const { data: user, error } = await supabaseAdmin
       .from('app_users')
-      .select('*')
+      .select('id, username, password_hash, role, is_active')
       .eq('username', username)
-      .eq('is_active', true)
       .maybeSingle()
 
-    if (error) throw error
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message
+      })
+    }
 
-    if (!user) {
+    if (!user || !user.is_active) {
       return res.status(401).json({
         success: false,
         message: 'Username atau password salah'

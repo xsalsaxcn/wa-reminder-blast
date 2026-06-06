@@ -3,31 +3,61 @@ import { useRouter } from 'next/router'
 
 export default function LoginPage() {
   const router = useRouter()
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState('masteradmin')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
   async function login(e) {
     e.preventDefault()
+
+    if (loading) return
+
     setLoading(true)
     setMessage('')
 
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => {
+      controller.abort()
+    }, 10000)
 
-    const json = await res.json()
-    setLoading(false)
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+        signal: controller.signal
+      })
 
-    if (!json.success) {
-      setMessage(json.message || 'Login gagal')
-      return
+      clearTimeout(timeout)
+
+      let json
+
+      try {
+        json = await res.json()
+      } catch {
+        throw new Error('Server mengembalikan response tidak valid.')
+      }
+
+      if (!json.success) {
+        setMessage(json.message || 'Login gagal')
+        setLoading(false)
+        return
+      }
+
+      setMessage('Login berhasil. Mengalihkan...')
+      router.replace('/')
+    } catch (error) {
+      clearTimeout(timeout)
+
+      if (error.name === 'AbortError') {
+        setMessage('Login timeout. Cek koneksi Supabase / API env.')
+      } else {
+        setMessage(error.message || 'Login gagal')
+      }
+
+      setLoading(false)
     }
-
-    router.push('/')
   }
 
   return (
@@ -40,32 +70,42 @@ export default function LoginPage() {
 
         <form onSubmit={login} className="mt-6 space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-slate-700">Username</label>
+            <label className="block text-sm font-semibold text-slate-700">
+              Username
+            </label>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
               className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-400"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-700">Password</label>
+            <label className="block text-sm font-semibold text-slate-700">
+              Password
+            </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-400"
             />
           </div>
 
           <button
             disabled={loading}
-            className="w-full rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+            className="w-full rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {loading ? 'Logging in...' : 'Login'}
           </button>
 
-          {message && <p className="text-sm font-semibold text-rose-700">{message}</p>}
+          {message && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-700">
+              {message}
+            </div>
+          )}
 
           <button
             type="button"
