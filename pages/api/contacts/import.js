@@ -42,6 +42,17 @@ export default async function handler(req, res) {
       })
     }
 
+    const maxImportContacts = Number(process.env.MAX_IMPORT_CONTACTS || 5000)
+
+    if (contacts.length > maxImportContacts) {
+      return res.status(400).json({
+        success: false,
+        message: `Import ditolak. Maksimal ${maxImportContacts} kontak per upload. File ini berisi ${contacts.length} baris. Pecah file menjadi beberapa batch.`
+      })
+    }
+
+    const seenPhones = new Set()
+
     const validContacts = contacts
       .map((row) => ({
         name: row.name || row.nama || '',
@@ -52,6 +63,11 @@ export default async function handler(req, res) {
         status: 'active'
       }))
       .filter((row) => row.phone)
+      .filter((row) => {
+        if (seenPhones.has(row.phone)) return false
+        seenPhones.add(row.phone)
+        return true
+      })
 
     if (validContacts.length === 0) {
       return res.status(400).json({
@@ -85,7 +101,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: `Berhasil import ${validContacts.length} kontak`,
+      message: `Berhasil import ${validContacts.length} kontak. Duplikat nomor dalam file otomatis dilewati.`,
       database
     })
   } catch (error) {
