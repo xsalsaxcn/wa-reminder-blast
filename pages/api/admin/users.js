@@ -1,4 +1,4 @@
-﻿import bcrypt from 'bcrypt'
+﻿import bcrypt from 'bcryptjs'
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
 
