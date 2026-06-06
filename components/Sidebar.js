@@ -6,10 +6,12 @@ const navItems = [
   { href: '/dashboard', label: 'Dashboard', roles: ['master', 'admin', 'user'] },
   { href: '/reminder', label: 'Reminder', roles: ['master', 'admin', 'user'] },
   { href: '/blast', label: 'WhatsApp Blast', roles: ['master', 'admin', 'user'] },
+  { href: '/jobs', label: 'Job Queue', roles: ['master', 'admin', 'user'] },
   { href: '/logs', label: 'Logs', roles: ['master', 'admin', 'user'] },
 
   { href: '/admin/import-reminder', label: 'Import Reminder', roles: ['master', 'admin'] },
   { href: '/admin/import-blast', label: 'Import Blast', roles: ['master', 'admin'] },
+  { href: '/admin/scheduler', label: 'Scheduler', roles: ['master', 'admin'] },
   { href: '/admin/meta-test', label: 'Meta API Test', roles: ['master', 'admin'] },
   { href: '/admin/whatsapp-settings', label: 'WhatsApp Settings', roles: ['master', 'admin'] },
   { href: '/admin/manage-users', label: 'Manage Users', roles: ['master', 'admin'] },
@@ -26,13 +28,21 @@ export default function Sidebar({ user }) {
     <aside className="hidden min-h-screen w-72 shrink-0 border-r border-slate-200 bg-white px-5 py-6 lg:block">
       <div className="rounded-3xl bg-gradient-to-br from-indigo-600 to-sky-500 p-5 text-white shadow-lg shadow-indigo-100">
         <p className="text-sm font-medium opacity-90">Harmony Health</p>
-        <h1 className="mt-1 text-2xl font-bold leading-tight">WA Reminder & Blast</h1>
+        <h1 className="mt-1 text-2xl font-bold leading-tight">
+          WA Reminder & Blast
+        </h1>
       </div>
 
       <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Logged in as</p>
-        <p className="mt-1 text-sm font-bold text-slate-800">{user?.username || 'User'}</p>
-        <p className="text-xs font-semibold text-indigo-600">{role}</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Logged in as
+        </p>
+        <p className="mt-1 text-sm font-bold text-slate-800">
+          {user?.username || 'User'}
+        </p>
+        <p className="text-xs font-semibold text-indigo-600">
+          {role}
+        </p>
       </div>
 
       <nav className="mt-6 space-y-1">

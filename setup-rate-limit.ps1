@@ -1,0 +1,326 @@
+New-Item -ItemType Directory -Force -Path "pages\api\reminder" | Out-Null
+New-Item -ItemType Directory -Force -Path "pages\api\blast" | Out-Null
+New-Item -ItemType Directory -Force -Path "lib" | Out-Null
+
+@'
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getSendDelayMs() {
+  const raw = process.env.WHATSAPP_SEND_DELAY_MS || '2000'
+  const parsed = Number(raw)
+
+  if (Number.isNaN(parsed)) return 2000
+
+  // Minimal 500ms, maksimal 10000ms supaya tidak berlebihan
+  return Math.min(Math.max(parsed, 500), 10000)
+}
+
+export {
+  sleep,
+  getSendDelayMs
+}
+'@ | Set-Content -Encoding UTF8 "lib\rateLimit.js"
+
+@'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { sendWhatsAppText, sendWhatsAppTemplate } from '../../../lib/metaWhatsapp'
+import { requireRole } from '../../../lib/auth'
+import { sleep, getSendDelayMs } from '../../../lib/rateLimit'
+
+function getValue(contact, field) {
+  const value = contact?.[field]
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function interpolateMessage(template, contact) {
+  if (!template) return ''
+
+  return template
+    .replaceAll('{name}', getValue(contact, 'name'))
+    .replaceAll('{phone}', getValue(contact, 'phone'))
+    .replaceAll('{message}', getValue(contact, 'message'))
+    .replaceAll('{reminder_date}', getValue(contact, 'reminder_date'))
+    .replaceAll('{reminder_time}', getValue(contact, 'reminder_time'))
+}
+
+async function getSetting() {
+  const { data, error } = await supabaseAdmin
+    .from('whatsapp_settings')
+    .select('*')
+    .eq('type', 'reminder')
+    .maybeSingle()
+
+  if (error) throw error
+
+  return data || {
+    message_mode: 'text',
+    template_variables: [],
+    default_message: 'Halo {name}, ini reminder dari layanan kami.'
+  }
+}
+
+export default async function handler(req, res) {
+  const authUser = requireRole(req, res, ['master', 'admin', 'user'])
+  if (!authUser) return
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      success: false,
+      message: 'Method not allowed'
+    })
+  }
+
+  try {
+    const { databaseId } = req.body
+
+    if (!databaseId) {
+      return res.status(400).json({
+        success: false,
+        message: 'databaseId wajib diisi'
+      })
+    }
+
+    const setting = await getSetting()
+    const delayMs = getSendDelayMs()
+    const startedAt = Date.now()
+
+    const { data: contacts, error: contactsError } = await supabaseAdmin
+      .from('contacts')
+      .select('*')
+      .eq('database_id', databaseId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true })
+
+    if (contactsError) throw contactsError
+
+    if (!contacts || contacts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Kontak reminder kosong'
+      })
+    }
+
+    let sent = 0
+    let failed = 0
+
+    for (let i = 0; i < contacts.length; i++) {
+      const contact = contacts[i]
+
+      let result
+      let message = contact.message || interpolateMessage(setting.default_message, contact)
+
+      if (setting.message_mode === 'template') {
+        const variables = Array.isArray(setting.template_variables)
+          ? setting.template_variables.map((field) => getValue(contact, field))
+          : []
+
+        result = await sendWhatsAppTemplate({
+          phone: contact.phone,
+          templateName: setting.template_name,
+          languageCode: setting.language_code || 'id',
+          variables
+        })
+
+        message = `TEMPLATE: ${setting.template_name} | VARS: ${variables.join(', ')}`
+      } else {
+        result = await sendWhatsAppText({
+          phone: contact.phone,
+          message
+        })
+      }
+
+      if (result.ok) {
+        sent += 1
+      } else {
+        failed += 1
+      }
+
+      await supabaseAdmin.from('reminder_logs').insert({
+        database_id: databaseId,
+        contact_id: contact.id,
+        phone: contact.phone,
+        message,
+        status: result.ok ? 'sent' : 'failed',
+        meta_message_id: result.messageId || null,
+        error_message: result.error || null
+      })
+
+      // Delay antar nomor, kecuali setelah kontak terakhir
+      if (i < contacts.length - 1) {
+        await sleep(delayMs)
+      }
+    }
+
+    const durationSeconds = Math.round((Date.now() - startedAt) / 1000)
+
+    return res.status(200).json({
+      success: true,
+      message: `Reminder selesai. Terkirim: ${sent}, Gagal: ${failed}, Delay: ${delayMs}ms, Durasi: ${durationSeconds}s`,
+      sent,
+      failed,
+      delayMs,
+      durationSeconds
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Run reminder gagal'
+    })
+  }
+}
+'@ | Set-Content -Encoding UTF8 "pages\api\reminder\run.js"
+
+@'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { sendWhatsAppText, sendWhatsAppTemplate } from '../../../lib/metaWhatsapp'
+import { requireRole } from '../../../lib/auth'
+import { sleep, getSendDelayMs } from '../../../lib/rateLimit'
+
+function getValue(contact, field) {
+  const value = contact?.[field]
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function interpolateMessage(template, contact) {
+  if (!template) return ''
+
+  return template
+    .replaceAll('{name}', getValue(contact, 'name'))
+    .replaceAll('{phone}', getValue(contact, 'phone'))
+    .replaceAll('{message}', getValue(contact, 'message'))
+    .replaceAll('{reminder_date}', getValue(contact, 'reminder_date'))
+    .replaceAll('{reminder_time}', getValue(contact, 'reminder_time'))
+}
+
+async function getSetting() {
+  const { data, error } = await supabaseAdmin
+    .from('whatsapp_settings')
+    .select('*')
+    .eq('type', 'blast')
+    .maybeSingle()
+
+  if (error) throw error
+
+  return data || {
+    message_mode: 'text',
+    template_variables: [],
+    default_message: 'Halo {name}, ini informasi terbaru dari layanan kami.'
+  }
+}
+
+export default async function handler(req, res) {
+  const authUser = requireRole(req, res, ['master', 'admin', 'user'])
+  if (!authUser) return
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      success: false,
+      message: 'Method not allowed'
+    })
+  }
+
+  try {
+    const { databaseId } = req.body
+
+    if (!databaseId) {
+      return res.status(400).json({
+        success: false,
+        message: 'databaseId wajib diisi'
+      })
+    }
+
+    const setting = await getSetting()
+    const delayMs = getSendDelayMs()
+    const startedAt = Date.now()
+
+    const { data: contacts, error: contactsError } = await supabaseAdmin
+      .from('contacts')
+      .select('*')
+      .eq('database_id', databaseId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true })
+
+    if (contactsError) throw contactsError
+
+    if (!contacts || contacts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Kontak broadcast kosong'
+      })
+    }
+
+    let sent = 0
+    let failed = 0
+
+    for (let i = 0; i < contacts.length; i++) {
+      const contact = contacts[i]
+
+      let result
+      let message = contact.message || interpolateMessage(setting.default_message, contact)
+
+      if (setting.message_mode === 'template') {
+        const variables = Array.isArray(setting.template_variables)
+          ? setting.template_variables.map((field) => getValue(contact, field))
+          : []
+
+        result = await sendWhatsAppTemplate({
+          phone: contact.phone,
+          templateName: setting.template_name,
+          languageCode: setting.language_code || 'id',
+          variables
+        })
+
+        message = `TEMPLATE: ${setting.template_name} | VARS: ${variables.join(', ')}`
+      } else {
+        result = await sendWhatsAppText({
+          phone: contact.phone,
+          message
+        })
+      }
+
+      if (result.ok) {
+        sent += 1
+      } else {
+        failed += 1
+      }
+
+      await supabaseAdmin.from('blast_logs').insert({
+        database_id: databaseId,
+        contact_id: contact.id,
+        phone: contact.phone,
+        message,
+        status: result.ok ? 'sent' : 'failed',
+        meta_message_id: result.messageId || null,
+        error_message: result.error || null
+      })
+
+      // Delay antar nomor, kecuali setelah kontak terakhir
+      if (i < contacts.length - 1) {
+        await sleep(delayMs)
+      }
+    }
+
+    const durationSeconds = Math.round((Date.now() - startedAt) / 1000)
+
+    return res.status(200).json({
+      success: true,
+      message: `Broadcast selesai. Terkirim: ${sent}, Gagal: ${failed}, Delay: ${delayMs}ms, Durasi: ${durationSeconds}s`,
+      sent,
+      failed,
+      delayMs,
+      durationSeconds
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Run broadcast gagal'
+    })
+  }
+}
+'@ | Set-Content -Encoding UTF8 "pages\api\blast\run.js"
+
+Write-Host "Rate limit WhatsApp send berhasil dipasang."

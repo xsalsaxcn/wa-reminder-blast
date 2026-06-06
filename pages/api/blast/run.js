@@ -1,6 +1,7 @@
-﻿import { requireRole } from '../../../lib/auth'
-import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { sendWhatsAppText, sendWhatsAppTemplate } from '../../../lib/metaWhatsapp'
+import { requireRole } from '../../../lib/auth'
+import { sleep, getSendDelayMs } from '../../../lib/rateLimit'
 
 function getValue(contact, field) {
   const value = contact?.[field]
@@ -40,7 +41,10 @@ export default async function handler(req, res) {
   if (!authUser) return
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, message: 'Method not allowed' })
+    return res.status(405).json({
+      success: false,
+      message: 'Method not allowed'
+    })
   }
 
   try {
@@ -54,12 +58,15 @@ export default async function handler(req, res) {
     }
 
     const setting = await getSetting()
+    const delayMs = getSendDelayMs()
+    const startedAt = Date.now()
 
     const { data: contacts, error: contactsError } = await supabaseAdmin
       .from('contacts')
       .select('*')
       .eq('database_id', databaseId)
       .eq('status', 'active')
+      .order('created_at', { ascending: true })
 
     if (contactsError) throw contactsError
 
@@ -73,7 +80,9 @@ export default async function handler(req, res) {
     let sent = 0
     let failed = 0
 
-    for (const contact of contacts) {
+    for (let i = 0; i < contacts.length; i++) {
+      const contact = contacts[i]
+
       let result
       let message = contact.message || interpolateMessage(setting.default_message, contact)
 
@@ -97,8 +106,11 @@ export default async function handler(req, res) {
         })
       }
 
-      if (result.ok) sent += 1
-      else failed += 1
+      if (result.ok) {
+        sent += 1
+      } else {
+        failed += 1
+      }
 
       await supabaseAdmin.from('blast_logs').insert({
         database_id: databaseId,
@@ -109,13 +121,22 @@ export default async function handler(req, res) {
         meta_message_id: result.messageId || null,
         error_message: result.error || null
       })
+
+      // Delay antar nomor, kecuali setelah kontak terakhir
+      if (i < contacts.length - 1) {
+        await sleep(delayMs)
+      }
     }
+
+    const durationSeconds = Math.round((Date.now() - startedAt) / 1000)
 
     return res.status(200).json({
       success: true,
-      message: `Broadcast selesai. Terkirim: ${sent}, Gagal: ${failed}`,
+      message: `Broadcast selesai. Terkirim: ${sent}, Gagal: ${failed}, Delay: ${delayMs}ms, Durasi: ${durationSeconds}s`,
       sent,
-      failed
+      failed,
+      delayMs,
+      durationSeconds
     })
   } catch (error) {
     return res.status(500).json({
@@ -124,4 +145,3 @@ export default async function handler(req, res) {
     })
   }
 }
-
