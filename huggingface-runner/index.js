@@ -1,5 +1,5 @@
 ﻿const APP_URL = process.env.APP_URL
-const JOB_RUNNER_SECRET = process.env.JOB_RUNNER_SECRET
+const JOB_worker_SECRET = process.env.JOB_worker_SECRET
 const INTERVAL_MS = Number(process.env.INTERVAL_MS || 15000)
 const JOB_TYPE = process.env.JOB_TYPE || ''
 const JOB_BATCH_LIMIT = process.env.JOB_BATCH_LIMIT || '10'
@@ -9,8 +9,8 @@ if (!APP_URL) {
   process.exit(1)
 }
 
-if (!JOB_RUNNER_SECRET) {
-  console.error('JOB_RUNNER_SECRET is required')
+if (!JOB_worker_SECRET) {
+  console.error('JOB_worker_SECRET is required')
   process.exit(1)
 }
 
@@ -33,7 +33,7 @@ async function tick() {
     const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
-        'x-job-runner-secret': JOB_RUNNER_SECRET,
+        'x-job-worker-secret': JOB_worker_SECRET,
         'Content-Type': 'application/json'
       }
     })
@@ -48,7 +48,7 @@ async function tick() {
   }
 }
 
-console.log('WA Reminder Blast Runner started')
+console.log('WA Reminder Blast Auto Worker started')
 console.log('APP_URL:', APP_URL)
 console.log('INTERVAL_MS:', INTERVAL_MS)
 console.log('JOB_TYPE:', JOB_TYPE || 'all')
@@ -56,3 +56,4 @@ console.log('JOB_BATCH_LIMIT:', JOB_BATCH_LIMIT)
 
 tick()
 setInterval(tick, INTERVAL_MS)
+

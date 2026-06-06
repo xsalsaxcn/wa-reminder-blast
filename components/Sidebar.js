@@ -11,7 +11,7 @@ const navItems = [
 
   { href: '/admin/import-reminder', label: 'Import Reminder', roles: ['master', 'admin'] },
   { href: '/admin/import-blast', label: 'Import Blast', roles: ['master', 'admin'] },
-  { href: '/admin/scheduler', label: 'Scheduler', roles: ['master', 'admin'] },
+  { href: '/admin/auto-worker', label: 'Auto Worker', roles: ['master', 'admin'] },
   { href: '/admin/meta-test', label: 'Meta API Test', roles: ['master', 'admin'] },
   { href: '/admin/whatsapp-settings', label: 'WhatsApp Settings', roles: ['master', 'admin'] },
   { href: '/admin/manage-users', label: 'Manage Users', roles: ['master', 'admin'] },
@@ -68,7 +68,7 @@ export default function Sidebar({ user }) {
       <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
         <p className="text-sm font-bold text-emerald-700">System Online</p>
         <p className="mt-1 text-xs text-emerald-600">
-          API protected by login session.
+          Auto Worker ready.
         </p>
       </div>
     </aside>

@@ -1,6 +1,10 @@
-﻿# WA Reminder Blast Runner
+﻿# WA Reminder Blast Auto Worker
 
-This is a small Node.js runner for Hugging Face Spaces.
+Auto Worker adalah service background untuk menjalankan:
+
+- Auto Reminder Scheduler
+- Job Queue Processor
+- Batch WhatsApp Sender
 
 ## Environment Variables
 
