@@ -1,0 +1,5 @@
+[33m7c7c8a6[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m Fix inbox cache and conversation fallback
+[33m57da0af[m Add WhatsApp inbox sidebar and webhook integration
+[33m97eeb73[m Add automatic database cleanup
+[33md65d296[m Add database manager and cleanup tools
+[33ma0eb702[m Polish dashboard stats and recent activity
