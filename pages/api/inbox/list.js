@@ -28,18 +28,11 @@ export default async function handler(req, res) {
       })
     }
 
-    if (conversations && conversations.length > 0) {
-      return res.status(200).json({
-        success: true,
-        conversations
-      })
-    }
-
     const { data: incomingMessages, error: incomingError } = await supabaseAdmin
       .from('wa_incoming_messages')
       .select('*')
       .order('received_at', { ascending: false })
-      .limit(100)
+      .limit(300)
 
     if (incomingError) {
       return res.status(500).json({
@@ -48,31 +41,53 @@ export default async function handler(req, res) {
       })
     }
 
-    const map = new Map()
+    const mergedMap = new Map()
+
+    for (const conv of conversations || []) {
+      if (!conv.phone) continue
+
+      mergedMap.set(conv.phone, {
+        id: conv.id || conv.phone,
+        phone: conv.phone,
+        profile_name: conv.profile_name || conv.phone,
+        last_message: conv.last_message || '',
+        last_message_at: conv.last_message_at || conv.updated_at || conv.created_at,
+        unread_count: conv.unread_count || 0,
+        status: conv.status || 'open',
+        created_at: conv.created_at,
+        updated_at: conv.updated_at
+      })
+    }
 
     for (const msg of incomingMessages || []) {
       if (!msg.phone) continue
 
-      if (!map.has(msg.phone)) {
-        map.set(msg.phone, {
-          id: msg.phone,
+      const existing = mergedMap.get(msg.phone)
+      const msgTime = msg.received_at ? new Date(msg.received_at).getTime() : 0
+      const existingTime = existing?.last_message_at ? new Date(existing.last_message_at).getTime() : 0
+
+      if (!existing || msgTime >= existingTime) {
+        mergedMap.set(msg.phone, {
+          id: existing?.id || msg.phone,
           phone: msg.phone,
-          profile_name: msg.profile_name || msg.phone,
-          last_message: msg.body || '',
-          last_message_at: msg.received_at,
-          unread_count: 1,
-          status: 'open',
-          created_at: msg.received_at,
-          updated_at: msg.received_at
+          profile_name: msg.profile_name || existing?.profile_name || msg.phone,
+          last_message: msg.body || existing?.last_message || '',
+          last_message_at: msg.received_at || existing?.last_message_at,
+          unread_count: existing?.unread_count ?? 1,
+          status: existing?.status || 'open',
+          created_at: existing?.created_at || msg.received_at,
+          updated_at: existing?.updated_at || msg.received_at
         })
       }
     }
 
-    const fallbackConversations = Array.from(map.values())
+    const mergedConversations = Array.from(mergedMap.values()).sort((a, b) => {
+      return new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0)
+    })
 
     return res.status(200).json({
       success: true,
-      conversations: fallbackConversations
+      conversations: mergedConversations
     })
   } catch (error) {
     return res.status(401).json({
