@@ -1,0 +1,39 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "243741338818420",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "6281335301597",
+              "phone_number_id": "982529118266330"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Webhook Manual Test"
+                },
+                "wa_id": "6281234567890"
+              }
+            ],
+            "messages": [
+              {
+                "from": "6281234567890",
+                "id": "wamid.manualtest123",
+                "timestamp": "1760000000",
+                "type": "text",
+                "text": {
+                  "body": "test inbox manual dari webhook"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
