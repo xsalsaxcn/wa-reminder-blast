@@ -6,3 +6,5 @@ node_modules/
 npm-debug.log*
 wa_reminder_fixed_project/
 wa-reminder-restore/
+.vercel
+.env*
