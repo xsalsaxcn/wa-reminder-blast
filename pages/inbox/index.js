@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
 import Sidebar from '../../components/Sidebar'
 
@@ -9,6 +9,7 @@ export default function InboxPage() {
   const [selectedConversation, setSelectedConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [replyText, setReplyText] = useState('')
+  const [searchText, setSearchText] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
@@ -18,6 +19,24 @@ export default function InboxPage() {
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
   const messagesEndRef = useRef(null)
+
+  const filteredConversations = useMemo(() => {
+    const q = searchText.trim().toLowerCase()
+
+    if (!q) return conversations
+
+    return conversations.filter((item) => {
+      const profileName = String(item.profile_name || '').toLowerCase()
+      const phone = String(item.phone || '').toLowerCase()
+      const lastMessage = String(item.last_message || '').toLowerCase()
+
+      return (
+        profileName.includes(q) ||
+        phone.includes(q) ||
+        lastMessage.includes(q)
+      )
+    })
+  }, [conversations, searchText])
 
   function scrollToBottom() {
     setTimeout(() => {
@@ -222,17 +241,39 @@ export default function InboxPage() {
           <div className="grid flex-1 min-h-0 grid-cols-1 gap-4 lg:grid-cols-12">
             <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-4">
               <div className="border-b border-slate-200 p-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="font-semibold text-slate-900">Conversations</h2>
                     <p className="text-xs text-slate-500">
                       Total: {conversations.length}
+                      {searchText.trim()
+                        ? ` • Hasil: ${filteredConversations.length}`
+                        : ''}
                     </p>
                   </div>
 
                   <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700">
                     Live
                   </span>
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <input
+                    type="text"
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    placeholder="Search nama, nomor, atau pesan..."
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                  />
+
+                  {searchText ? (
+                    <button
+                      onClick={() => setSearchText('')}
+                      className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
                 </div>
               </div>
 
@@ -243,8 +284,12 @@ export default function InboxPage() {
                   <div className="p-4 text-sm text-slate-500">
                     Belum ada conversation masuk.
                   </div>
+                ) : filteredConversations.length === 0 ? (
+                  <div className="p-4 text-sm text-slate-500">
+                    Tidak ada conversation yang cocok dengan pencarian.
+                  </div>
                 ) : (
-                  conversations.map((item) => {
+                  filteredConversations.map((item) => {
                     const active = selectedConversation?.phone === item.phone
 
                     return (
