@@ -1,246 +1,349 @@
-﻿import { useEffect, useState } from 'react'
-import AppLayout from '../../components/AppLayout'
+﻿import { useEffect, useRef, useState } from 'react'
+import Sidebar from '../../components/Sidebar'
 
 export default function InboxPage() {
   const [conversations, setConversations] = useState([])
-  const [selectedPhone, setSelectedPhone] = useState('')
+  const [selectedConversation, setSelectedConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [replyText, setReplyText] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
-  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const [lastUpdated, setLastUpdated] = useState(null)
 
-  async function loadConversations() {
-    const res = await fetch('/api/inbox/list')
-    const json = await res.json()
+  const selectedPhoneRef = useRef(null)
+  const pollingRef = useRef(null)
+  const messagesEndRef = useRef(null)
 
-    if (json.success) {
-      setConversations(json.data || [])
+  function scrollToBottom() {
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }, 100)
+  }
+
+  async function loadMessages(phone, silent = false) {
+    if (!phone) return
+
+    if (!silent) setLoadingMessages(true)
+    setError('')
+
+    try {
+      const response = await fetch(
+        '/api/inbox/messages?phone=' + encodeURIComponent(phone) + '&t=' + Date.now(),
+        { cache: 'no-store' }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Gagal memuat pesan')
+      }
+
+      setMessages(data.messages || [])
+      scrollToBottom()
+    } catch (err) {
+      setError(err.message || 'Gagal memuat pesan')
+    } finally {
+      if (!silent) setLoadingMessages(false)
     }
   }
 
-  async function loadMessages(phone) {
-    if (!phone) return
+  async function loadConversations(silent = false) {
+    if (!silent) setLoading(true)
+    setError('')
 
-    setLoading(true)
-    setNotice('')
+    try {
+      const response = await fetch('/api/inbox/list?t=' + Date.now(), {
+        cache: 'no-store'
+      })
 
-    const res = await fetch(`/api/inbox/messages?phone=${encodeURIComponent(phone)}`)
-    const json = await res.json()
+      const data = await response.json()
 
-    setLoading(false)
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Gagal memuat inbox')
+      }
 
-    if (json.success) {
-      setMessages(json.data || [])
-      await loadConversations()
-    } else {
-      setNotice(json.message || 'Gagal mengambil messages')
+      const list = data.conversations || []
+      setConversations(list)
+      setLastUpdated(new Date())
+
+      if (list.length === 0) {
+        setSelectedConversation(null)
+        selectedPhoneRef.current = null
+        setMessages([])
+        return
+      }
+
+      const activePhone = selectedPhoneRef.current
+      const stillExists = activePhone
+        ? list.find((item) => item.phone === activePhone)
+        : null
+
+      const nextSelected = stillExists || list[0]
+
+      setSelectedConversation(nextSelected)
+      selectedPhoneRef.current = nextSelected.phone
+
+      await loadMessages(nextSelected.phone, true)
+    } catch (err) {
+      setError(err.message || 'Gagal memuat inbox')
+    } finally {
+      if (!silent) setLoading(false)
     }
+  }
+
+  async function selectConversation(conversation) {
+    setSelectedConversation(conversation)
+    selectedPhoneRef.current = conversation.phone
+    await loadMessages(conversation.phone)
   }
 
   async function sendReply(e) {
     e.preventDefault()
 
-    if (!selectedPhone || !replyText.trim()) return
+    if (!selectedConversation?.phone || !replyText.trim()) return
 
     setSending(true)
-    setNotice('')
+    setError('')
 
-    const res = await fetch('/api/inbox/reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        phone: selectedPhone,
-        message: replyText
+    try {
+      const response = await fetch('/api/inbox/reply', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phone: selectedConversation.phone,
+          message: replyText.trim()
+        })
       })
-    })
 
-    const json = await res.json()
+      const data = await response.json()
 
-    setSending(false)
-    setNotice(json.message || 'Selesai')
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Gagal mengirim balasan')
+      }
 
-    if (json.success) {
       setReplyText('')
-      await loadMessages(selectedPhone)
-      await loadConversations()
+      await loadMessages(selectedConversation.phone, true)
+      await loadConversations(true)
+    } catch (err) {
+      setError(err.message || 'Gagal mengirim balasan')
+    } finally {
+      setSending(false)
     }
-  }
-
-  function selectConversation(phone) {
-    setSelectedPhone(phone)
-    loadMessages(phone)
   }
 
   useEffect(() => {
     loadConversations()
+
+    pollingRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadConversations(true)
+      }
+    }, 5000)
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
   }, [])
 
-  const selectedConversation = conversations.find((item) => item.phone === selectedPhone)
-
   return (
-    <AppLayout>
-      <div className="space-y-6">
-        <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900">Inbox</h1>
-            <p className="mt-2 text-slate-500">
-              Lihat balasan WhatsApp dari customer dan balas langsung dari aplikasi.
-            </p>
-          </div>
+    <div className="min-h-screen bg-slate-100 md:flex">
+      <Sidebar />
 
-          <button
-            onClick={loadConversations}
-            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-600 shadow-sm hover:bg-slate-50"
-          >
-            Refresh Inbox
-          </button>
-        </div>
-
-        {notice && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-700 shadow-sm">
-            {notice}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm xl:col-span-1">
-            <h2 className="px-2 text-lg font-bold text-slate-900">Conversations</h2>
-
-            <div className="mt-4 max-h-[650px] space-y-2 overflow-auto">
-              {conversations.map((item) => {
-                const active = item.phone === selectedPhone
-
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => selectConversation(item.phone)}
-                    className={
-                      active
-                        ? 'w-full rounded-2xl bg-indigo-50 p-4 text-left'
-                        : 'w-full rounded-2xl p-4 text-left hover:bg-slate-50'
-                    }
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-bold text-slate-900">
-                          {item.profile_name || item.phone}
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">
-                          {item.phone}
-                        </p>
-                      </div>
-
-                      {item.unread_count > 0 && (
-                        <span className="rounded-full bg-rose-600 px-2 py-1 text-xs font-bold text-white">
-                          {item.unread_count}
-                        </span>
-                      )}
-                    </div>
-
-                    <p className="mt-2 truncate text-sm text-slate-500">
-                      {item.last_message || '-'}
-                    </p>
-
-                    <p className="mt-2 text-xs text-slate-400">
-                      {item.last_message_at ? new Date(item.last_message_at).toLocaleString() : '-'}
-                    </p>
-                  </button>
-                )
-              })}
-
-              {conversations.length === 0 && (
-                <div className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-400">
-                  Belum ada conversation masuk.
-                </div>
-              )}
+      <main className="flex-1 p-4 md:p-6">
+        <div className="mx-auto flex h-[calc(100vh-48px)] max-w-7xl flex-col">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">Inbox</h1>
+              <p className="text-sm text-slate-500">
+                Lihat balasan WhatsApp dari customer dan balas langsung dari aplikasi.
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Live auto-refresh setiap 5 detik
+                {lastUpdated
+                  ? ` • Update terakhir: ${lastUpdated.toLocaleTimeString('id-ID')}`
+                  : ''}
+              </p>
             </div>
+
+            <button
+              onClick={() => loadConversations(false)}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700"
+            >
+              Refresh Inbox
+            </button>
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm xl:col-span-2">
-            {selectedPhone ? (
-              <div className="flex min-h-[650px] flex-col">
-                <div className="border-b border-slate-100 px-2 pb-4">
-                  <p className="text-lg font-bold text-slate-900">
-                    {selectedConversation?.profile_name || selectedPhone}
-                  </p>
-                  <p className="text-sm font-semibold text-slate-400">
-                    {selectedPhone}
-                  </p>
-                </div>
+          {error ? (
+            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
 
-                <div className="flex-1 space-y-3 overflow-auto px-2 py-5">
-                  {loading ? (
-                    <div className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-400">
-                      Loading messages...
-                    </div>
-                  ) : (
-                    messages.map((msg) => (
+          <div className="grid flex-1 min-h-0 grid-cols-1 gap-4 lg:grid-cols-12">
+            <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-4">
+              <div className="border-b border-slate-200 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-semibold text-slate-900">Conversations</h2>
+                    <p className="text-xs text-slate-500">
+                      Total: {conversations.length}
+                    </p>
+                  </div>
+
+                  <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700">
+                    Live
+                  </span>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {loading ? (
+                  <div className="p-4 text-sm text-slate-500">Loading inbox...</div>
+                ) : conversations.length === 0 ? (
+                  <div className="p-4 text-sm text-slate-500">
+                    Belum ada conversation masuk.
+                  </div>
+                ) : (
+                  conversations.map((item) => {
+                    const active = selectedConversation?.phone === item.phone
+
+                    return (
+                      <button
+                        key={item.id || item.phone}
+                        onClick={() => selectConversation(item)}
+                        className={`block w-full border-b border-slate-100 p-4 text-left transition hover:bg-slate-50 ${
+                          active ? 'bg-blue-50' : 'bg-white'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-slate-900">
+                              {item.profile_name || item.phone}
+                            </div>
+
+                            <div className="mt-1 text-xs text-slate-500">
+                              {item.phone}
+                            </div>
+                          </div>
+
+                          {item.unread_count > 0 ? (
+                            <span className="shrink-0 rounded-full bg-green-600 px-2 py-0.5 text-xs font-semibold text-white">
+                              {item.unread_count}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="mt-3 line-clamp-2 text-sm text-slate-700">
+                          {item.last_message || '-'}
+                        </div>
+
+                        <div className="mt-2 text-xs text-slate-400">
+                          {item.last_message_at
+                            ? new Date(item.last_message_at).toLocaleString('id-ID')
+                            : ''}
+                        </div>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </section>
+
+            <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-8">
+              <div className="border-b border-slate-200 p-4">
+                <h2 className="font-semibold text-slate-900">
+                  {selectedConversation
+                    ? selectedConversation.profile_name || selectedConversation.phone
+                    : 'Detail Pesan'}
+                </h2>
+                <p className="text-xs text-slate-500">
+                  {selectedConversation ? selectedConversation.phone : 'Pilih conversation'}
+                </p>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+                {!selectedConversation ? (
+                  <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                    Pilih conversation.
+                  </div>
+                ) : loadingMessages ? (
+                  <div className="text-sm text-slate-500">Loading messages...</div>
+                ) : messages.length === 0 ? (
+                  <div className="text-sm text-slate-500">
+                    Belum ada detail pesan untuk nomor ini.
+                  </div>
+                ) : (
+                  messages.map((msg) => {
+                    const outgoing = msg.direction === 'outgoing'
+
+                    return (
                       <div
                         key={`${msg.direction}-${msg.id}`}
-                        className={
-                          msg.direction === 'out'
-                            ? 'ml-auto max-w-[80%] rounded-3xl bg-indigo-600 px-5 py-3 text-white'
-                            : 'mr-auto max-w-[80%] rounded-3xl bg-slate-100 px-5 py-3 text-slate-800'
-                        }
+                        className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}
                       >
-                        <p className="text-sm">{msg.text}</p>
-                        <p
-                          className={
-                            msg.direction === 'out'
-                              ? 'mt-2 text-xs text-indigo-100'
-                              : 'mt-2 text-xs text-slate-400'
-                          }
+                        <div
+                          className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                            outgoing
+                              ? 'bg-green-600 text-white'
+                              : 'bg-white text-slate-900'
+                          }`}
                         >
-                          {new Date(msg.created_at).toLocaleString()} Â· {msg.status}
-                        </p>
-                        {msg.error_message && (
-                          <p className="mt-2 text-xs text-rose-200">
-                            {msg.error_message}
-                          </p>
-                        )}
+                          <div className="whitespace-pre-wrap">
+                            {msg.message || '-'}
+                          </div>
+
+                          <div
+                            className={`mt-2 text-[11px] ${
+                              outgoing ? 'text-green-100' : 'text-slate-400'
+                            }`}
+                          >
+                            {msg.created_at
+                              ? new Date(msg.created_at).toLocaleString('id-ID')
+                              : ''}
+                          </div>
+
+                          {msg.error_message ? (
+                            <div className="mt-2 text-xs text-red-200">
+                              {msg.error_message}
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
-                    ))
-                  )}
+                    )
+                  })
+                )}
 
-                  {!loading && messages.length === 0 && (
-                    <div className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-400">
-                      Belum ada pesan.
-                    </div>
-                  )}
-                </div>
+                <div ref={messagesEndRef} />
+              </div>
 
-                <form onSubmit={sendReply} className="border-t border-slate-100 pt-4">
-                  <div className="flex gap-3">
-                    <textarea
-                      value={replyText}
-                      onChange={(e) => setReplyText(e.target.value)}
-                      rows={2}
-                      placeholder="Tulis balasan..."
-                      className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-400"
-                    />
-                    <button
-                      disabled={sending || !replyText.trim()}
-                      className="rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-                    >
-                      {sending ? 'Sending...' : 'Send'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            ) : (
-              <div className="flex min-h-[650px] items-center justify-center rounded-3xl bg-slate-50">
-                <div className="text-center">
-                  <p className="text-lg font-bold text-slate-700">Pilih conversation</p>
-                  <p className="mt-2 text-sm text-slate-400">
-                    Balasan WhatsApp customer akan tampil di sini.
-                  </p>
+              <form onSubmit={sendReply} className="border-t border-slate-200 bg-white p-4">
+                <div className="flex gap-2">
+                  <textarea
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    placeholder="Tulis balasan WhatsApp..."
+                    rows={2}
+                    disabled={!selectedConversation || sending}
+                    className="flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100"
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={!selectedConversation || !replyText.trim() || sending}
+                    className="rounded-xl bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {sending ? 'Sending...' : 'Send'}
+                  </button>
                 </div>
-              </div>
-            )}
+              </form>
+            </section>
           </div>
         </div>
-      </div>
-    </AppLayout>
+      </main>
+    </div>
   )
 }
