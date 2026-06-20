@@ -6,6 +6,7 @@ const navItems = [
   { href: '/dashboard', label: 'Dashboard', roles: ['master', 'admin', 'user'] },
   { href: '/inbox', label: 'Inbox', roles: ['master', 'admin', 'user'] },
   { href: '/analysis', label: 'Reply Analysis', roles: ['master', 'admin', 'user'] },
+  { href: '/usage', label: 'Usage Log', roles: ['master', 'admin', 'user'] },
   { href: '/reminder', label: 'Reminder', roles: ['master', 'admin', 'user'] },
   { href: '/blast', label: 'WhatsApp Blast', roles: ['master', 'admin', 'user'] },
   { href: '/jobs', label: 'Job Queue', roles: ['master', 'admin', 'user'] },
@@ -48,9 +49,11 @@ export default function Sidebar({ user }) {
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
           Logged in as
         </p>
+
         <p className="mt-1 text-sm font-bold text-slate-800">
           {user?.username || 'User'}
         </p>
+
         <p className="text-xs font-semibold text-indigo-600">
           {role}
         </p>
@@ -79,7 +82,7 @@ export default function Sidebar({ user }) {
       <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
         <p className="text-sm font-bold text-emerald-700">System Online</p>
         <p className="mt-1 text-xs text-emerald-600">
-          Inbox, Reply Analysis, and Auto Worker ready.
+          Inbox, Reply Analysis, Usage Log, and Auto Worker ready.
         </p>
       </div>
     </aside>
