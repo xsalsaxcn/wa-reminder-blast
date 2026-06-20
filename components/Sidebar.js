@@ -4,14 +4,17 @@ import { useRouter } from 'next/router'
 const navItems = [
   { href: '/', label: 'Home', roles: ['master', 'admin', 'user'] },
   { href: '/dashboard', label: 'Dashboard', roles: ['master', 'admin', 'user'] },
+
   { href: '/inbox', label: 'Inbox', roles: ['master', 'admin', 'user'] },
   { href: '/quick-replies', label: 'Quick Replies', roles: ['master', 'admin', 'user'] },
   { href: '/analysis', label: 'Reply Analysis', roles: ['master', 'admin', 'user'] },
   { href: '/usage', label: 'Usage Log', roles: ['master', 'admin', 'user'] },
   { href: '/blacklist', label: 'Blacklist', roles: ['master', 'admin', 'user'] },
+
   { href: '/reminder', label: 'Reminder', roles: ['master', 'admin', 'user'] },
   { href: '/blast', label: 'WhatsApp Blast', roles: ['master', 'admin', 'user'] },
   { href: '/jobs', label: 'Job Queue', roles: ['master', 'admin', 'user'] },
+  { href: '/job-performance', label: 'Job Performance', roles: ['master', 'admin', 'user'] },
   { href: '/logs', label: 'Logs', roles: ['master', 'admin', 'user'] },
 
   { href: '/admin/import-reminder', label: 'Import Reminder', roles: ['master', 'admin'] },
@@ -84,7 +87,7 @@ export default function Sidebar({ user }) {
       <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
         <p className="text-sm font-bold text-emerald-700">System Online</p>
         <p className="mt-1 text-xs text-emerald-600">
-          Inbox, Quick Replies, Reply Analysis, Usage Log, Blacklist, and Auto Worker ready.
+          Inbox, Quick Replies, Reply Analysis, Usage Log, Blacklist, Job Performance, and Auto Worker ready.
         </p>
       </div>
     </aside>
