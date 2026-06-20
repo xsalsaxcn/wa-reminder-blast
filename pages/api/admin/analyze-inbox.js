@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
 import { analyzeLeadMessage } from '../../../lib/leadAnalyzer'
+import { upsertBlacklist } from '../../../lib/blacklist'
 
 async function findSourceJob(phone, receivedAt) {
   const { data: items } = await supabaseAdmin
@@ -44,10 +45,14 @@ async function updateContactScore(phone) {
   if (error || !rows || rows.length === 0) return
 
   const latest = rows[0]
+
   const interestedCount = rows.filter((row) => row.label === 'Berminat').length
   const notInterestedCount = rows.filter((row) => row.label === 'Tidak berminat').length
-  const neutralCount = rows.filter((row) => row.label === 'Netral' || row.label === 'Follow-up').length
+  const neutralCount = rows.filter(
+    (row) => row.label === 'Netral' || row.label === 'Follow-up'
+  ).length
   const optOut = rows.some((row) => row.label === 'Opt-out')
+  const complaintCount = rows.filter((row) => row.label === 'Komplain').length
 
   const avgScore = Math.round(
     rows.reduce((sum, row) => sum + Number(row.score || 0), 0) / rows.length
@@ -57,6 +62,8 @@ async function updateContactScore(phone) {
 
   if (optOut) {
     status = 'opt_out'
+  } else if (complaintCount > 0) {
+    status = 'complaint'
   } else if (avgScore >= 80 || interestedCount >= 2) {
     status = 'hot'
   } else if (avgScore >= 55 || interestedCount >= 1) {
@@ -93,6 +100,8 @@ async function updateContactScore(phone) {
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
 
   try {
     await requireRole(req, res, ['master', 'admin', 'user'])
@@ -121,44 +130,72 @@ export default async function handler(req, res) {
     }
 
     let analyzed = 0
+    let autoBlacklisted = 0
+    let failed = 0
+    const errors = []
 
     for (const msg of messages || []) {
-      const result = analyzeLeadMessage(msg.body || '')
-      const source = await findSourceJob(msg.phone, msg.received_at)
+      try {
+        const result = analyzeLeadMessage(msg.body || '')
+        const source = await findSourceJob(msg.phone, msg.received_at)
 
-      const { error: upsertError } = await supabaseAdmin
-        .from('wa_message_analysis')
-        .upsert(
-          {
-            incoming_message_id: msg.id,
+        const { error: upsertError } = await supabaseAdmin
+          .from('wa_message_analysis')
+          .upsert(
+            {
+              incoming_message_id: msg.id,
+              phone: msg.phone,
+              profile_name: msg.profile_name,
+              body: msg.body || '',
+              received_at: msg.received_at,
+              label: result.label,
+              intent: result.intent,
+              score: result.score,
+              confidence: result.confidence,
+              reasons: result.reasons,
+              source_job_id: source.source_job_id,
+              source_job_type: source.source_job_type,
+              updated_at: new Date().toISOString()
+            },
+            {
+              onConflict: 'incoming_message_id'
+            }
+          )
+
+        if (upsertError) {
+          failed += 1
+          errors.push(upsertError.message)
+          continue
+        }
+
+        analyzed += 1
+
+        await updateContactScore(msg.phone)
+
+        if (result.label === 'Opt-out') {
+          await upsertBlacklist({
             phone: msg.phone,
             profile_name: msg.profile_name,
-            body: msg.body || '',
-            received_at: msg.received_at,
-            label: result.label,
-            intent: result.intent,
-            score: result.score,
-            confidence: result.confidence,
-            reasons: result.reasons,
-            source_job_id: source.source_job_id,
-            source_job_type: source.source_job_type,
-            updated_at: new Date().toISOString()
-          },
-          {
-            onConflict: 'incoming_message_id'
-          }
-        )
+            reason: msg.body || 'Detected opt-out from incoming message',
+            source: 'auto_analysis',
+            created_by: 'system'
+          })
 
-      if (!upsertError) {
-        analyzed += 1
-        await updateContactScore(msg.phone)
+          autoBlacklisted += 1
+        }
+      } catch (itemError) {
+        failed += 1
+        errors.push(itemError.message || 'Failed to analyze message')
       }
     }
 
     return res.status(200).json({
       success: true,
       analyzed,
-      total: messages?.length || 0
+      autoBlacklisted,
+      failed,
+      total: messages?.length || 0,
+      errors: errors.slice(0, 10)
     })
   } catch (error) {
     return res.status(401).json({

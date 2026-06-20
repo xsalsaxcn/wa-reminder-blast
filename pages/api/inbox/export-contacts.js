@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { cleanPhone, getBlacklistPhones } from '../../../lib/blacklist'
 
 function csvEscape(value) {
   const text = String(value ?? '')
@@ -14,12 +15,6 @@ function cleanName(name, phone) {
   }
 
   return value
-}
-
-function cleanPhone(phone) {
-  return String(phone || '')
-    .replace(/\D/g, '')
-    .replace(/^0/, '62')
 }
 
 export default async function handler(req, res) {
@@ -43,6 +38,8 @@ export default async function handler(req, res) {
     const defaultMessage =
       'Halo Kak, ini informasi dari inHarmony Clinic. Terima kasih.'
 
+    const blacklistPhones = await getBlacklistPhones()
+
     const { data, error } = await supabaseAdmin
       .from('wa_incoming_messages')
       .select('phone, profile_name, body, received_at')
@@ -65,6 +62,7 @@ export default async function handler(req, res) {
       const phone = cleanPhone(item.phone)
 
       if (!phone) continue
+      if (blacklistPhones.has(phone)) continue
       if (contactsMap.has(phone)) continue
 
       const receivedAt = item.received_at ? new Date(item.received_at).getTime() : 0
@@ -93,8 +91,8 @@ export default async function handler(req, res) {
     const csv = '\ufeff' + csvLines.join('\n')
     const filename =
       mode === 'all'
-        ? 'inbox_contacts_all.csv'
-        : `inbox_contacts_${hours}h.csv`
+        ? 'inbox_contacts_all_exclude_blacklist.csv'
+        : `inbox_contacts_${hours}h_exclude_blacklist.csv`
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
