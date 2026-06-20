@@ -22,6 +22,11 @@ export default function InboxPage() {
     }, 100)
   }
 
+  function exportInboxContacts(mode) {
+    const url = '/api/inbox/export-contacts?mode=' + mode + '&t=' + Date.now()
+    window.open(url, '_blank')
+  }
+
   async function loadMessages(phone, silent = false) {
     if (!phone) return
 
@@ -169,12 +174,28 @@ export default function InboxPage() {
               </p>
             </div>
 
-            <button
-              onClick={() => loadConversations(false)}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700"
-            >
-              Refresh Inbox
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => exportInboxContacts('24h')}
+                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-700"
+              >
+                Export 24 Jam
+              </button>
+
+              <button
+                onClick={() => exportInboxContacts('all')}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+              >
+                Export Semua
+              </button>
+
+              <button
+                onClick={() => loadConversations(false)}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700"
+              >
+                Refresh Inbox
+              </button>
+            </div>
           </div>
 
           {error ? (
