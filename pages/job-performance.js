@@ -33,7 +33,6 @@ export default function JobPerformancePage() {
     if (filters.q) params.set('q', filters.q)
 
     params.set('t', Date.now())
-
     return params.toString()
   }
 
@@ -74,7 +73,7 @@ export default function JobPerformancePage() {
       <Sidebar />
 
       <main className="flex-1 p-4 md:p-6">
-        <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-[1500px]">
           <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Job Performance</h1>
@@ -162,6 +161,7 @@ export default function JobPerformancePage() {
                 <option value="pending">Pending</option>
                 <option value="processing">Processing</option>
                 <option value="completed">Completed</option>
+                <option value="done">Done</option>
                 <option value="failed">Failed</option>
               </select>
             </div>
@@ -200,82 +200,139 @@ export default function JobPerformancePage() {
               </p>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <Th>Job</Th>
-                    <Th>Type</Th>
-                    <Th>Status</Th>
-                    <Th>Target</Th>
-                    <Th>Sent</Th>
-                    <Th>Failed</Th>
-                    <Th>Replies</Th>
-                    <Th>Reply Rate</Th>
-                    <Th>Berminat</Th>
-                    <Th>Follow-up</Th>
-                    <Th>Tidak Minat</Th>
-                    <Th>Opt-out</Th>
-                    <Th>Hot Lead</Th>
-                    <Th>Avg Score</Th>
-                    <Th>Cost</Th>
+            <div className="max-h-[620px] overflow-y-auto">
+              <table className="w-full table-fixed border-collapse">
+                <colgroup>
+                  <col style={{ width: '29%' }} />
+                  <col style={{ width: '5.5%' }} />
+                  <col style={{ width: '7.5%' }} />
+                  <col style={{ width: '4.25%' }} />
+                  <col style={{ width: '4.25%' }} />
+                  <col style={{ width: '4.25%' }} />
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '5.5%' }} />
+                  <col style={{ width: '5.5%' }} />
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '4.5%' }} />
+                  <col style={{ width: '4.75%' }} />
+                  <col style={{ width: '4%' }} />
+                  <col style={{ width: '6%' }} />
+                </colgroup>
+
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <SoftTh left>Job</SoftTh>
+                    <SoftTh>Type</SoftTh>
+                    <SoftTh>Status</SoftTh>
+                    <SoftTh>Target</SoftTh>
+                    <SoftTh>Sent</SoftTh>
+                    <SoftTh>Failed</SoftTh>
+                    <SoftTh>Replies</SoftTh>
+                    <SoftTh>Rate</SoftTh>
+                    <SoftTh>Interested</SoftTh>
+                    <SoftTh>Follow-up</SoftTh>
+                    <SoftTh>Not Int.</SoftTh>
+                    <SoftTh>Opt-out</SoftTh>
+                    <SoftTh>Hot Lead</SoftTh>
+                    <SoftTh>Score</SoftTh>
+                    <SoftTh right>Cost</SoftTh>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {loading ? (
                     <tr>
-                      <td colSpan="15" className="p-4 text-slate-500">
+                      <td colSpan="15" className="p-4 text-sm text-slate-500">
                         Loading...
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan="15" className="p-4 text-slate-500">
+                      <td colSpan="15" className="p-4 text-sm text-slate-500">
                         Belum ada data job performance.
                       </td>
                     </tr>
                   ) : (
                     rows.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50">
-                        <Td>
-  <div className="min-w-[220px]">
-    <div className="font-semibold text-slate-900">
-      {row.job_name || '-'}
-    </div>
-  </div>
-</Td>
+                      <tr key={row.id} className="hover:bg-slate-50/70">
+                        <td className="px-4 py-4 align-top">
+                          <div className="min-w-0">
+                            <div
+                              className="truncate text-sm font-semibold text-slate-900"
+                              title={row.job_name || '-'}
+                            >
+                              {row.job_name || '-'}
+                            </div>
 
-                        <Td>{row.type}</Td>
+                            <div className="mt-1 truncate text-xs text-slate-400">
+                              {row.created_at
+                                ? new Date(row.created_at).toLocaleString('id-ID')
+                                : ''}
+                            </div>
 
-                        <Td>
+                            {row.id ? (
+                              <div
+                                className="mt-1 truncate text-[11px] text-slate-400"
+                                title={row.id}
+                              >
+                                {row.id}
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+
+                        <BodyTd>
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                            {row.type}
+                          </span>
+                        </BodyTd>
+
+                        <BodyTd>
                           <StatusBadge status={row.status} />
-                        </Td>
+                        </BodyTd>
 
-                        <Td>{row.total_target}</Td>
-                        <Td>{row.sent}</Td>
-                        <Td>{row.failed}</Td>
+                        <BodyTd>{row.total_target}</BodyTd>
+                        <BodyTd>{row.sent}</BodyTd>
+                        <BodyTd>{row.failed}</BodyTd>
 
-                        <Td>
-                          <div>{row.replies}</div>
-                          <div className="text-xs text-slate-400">
+                        <BodyTd>
+                          <div className="text-sm font-semibold text-slate-900">
+                            {row.replies}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
                             {row.unique_repliers} nomor
                           </div>
-                        </Td>
+                        </BodyTd>
 
-                        <Td>
-                          <span className="font-semibold text-slate-900">
+                        <BodyTd>
+                          <span className="rounded-full bg-blue-50 px-2 py-1 text-[11px] font-bold text-blue-700 ring-1 ring-blue-200">
                             {row.reply_rate}%
                           </span>
-                        </Td>
+                        </BodyTd>
 
-                        <Td>{row.interested}</Td>
-                        <Td>{row.follow_up}</Td>
-                        <Td>{row.not_interested}</Td>
-                        <Td>{row.opt_out}</Td>
-                        <Td>{row.hot_lead}</Td>
-                        <Td>{row.avg_score}</Td>
-                        <Td>{formatRupiah(row.estimated_cost_idr)}</Td>
+                        <BodyTd>{row.interested}</BodyTd>
+                        <BodyTd>{row.follow_up}</BodyTd>
+                        <BodyTd>{row.not_interested}</BodyTd>
+                        <BodyTd>{row.opt_out}</BodyTd>
+
+                        <BodyTd>
+                          <span
+                            className={
+                              row.hot_lead > 0
+                                ? 'rounded-full bg-green-50 px-2 py-1 text-[11px] font-bold text-green-700 ring-1 ring-green-200'
+                                : 'text-sm text-slate-700'
+                            }
+                          >
+                            {row.hot_lead}
+                          </span>
+                        </BodyTd>
+
+                        <BodyTd>{row.avg_score}</BodyTd>
+
+                        <td className="px-2 py-4 text-right align-middle text-sm text-slate-700">
+                          {formatRupiah(row.estimated_cost_idr)}
+                        </td>
                       </tr>
                     ))
                   )}
@@ -305,16 +362,24 @@ function SummaryCard({ label, value, small }) {
   )
 }
 
-function Th({ children }) {
+function SoftTh({ children, left = false, right = false }) {
   return (
-    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+    <th
+      className={`px-2 py-3 text-[11px] font-bold uppercase tracking-[0.08em] text-slate-600 ${
+        left ? 'text-left pl-4' : right ? 'text-right pr-4' : 'text-center'
+      }`}
+    >
       {children}
     </th>
   )
 }
 
-function Td({ children }) {
-  return <td className="px-4 py-3 text-slate-700">{children}</td>
+function BodyTd({ children }) {
+  return (
+    <td className="px-2 py-4 text-center align-middle text-sm text-slate-700">
+      {children}
+    </td>
+  )
 }
 
 function StatusBadge({ status }) {
@@ -322,6 +387,7 @@ function StatusBadge({ status }) {
 
   const styleMap = {
     completed: 'bg-green-50 text-green-700 ring-green-200',
+    done: 'bg-green-50 text-green-700 ring-green-200',
     sent: 'bg-green-50 text-green-700 ring-green-200',
     failed: 'bg-red-50 text-red-700 ring-red-200',
     pending: 'bg-yellow-50 text-yellow-700 ring-yellow-200',
@@ -331,7 +397,7 @@ function StatusBadge({ status }) {
   const className = styleMap[value] || 'bg-slate-50 text-slate-700 ring-slate-200'
 
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${className}`}>
+    <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ring-1 ${className}`}>
       {status || '-'}
     </span>
   )
