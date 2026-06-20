@@ -1,51 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
+import Link from 'next/link'
 import Sidebar from '../../components/Sidebar'
-
-const quickReplyTemplates = [
-  {
-    key: 'mcu-pricelist',
-    label: 'Pricelist MCU',
-    text:
-      'Halo Kak, terima kasih sudah menghubungi inHarmony Clinic.\n\nUntuk layanan MCU corporate, kami bisa bantu sesuaikan paket berdasarkan jumlah peserta, lokasi, dan jenis pemeriksaan yang dibutuhkan.\n\nBoleh info jumlah peserta dan lokasi perusahaannya, Kak?'
-  },
-  {
-    key: 'minta-data',
-    label: 'Minta Data',
-    text:
-      'Baik Kak. Untuk kami bantu buatkan penawaran, boleh dibantu info:\n\n1. Nama perusahaan\n2. Jumlah peserta\n3. Lokasi pelaksanaan\n4. Perkiraan tanggal MCU\n5. Pemeriksaan yang dibutuhkan'
-  },
-  {
-    key: 'vaksin-flu',
-    label: 'Vaksin Flu',
-    text:
-      'Halo Kak, untuk vaksin flu bisa kami bantu.\n\nBoleh info kebutuhan vaksinnya untuk pribadi atau perusahaan? Jika perusahaan, kira-kira jumlah pesertanya berapa orang, Kak?'
-  },
-  {
-    key: 'jadwal',
-    label: 'Jadwal',
-    text:
-      'Baik Kak. Untuk jadwal, kami cek ketersediaan terlebih dahulu ya.\n\nBoleh info tanggal atau range tanggal yang Kakak inginkan?'
-  },
-  {
-    key: 'follow-up',
-    label: 'Follow-up',
-    text:
-      'Halo Kak, izin follow-up ya.\n\nApakah masih berminat untuk layanan dari inHarmony Clinic? Kami bisa bantu sesuaikan paket sesuai kebutuhan Kakak.'
-  },
-  {
-    key: 'closing',
-    label: 'Closing',
-    text:
-      'Siap Kak, terima kasih. Jika ada pertanyaan lanjutan atau ingin dibantu proses berikutnya, Kakak bisa langsung balas WhatsApp ini ya.'
-  },
-  {
-    key: 'di luar 24 jam',
-    label: 'Reminder 24 Jam',
-    text:
-      'Halo Kak, terima kasih sudah menghubungi inHarmony Clinic. Kami bantu follow-up kembali ya. Apakah masih ada yang ingin ditanyakan terkait layanan kami?'
-  }
-]
 
 export default function InboxPage() {
   const router = useRouter()
@@ -55,6 +11,7 @@ export default function InboxPage() {
   const [messages, setMessages] = useState([])
   const [replyText, setReplyText] = useState('')
   const [searchText, setSearchText] = useState('')
+  const [quickReplyTemplates, setQuickReplyTemplates] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
@@ -106,6 +63,22 @@ export default function InboxPage() {
 
       return existing + '\n\n' + templateText
     })
+  }
+
+  async function loadQuickReplies() {
+    try {
+      const response = await fetch('/api/quick-replies/list?active=true&t=' + Date.now(), {
+        cache: 'no-store'
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setQuickReplyTemplates(data.rows || [])
+      }
+    } catch (err) {
+      console.error('Failed to load quick replies:', err)
+    }
   }
 
   async function loadMessages(phone, silent = false) {
@@ -235,6 +208,7 @@ export default function InboxPage() {
     }
 
     loadConversations()
+    loadQuickReplies()
 
     pollingRef.current = setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -468,29 +442,52 @@ export default function InboxPage() {
                         Quick Reply Template
                       </p>
 
-                      {replyText ? (
-                        <button
-                          type="button"
-                          onClick={() => setReplyText('')}
-                          className="text-xs font-semibold text-red-600 hover:text-red-700"
+                      <div className="flex items-center gap-3">
+                        <Link
+                          href="/quick-replies"
+                          className="text-xs font-semibold text-blue-600 hover:text-blue-700"
                         >
-                          Clear Text
-                        </button>
-                      ) : null}
+                          Kelola Template
+                        </Link>
+
+                        {replyText ? (
+                          <button
+                            type="button"
+                            onClick={() => setReplyText('')}
+                            className="text-xs font-semibold text-red-600 hover:text-red-700"
+                          >
+                            Clear Text
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      {quickReplyTemplates.map((template) => (
-                        <button
-                          key={template.key}
-                          type="button"
-                          onClick={() => applyQuickReply(template.text)}
-                          className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                    {quickReplyTemplates.length === 0 ? (
+                      <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
+                        Belum ada template aktif. Buka{' '}
+                        <Link
+                          href="/quick-replies"
+                          className="font-semibold text-blue-600 hover:text-blue-700"
                         >
-                          {template.label}
-                        </button>
-                      ))}
-                    </div>
+                          Kelola Template
+                        </Link>{' '}
+                        untuk menambahkan quick reply.
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {quickReplyTemplates.map((template) => (
+                          <button
+                            key={template.id || template.template_key}
+                            type="button"
+                            onClick={() => applyQuickReply(template.answer)}
+                            className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                            title={template.question || template.answer || ''}
+                          >
+                            {template.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : null}
 
