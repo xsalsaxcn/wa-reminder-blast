@@ -23,6 +23,7 @@ const navItems = [
   { href: '/admin/database-manager', label: 'Database Manager', roles: ['master', 'admin'] },
   { href: '/admin/auto-worker', label: 'Auto Worker', roles: ['master', 'admin'] },
   { href: '/admin/meta-test', label: 'Meta API Test', roles: ['master', 'admin'] },
+  { href: '/admin/waba-profile', label: 'WABA Profile', roles: ['master', 'admin'] },
   { href: '/admin/whatsapp-settings', label: 'WhatsApp Settings', roles: ['master', 'admin'] },
   { href: '/admin/manage-users', label: 'Manage Users', roles: ['master', 'admin'] },
   { href: '/admin/reset-db', label: 'Reset DB', roles: ['master'] }
@@ -112,10 +113,11 @@ export default function Sidebar({ user }) {
 
       <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
         <p className="text-sm font-bold text-emerald-700">System Online</p>
+
         <p className="mt-1 text-xs text-emerald-600">
           {role === 'agent'
-            ? 'Agent access: Inbox, Quick Replies, Analytics, Usage Log, Blacklist, Reminder, Blast, Import Data, Jobs, and Logs.'
-            : 'Admin access: full operational dashboard, inbox, analytics, import data, and system settings.'}
+            ? 'Agent access: Inbox, Quick Replies, Reply Analysis, Usage Log, Blacklist, Reminder, Blast, Import Data, Jobs, and Logs.'
+            : 'Admin access: full operational dashboard, WABA Profile, inbox, analytics, import data, and system settings.'}
         </p>
       </div>
     </aside>
