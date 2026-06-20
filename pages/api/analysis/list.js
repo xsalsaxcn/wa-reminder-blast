@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
 
   try {
-    await requireRole(req, res, ['master', 'admin', 'user'])
+    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 
     if (req.method !== 'GET') {
       return res.status(405).json({

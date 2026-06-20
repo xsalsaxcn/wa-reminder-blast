@@ -2,7 +2,7 @@
 import { requireRole } from '../../../lib/auth'
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin'])
+  const authUser = requireRole(req, res, ['master', 'admin', 'agent'])
   if (!authUser) return
 
   try {

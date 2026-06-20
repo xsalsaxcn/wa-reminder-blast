@@ -1,24 +1,25 @@
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 
 const navItems = [
-  { href: '/', label: 'Home', roles: ['master', 'admin', 'user'] },
-  { href: '/dashboard', label: 'Dashboard', roles: ['master', 'admin', 'user'] },
+  { href: '/', label: 'Home', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/dashboard', label: 'Dashboard', roles: ['master', 'admin', 'user', 'agent'] },
 
-  { href: '/inbox', label: 'Inbox', roles: ['master', 'admin', 'user'] },
-  { href: '/quick-replies', label: 'Quick Replies', roles: ['master', 'admin', 'user'] },
-  { href: '/analysis', label: 'Reply Analysis', roles: ['master', 'admin', 'user'] },
-  { href: '/usage', label: 'Usage Log', roles: ['master', 'admin', 'user'] },
-  { href: '/blacklist', label: 'Blacklist', roles: ['master', 'admin', 'user'] },
+  { href: '/inbox', label: 'Inbox', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/quick-replies', label: 'Quick Replies', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/analysis', label: 'Reply Analysis', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/usage', label: 'Usage Log', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/blacklist', label: 'Blacklist', roles: ['master', 'admin', 'user', 'agent'] },
 
-  { href: '/reminder', label: 'Reminder', roles: ['master', 'admin', 'user'] },
-  { href: '/blast', label: 'WhatsApp Blast', roles: ['master', 'admin', 'user'] },
-  { href: '/jobs', label: 'Job Queue', roles: ['master', 'admin', 'user'] },
-  { href: '/job-performance', label: 'Job Performance', roles: ['master', 'admin', 'user'] },
-  { href: '/logs', label: 'Logs', roles: ['master', 'admin', 'user'] },
+  { href: '/reminder', label: 'Reminder', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/blast', label: 'WhatsApp Blast', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/admin/import-reminder', label: 'Import Reminder', roles: ['master', 'admin', 'agent'] },
+  { href: '/admin/import-blast', label: 'Import Blast', roles: ['master', 'admin', 'agent'] },
+  { href: '/jobs', label: 'Job Queue', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/job-performance', label: 'Job Performance', roles: ['master', 'admin', 'user', 'agent'] },
+  { href: '/logs', label: 'Logs', roles: ['master', 'admin', 'user', 'agent'] },
 
-  { href: '/admin/import-reminder', label: 'Import Reminder', roles: ['master', 'admin'] },
-  { href: '/admin/import-blast', label: 'Import Blast', roles: ['master', 'admin'] },
   { href: '/admin/database-manager', label: 'Database Manager', roles: ['master', 'admin'] },
   { href: '/admin/auto-worker', label: 'Auto Worker', roles: ['master', 'admin'] },
   { href: '/admin/meta-test', label: 'Meta API Test', roles: ['master', 'admin'] },
@@ -29,9 +30,30 @@ const navItems = [
 
 export default function Sidebar({ user }) {
   const router = useRouter()
-  const role = user?.role || 'user'
+  const [loadedUser, setLoadedUser] = useState(user || null)
+
+  const role = user?.role || loadedUser?.role || 'user'
+  const username = user?.username || loadedUser?.username || 'User'
 
   const visibleItems = navItems.filter((item) => item.roles.includes(role))
+
+  async function loadMe() {
+    if (user?.role) return
+
+    try {
+      const response = await fetch('/api/auth/me?t=' + Date.now(), {
+        cache: 'no-store'
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setLoadedUser(data.user)
+      }
+    } catch (err) {
+      console.error('Failed to load sidebar user:', err)
+    }
+  }
 
   function isActive(item) {
     if (item.href === '/') {
@@ -40,6 +62,10 @@ export default function Sidebar({ user }) {
 
     return router.pathname === item.href || router.pathname.startsWith(item.href + '/')
   }
+
+  useEffect(() => {
+    loadMe()
+  }, [user?.role])
 
   return (
     <aside className="hidden min-h-screen w-72 shrink-0 border-r border-slate-200 bg-white px-5 py-6 lg:block">
@@ -56,7 +82,7 @@ export default function Sidebar({ user }) {
         </p>
 
         <p className="mt-1 text-sm font-bold text-slate-800">
-          {user?.username || 'User'}
+          {username}
         </p>
 
         <p className="text-xs font-semibold text-indigo-600">
@@ -87,7 +113,9 @@ export default function Sidebar({ user }) {
       <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
         <p className="text-sm font-bold text-emerald-700">System Online</p>
         <p className="mt-1 text-xs text-emerald-600">
-          Inbox, Quick Replies, Reply Analysis, Usage Log, Blacklist, Job Performance, and Auto Worker ready.
+          {role === 'agent'
+            ? 'Agent access: Inbox, Quick Replies, Analytics, Usage Log, Blacklist, Reminder, Blast, Import Data, Jobs, and Logs.'
+            : 'Admin access: full operational dashboard, inbox, analytics, import data, and system settings.'}
         </p>
       </div>
     </aside>

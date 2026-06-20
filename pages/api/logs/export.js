@@ -57,7 +57,7 @@ async function getLogsFromTable(table, source, start, end) {
 }
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin', 'user'])
+  const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
   if (!authUser) return
 
   if (req.method !== 'GET') {

@@ -18,7 +18,7 @@ function cleanPhone(phone) {
 }
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin'])
+  const authUser = requireRole(req, res, ['master', 'admin', 'agent'])
   if (!authUser) return
 
   if (req.method !== 'POST') {

@@ -16,7 +16,7 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
 
   try {
-    const user = await requireRole(req, res, ['master', 'admin', 'user'])
+    const user = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 
     if (req.method !== 'POST') {
       return res.status(405).json({

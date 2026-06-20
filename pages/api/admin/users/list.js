@@ -1,11 +1,11 @@
-import { supabaseAdmin } from '../../../lib/supabaseAdmin'
-import { requireRole } from '../../../lib/auth'
+import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
+import { requireRole } from '../../../../lib/auth'
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
 
   try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    await requireRole(req, res, ['master', 'admin'])
 
     if (req.method !== 'GET') {
       return res.status(405).json({
@@ -14,19 +14,10 @@ export default async function handler(req, res) {
       })
     }
 
-    const q = String(req.query.q || '').trim()
-
-    let query = supabaseAdmin
-      .from('wa_blacklist')
-      .select('*')
+    const { data, error } = await supabaseAdmin
+      .from('app_users')
+      .select('id, username, role, is_active, created_at, updated_at')
       .order('created_at', { ascending: false })
-      .limit(1000)
-
-    if (q) {
-      query = query.or(`phone.ilike.%${q}%,profile_name.ilike.%${q}%,reason.ilike.%${q}%`)
-    }
-
-    const { data, error } = await query
 
     if (error) {
       return res.status(500).json({
@@ -37,7 +28,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      rows: data || []
+      users: data || []
     })
   } catch (error) {
     return res.status(401).json({

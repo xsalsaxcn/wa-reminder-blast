@@ -104,7 +104,7 @@ export default async function handler(req, res) {
   res.setHeader('Expires', '0')
 
   try {
-    await requireRole(req, res, ['master', 'admin', 'user'])
+    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 
     if (req.method !== 'POST') {
       return res.status(405).json({

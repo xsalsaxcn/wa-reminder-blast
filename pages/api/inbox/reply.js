@@ -3,7 +3,7 @@ import { requireRole } from '../../../lib/auth'
 import { sendWhatsAppText } from '../../../lib/metaWhatsapp'
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin', 'user'])
+  const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
   if (!authUser) return
 
   if (req.method !== 'POST') {
