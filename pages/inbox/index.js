@@ -2,6 +2,51 @@
 import { useRouter } from 'next/router'
 import Sidebar from '../../components/Sidebar'
 
+const quickReplyTemplates = [
+  {
+    key: 'mcu-pricelist',
+    label: 'Pricelist MCU',
+    text:
+      'Halo Kak, terima kasih sudah menghubungi inHarmony Clinic.\n\nUntuk layanan MCU corporate, kami bisa bantu sesuaikan paket berdasarkan jumlah peserta, lokasi, dan jenis pemeriksaan yang dibutuhkan.\n\nBoleh info jumlah peserta dan lokasi perusahaannya, Kak?'
+  },
+  {
+    key: 'minta-data',
+    label: 'Minta Data',
+    text:
+      'Baik Kak. Untuk kami bantu buatkan penawaran, boleh dibantu info:\n\n1. Nama perusahaan\n2. Jumlah peserta\n3. Lokasi pelaksanaan\n4. Perkiraan tanggal MCU\n5. Pemeriksaan yang dibutuhkan'
+  },
+  {
+    key: 'vaksin-flu',
+    label: 'Vaksin Flu',
+    text:
+      'Halo Kak, untuk vaksin flu bisa kami bantu.\n\nBoleh info kebutuhan vaksinnya untuk pribadi atau perusahaan? Jika perusahaan, kira-kira jumlah pesertanya berapa orang, Kak?'
+  },
+  {
+    key: 'jadwal',
+    label: 'Jadwal',
+    text:
+      'Baik Kak. Untuk jadwal, kami cek ketersediaan terlebih dahulu ya.\n\nBoleh info tanggal atau range tanggal yang Kakak inginkan?'
+  },
+  {
+    key: 'follow-up',
+    label: 'Follow-up',
+    text:
+      'Halo Kak, izin follow-up ya.\n\nApakah masih berminat untuk layanan dari inHarmony Clinic? Kami bisa bantu sesuaikan paket sesuai kebutuhan Kakak.'
+  },
+  {
+    key: 'closing',
+    label: 'Closing',
+    text:
+      'Siap Kak, terima kasih. Jika ada pertanyaan lanjutan atau ingin dibantu proses berikutnya, Kakak bisa langsung balas WhatsApp ini ya.'
+  },
+  {
+    key: 'di luar 24 jam',
+    label: 'Reminder 24 Jam',
+    text:
+      'Halo Kak, terima kasih sudah menghubungi inHarmony Clinic. Kami bantu follow-up kembali ya. Apakah masih ada yang ingin ditanyakan terkait layanan kami?'
+  }
+]
+
 export default function InboxPage() {
   const router = useRouter()
 
@@ -47,6 +92,20 @@ export default function InboxPage() {
   function exportInboxContacts(mode) {
     const url = '/api/inbox/export-contacts?mode=' + mode + '&t=' + Date.now()
     window.open(url, '_blank')
+  }
+
+  function applyQuickReply(templateText) {
+    if (!templateText) return
+
+    setReplyText((current) => {
+      const existing = String(current || '').trim()
+
+      if (!existing) {
+        return templateText
+      }
+
+      return existing + '\n\n' + templateText
+    })
   }
 
   async function loadMessages(phone, silent = false) {
@@ -402,12 +461,45 @@ export default function InboxPage() {
               </div>
 
               <form onSubmit={sendReply} className="border-t border-slate-200 bg-white p-4">
+                {selectedConversation ? (
+                  <div className="mb-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Quick Reply Template
+                      </p>
+
+                      {replyText ? (
+                        <button
+                          type="button"
+                          onClick={() => setReplyText('')}
+                          className="text-xs font-semibold text-red-600 hover:text-red-700"
+                        >
+                          Clear Text
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {quickReplyTemplates.map((template) => (
+                        <button
+                          key={template.key}
+                          type="button"
+                          onClick={() => applyQuickReply(template.text)}
+                          className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                        >
+                          {template.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="flex gap-2">
                   <textarea
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     placeholder="Tulis balasan WhatsApp..."
-                    rows={2}
+                    rows={3}
                     disabled={!selectedConversation || sending}
                     className="flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100"
                   />
@@ -420,6 +512,10 @@ export default function InboxPage() {
                     {sending ? 'Sending...' : 'Send'}
                   </button>
                 </div>
+
+                <p className="mt-2 text-xs text-slate-400">
+                  Klik template hanya mengisi kotak balasan. Pesan tetap belum dikirim sampai tombol Send diklik.
+                </p>
               </form>
             </section>
           </div>
