@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
 
 export default function AnalysisPage() {
@@ -222,19 +223,20 @@ export default function AnalysisPage() {
                     <Th>Intent</Th>
                     <Th>Score</Th>
                     <Th>Job</Th>
+                    <Th>Action</Th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {loading ? (
                     <tr>
-                      <td colSpan="8" className="p-4 text-slate-500">
+                      <td colSpan="9" className="p-4 text-slate-500">
                         Loading...
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="p-4 text-slate-500">
+                      <td colSpan="9" className="p-4 text-slate-500">
                         Belum ada data analysis. Klik Analyze Inbox dulu.
                       </td>
                     </tr>
@@ -246,22 +248,38 @@ export default function AnalysisPage() {
                             ? new Date(row.received_at).toLocaleString('id-ID')
                             : '-'}
                         </Td>
+
                         <Td>{row.profile_name || '-'}</Td>
+
                         <Td>{row.phone}</Td>
+
                         <Td>
                           <div className="max-w-xs truncate" title={row.body}>
                             {row.body || '-'}
                           </div>
                         </Td>
+
                         <Td>
                           <LabelBadge label={row.label} />
                         </Td>
+
                         <Td>{row.intent}</Td>
+
                         <Td>{row.score}</Td>
+
                         <Td>
                           <div className="max-w-[180px] truncate" title={row.source_job_id || ''}>
                             {row.source_job_id || '-'}
                           </div>
+                        </Td>
+
+                        <Td>
+                          <Link
+                            href={`/inbox?phone=${encodeURIComponent(row.phone)}`}
+                            className="inline-flex rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700"
+                          >
+                            Reply
+                          </Link>
                         </Td>
                       </tr>
                     ))

@@ -1,7 +1,10 @@
 ﻿import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/router'
 import Sidebar from '../../components/Sidebar'
 
 export default function InboxPage() {
+  const router = useRouter()
+
   const [conversations, setConversations] = useState([])
   const [selectedConversation, setSelectedConversation] = useState(null)
   const [messages, setMessages] = useState([])
@@ -80,7 +83,13 @@ export default function InboxPage() {
         return
       }
 
-      const activePhone = selectedPhoneRef.current
+      const queryPhone =
+        router?.query?.phone && typeof router.query.phone === 'string'
+          ? router.query.phone
+          : null
+
+      const activePhone = selectedPhoneRef.current || queryPhone
+
       const stillExists = activePhone
         ? list.find((item) => item.phone === activePhone)
         : null
@@ -141,6 +150,12 @@ export default function InboxPage() {
   }
 
   useEffect(() => {
+    if (!router.isReady) return
+
+    if (router.query.phone && typeof router.query.phone === 'string') {
+      selectedPhoneRef.current = router.query.phone
+    }
+
     loadConversations()
 
     pollingRef.current = setInterval(() => {
@@ -152,7 +167,7 @@ export default function InboxPage() {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
     }
-  }, [])
+  }, [router.isReady, router.query.phone])
 
   return (
     <div className="min-h-screen bg-slate-100 md:flex">
