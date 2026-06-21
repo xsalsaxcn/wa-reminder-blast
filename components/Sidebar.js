@@ -33,6 +33,7 @@ export default function Sidebar({ user }) {
   const router = useRouter()
   const [loadedUser, setLoadedUser] = useState(user || null)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [hideMobileButton, setHideMobileButton] = useState(false)
 
   const role = user?.role || loadedUser?.role || 'user'
   const username = user?.username || loadedUser?.username || 'User'
@@ -73,12 +74,57 @@ export default function Sidebar({ user }) {
     setMobileOpen(false)
   }, [router.pathname])
 
+  useEffect(() => {
+    let lastScrollY = window.scrollY
+    let timer = null
+
+    function handleScroll() {
+      const current = window.scrollY
+      const scrollingDown = current > lastScrollY + 8
+
+      if (scrollingDown) {
+        setHideMobileButton(true)
+
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => setHideMobileButton(false), 1200)
+      }
+
+      lastScrollY = current
+    }
+
+    function handleFocusIn(event) {
+      const tag = event.target?.tagName?.toLowerCase()
+      if (['input', 'textarea', 'select'].includes(tag)) {
+        setHideMobileButton(true)
+      }
+    }
+
+    function handleFocusOut() {
+      setTimeout(() => setHideMobileButton(false), 250)
+    }
+
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    document.addEventListener('focusin', handleFocusIn)
+    document.addEventListener('focusout', handleFocusOut)
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll)
+      document.removeEventListener('focusin', handleFocusIn)
+      document.removeEventListener('focusout', handleFocusOut)
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+
   return (
     <>
       <button
         type="button"
         onClick={() => setMobileOpen(true)}
-        className="fixed bottom-5 left-4 z-50 inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-xl shadow-slate-300 lg:hidden"
+        className={`fixed bottom-5 left-4 z-50 inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-xl shadow-slate-300 transition-all duration-300 lg:hidden ${
+          hideMobileButton
+            ? '-translate-x-[120%] opacity-0 pointer-events-none'
+            : 'translate-x-0 opacity-100'
+        }`}
       >
         <span className="text-lg leading-none">☰</span>
         Menu

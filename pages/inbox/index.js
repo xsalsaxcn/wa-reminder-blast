@@ -12,6 +12,8 @@ export default function InboxPage() {
   const [replyText, setReplyText] = useState('')
   const [searchText, setSearchText] = useState('')
   const [quickReplyTemplates, setQuickReplyTemplates] = useState([])
+  const [attachmentFile, setAttachmentFile] = useState(null)
+  const [attachmentPreview, setAttachmentPreview] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
@@ -22,6 +24,7 @@ export default function InboxPage() {
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
   const messagesEndRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   const filteredConversations = useMemo(() => {
     const q = searchText.trim().toLowerCase()
@@ -58,9 +61,7 @@ export default function InboxPage() {
     setReplyText((current) => {
       const existing = String(current || '').trim()
 
-      if (!existing) {
-        return templateText
-      }
+      if (!existing) return templateText
 
       return existing + '\n\n' + templateText
     })
@@ -151,9 +152,7 @@ export default function InboxPage() {
       setSelectedConversation(nextSelected)
       selectedPhoneRef.current = nextSelected.phone
 
-      if (queryPhone) {
-        setMobileView('chat')
-      }
+      if (queryPhone) setMobileView('chat')
 
       await loadMessages(nextSelected.phone, true)
     } catch (err) {
@@ -170,30 +169,108 @@ export default function InboxPage() {
     await loadMessages(conversation.phone)
   }
 
+  function clearAttachment() {
+    setAttachmentFile(null)
+    setAttachmentPreview('')
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
+
+  function handleAttachmentChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ]
+
+    if (!allowedTypes.includes(file.type)) {
+      setError('Format attachment belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
+      e.target.value = ''
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Ukuran file maksimal 5 MB.')
+      e.target.value = ''
+      return
+    }
+
+    setAttachmentFile(file)
+
+    if (file.type.startsWith('image/')) {
+      setAttachmentPreview(URL.createObjectURL(file))
+    } else {
+      setAttachmentPreview('')
+    }
+  }
+
   async function sendReply(e) {
     e.preventDefault()
 
-    if (!selectedConversation?.phone || !replyText.trim()) return
+    if (!selectedConversation?.phone) return
+    if (!replyText.trim() && !attachmentFile) return
 
     setSending(true)
     setError('')
 
     try {
-      const response = await fetch('/api/inbox/reply', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          phone: selectedConversation.phone,
-          message: replyText.trim()
+      if (attachmentFile) {
+        const base64 = await fileToBase64(attachmentFile)
+
+        const response = await fetch('/api/inbox/reply-attachment', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            phone: selectedConversation.phone,
+            caption: replyText.trim(),
+            fileName: attachmentFile.name,
+            mimeType: attachmentFile.type,
+            base64
+          })
         })
-      })
 
-      const data = await response.json()
+        const data = await response.json()
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Gagal mengirim balasan')
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Gagal mengirim attachment')
+        }
+
+        clearAttachment()
+      } else {
+        const response = await fetch('/api/inbox/reply', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            phone: selectedConversation.phone,
+            message: replyText.trim()
+          })
+        })
+
+        const data = await response.json()
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Gagal mengirim balasan')
+        }
       }
 
       setReplyText('')
@@ -204,6 +281,44 @@ export default function InboxPage() {
     } finally {
       setSending(false)
     }
+  }
+
+  function mediaUrl(msg) {
+    const params = new URLSearchParams()
+    params.set('media_id', msg.media_id)
+    params.set('filename', msg.media_filename || 'attachment')
+    return '/api/inbox/media?' + params.toString()
+  }
+
+  function renderMedia(msg) {
+    if (!msg.media_id) return null
+
+    const type = String(msg.message_type || '').toLowerCase()
+    const mime = String(msg.media_mime_type || '').toLowerCase()
+    const url = mediaUrl(msg)
+
+    if (type === 'image' || mime.startsWith('image/')) {
+      return (
+        <a href={url} target="_blank" rel="noreferrer" className="mt-2 block">
+          <img
+            src={url}
+            alt={msg.media_caption || msg.media_filename || 'image'}
+            className="max-h-64 rounded-xl object-cover"
+          />
+        </a>
+      )
+    }
+
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 flex items-center gap-2 rounded-xl bg-white/20 px-3 py-2 text-sm font-semibold underline"
+      >
+        📎 {msg.media_filename || 'Download attachment'}
+      </a>
+    )
   }
 
   useEffect(() => {
@@ -242,9 +357,7 @@ export default function InboxPage() {
               </p>
               <p className="mt-1 text-[11px] text-slate-400 md:text-xs">
                 Auto-refresh 5 detik
-                {lastUpdated
-                  ? ` • ${lastUpdated.toLocaleTimeString('id-ID')}`
-                  : ''}
+                {lastUpdated ? ` • ${lastUpdated.toLocaleTimeString('id-ID')}` : ''}
               </p>
             </div>
 
@@ -290,9 +403,7 @@ export default function InboxPage() {
                     <h2 className="font-semibold text-slate-900">Conversations</h2>
                     <p className="text-xs text-slate-500">
                       Total: {conversations.length}
-                      {searchText.trim()
-                        ? ` • Hasil: ${filteredConversations.length}`
-                        : ''}
+                      {searchText.trim() ? ` • Hasil: ${filteredConversations.length}` : ''}
                     </p>
                   </div>
 
@@ -325,13 +436,9 @@ export default function InboxPage() {
                 {loading ? (
                   <div className="p-4 text-sm text-slate-500">Loading inbox...</div>
                 ) : conversations.length === 0 ? (
-                  <div className="p-4 text-sm text-slate-500">
-                    Belum ada conversation masuk.
-                  </div>
+                  <div className="p-4 text-sm text-slate-500">Belum ada conversation masuk.</div>
                 ) : filteredConversations.length === 0 ? (
-                  <div className="p-4 text-sm text-slate-500">
-                    Tidak ada conversation yang cocok.
-                  </div>
+                  <div className="p-4 text-sm text-slate-500">Tidak ada conversation yang cocok.</div>
                 ) : (
                   filteredConversations.map((item) => {
                     const active = selectedConversation?.phone === item.phone
@@ -414,9 +521,7 @@ export default function InboxPage() {
                 ) : loadingMessages ? (
                   <div className="text-sm text-slate-500">Loading messages...</div>
                 ) : messages.length === 0 ? (
-                  <div className="text-sm text-slate-500">
-                    Belum ada detail pesan untuk nomor ini.
-                  </div>
+                  <div className="text-sm text-slate-500">Belum ada detail pesan untuk nomor ini.</div>
                 ) : (
                   messages.map((msg) => {
                     const outgoing = msg.direction === 'outgoing'
@@ -428,14 +533,16 @@ export default function InboxPage() {
                       >
                         <div
                           className={`max-w-[86%] rounded-2xl px-4 py-3 text-sm shadow-sm md:max-w-[78%] ${
-                            outgoing
-                              ? 'bg-green-600 text-white'
-                              : 'bg-white text-slate-900'
+                            outgoing ? 'bg-green-600 text-white' : 'bg-white text-slate-900'
                           }`}
                         >
-                          <div className="whitespace-pre-wrap break-words">
-                            {msg.message || '-'}
-                          </div>
+                          {renderMedia(msg)}
+
+                          {msg.message ? (
+                            <div className="whitespace-pre-wrap break-words">
+                              {msg.message}
+                            </div>
+                          ) : null}
 
                           <div
                             className={`mt-2 text-[11px] ${
@@ -511,11 +618,60 @@ export default function InboxPage() {
                   </div>
                 ) : null}
 
+                {attachmentFile ? (
+                  <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-800">
+                          📎 {attachmentFile.name}
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          {(attachmentFile.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={clearAttachment}
+                        className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700"
+                      >
+                        Hapus
+                      </button>
+                    </div>
+
+                    {attachmentPreview ? (
+                      <img
+                        src={attachmentPreview}
+                        alt="Preview"
+                        className="mt-3 max-h-40 rounded-xl object-cover"
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={handleAttachmentChange}
+                  className="hidden"
+                />
+
                 <div className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!selectedConversation || sending}
+                    className="rounded-xl bg-slate-100 px-3 py-3 text-lg font-semibold text-slate-700 hover:bg-slate-200 disabled:bg-slate-100 disabled:text-slate-300"
+                    title="Attach file"
+                  >
+                    📎
+                  </button>
+
                   <textarea
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
-                    placeholder="Tulis balasan..."
+                    placeholder={attachmentFile ? 'Tulis caption...' : 'Tulis balasan...'}
                     rows={2}
                     disabled={!selectedConversation || sending}
                     className="max-h-32 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100 md:rows-3"
@@ -523,7 +679,7 @@ export default function InboxPage() {
 
                   <button
                     type="submit"
-                    disabled={!selectedConversation || !replyText.trim() || sending}
+                    disabled={!selectedConversation || (!replyText.trim() && !attachmentFile) || sending}
                     className="rounded-xl bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300 md:px-5"
                   >
                     {sending ? '...' : 'Send'}
@@ -531,7 +687,7 @@ export default function InboxPage() {
                 </div>
 
                 <p className="mt-2 hidden text-xs text-slate-400 md:block">
-                  Klik template hanya mengisi kotak balasan. Pesan tetap belum dikirim sampai tombol Send diklik.
+                  Bisa kirim JPG, PNG, WEBP, PDF, DOC/DOCX, XLS/XLSX. Maksimal 5 MB.
                 </p>
               </form>
             </section>

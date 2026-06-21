@@ -1,10 +1,12 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
-import { requireRole } from '../../../lib/auth'
+﻿import { requireRole } from '../../../lib/auth'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+
+function cleanPhone(phone) {
+  return String(phone || '').replace(/\D/g, '')
+}
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  res.setHeader('Pragma', 'no-cache')
-  res.setHeader('Expires', '0')
 
   try {
     await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
@@ -16,7 +18,7 @@ export default async function handler(req, res) {
       })
     }
 
-    const phone = String(req.query.phone || '').trim()
+    const phone = cleanPhone(req.query.phone)
 
     if (!phone) {
       return res.status(400).json({
@@ -30,6 +32,7 @@ export default async function handler(req, res) {
       .select('*')
       .eq('phone', phone)
       .order('received_at', { ascending: true })
+      .limit(500)
 
     if (incomingError) {
       return res.status(500).json({
@@ -43,6 +46,7 @@ export default async function handler(req, res) {
       .select('*')
       .eq('phone', phone)
       .order('sent_at', { ascending: true })
+      .limit(500)
 
     if (outgoingError) {
       return res.status(500).json({
@@ -55,24 +59,28 @@ export default async function handler(req, res) {
       ...(incoming || []).map((item) => ({
         id: item.id,
         direction: 'incoming',
-        phone: item.phone,
-        profile_name: item.profile_name,
-        message: item.body || '',
-        message_type: item.message_type,
-        created_at: item.received_at
+        message: item.body || item.media_caption || '',
+        created_at: item.received_at,
+        message_type: item.message_type || 'text',
+        media_id: item.media_id || null,
+        media_mime_type: item.media_mime_type || null,
+        media_filename: item.media_filename || null,
+        media_caption: item.media_caption || null,
+        error_message: null
       })),
       ...(outgoing || []).map((item) => ({
         id: item.id,
         direction: 'outgoing',
-        phone: item.phone,
-        profile_name: null,
-        message: item.message || '',
-        message_type: 'text',
-        status: item.status,
-        error_message: item.error_message,
-        created_at: item.sent_at
+        message: item.message || item.media_caption || '',
+        created_at: item.sent_at || item.created_at,
+        message_type: item.message_type || 'text',
+        media_id: item.media_id || null,
+        media_mime_type: item.media_mime_type || null,
+        media_filename: item.media_filename || null,
+        media_caption: item.media_caption || null,
+        error_message: item.error_message || null
       }))
-    ].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    ].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
 
     return res.status(200).json({
       success: true,

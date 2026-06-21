@@ -1,85 +1,39 @@
 ﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 
-function getTextFromMessage(message) {
-  if (!message) return ''
-
-  if (message.type === 'text') {
-    return message.text?.body || ''
-  }
-
-  if (message.type === 'button') {
-    return message.button?.text || ''
-  }
-
-  if (message.type === 'interactive') {
-    return (
-      message.interactive?.button_reply?.title ||
-      message.interactive?.list_reply?.title ||
-      '[interactive message]'
-    )
-  }
-
-  if (message.type === 'image') return '[image]'
-  if (message.type === 'document') return '[document]'
-  if (message.type === 'audio') return '[audio]'
-  if (message.type === 'video') return '[video]'
-  if (message.type === 'location') return '[location]'
-
-  return `[${message.type || 'unknown'} message]`
+function cleanPhone(phone) {
+  return String(phone || '').replace(/\D/g, '')
 }
 
-async function saveIncomingMessage({ phone, profileName, message }) {
-  const body = getTextFromMessage(message)
-  const receivedAt = message.timestamp
-    ? new Date(Number(message.timestamp) * 1000).toISOString()
-    : new Date().toISOString()
+function getIncomingBody(message) {
+  if (message.type === 'text') return message.text?.body || ''
+  if (message.type === 'image') return message.image?.caption || '[image]'
+  if (message.type === 'document') return message.document?.caption || message.document?.filename || '[document]'
+  if (message.type === 'video') return message.video?.caption || '[video]'
+  if (message.type === 'audio') return '[audio]'
+  if (message.type === 'sticker') return '[sticker]'
+  return `[${message.type || 'message'}]`
+}
 
-  await supabaseAdmin
-    .from('wa_incoming_messages')
-    .upsert(
-      {
-        phone,
-        profile_name: profileName || null,
-        message_id: message.id || null,
-        message_type: message.type || null,
-        body,
-        raw: message,
-        received_at: receivedAt
-      },
-      {
-        onConflict: 'message_id',
-        ignoreDuplicates: true
-      }
-    )
+function getMediaInfo(message) {
+  const type = message.type
 
-  await supabaseAdmin
-    .from('wa_conversations')
-    .upsert(
-      {
-        phone,
-        profile_name: profileName || null,
-        last_message: body,
-        last_message_at: receivedAt,
-        updated_at: new Date().toISOString()
-      },
-      {
-        onConflict: 'phone'
-      }
-    )
+  if (!['image', 'document', 'video', 'audio', 'sticker'].includes(type)) {
+    return {
+      media_id: null,
+      media_mime_type: null,
+      media_filename: null,
+      media_caption: null
+    }
+  }
 
-  const { data: conversation } = await supabaseAdmin
-    .from('wa_conversations')
-    .select('unread_count')
-    .eq('phone', phone)
-    .maybeSingle()
+  const media = message[type] || {}
 
-  await supabaseAdmin
-    .from('wa_conversations')
-    .update({
-      unread_count: Number(conversation?.unread_count || 0) + 1,
-      updated_at: new Date().toISOString()
-    })
-    .eq('phone', phone)
+  return {
+    media_id: media.id || null,
+    media_mime_type: media.mime_type || null,
+    media_filename: media.filename || null,
+    media_caption: media.caption || null
+  }
 }
 
 export default async function handler(req, res) {
@@ -98,52 +52,94 @@ export default async function handler(req, res) {
     return res.status(403).send('Forbidden')
   }
 
-  if (req.method === 'POST') {
-    try {
-      const body = req.body
-
-      const entries = body?.entry || []
-
-      for (const entry of entries) {
-        const changes = entry?.changes || []
-
-        for (const change of changes) {
-          const value = change?.value || {}
-          const contacts = value?.contacts || []
-          const messages = value?.messages || []
-
-          for (const message of messages) {
-            const phone = message.from
-            const contact = contacts.find((item) => item.wa_id === phone)
-            const profileName = contact?.profile?.name || null
-
-            if (phone) {
-              await saveIncomingMessage({
-                phone,
-                profileName,
-                message
-              })
-            }
-          }
-        }
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: 'Webhook received'
-      })
-    } catch (error) {
-      console.error('META_WEBHOOK_ERROR:', error)
-
-      return res.status(500).json({
-        success: false,
-        message: error.message || 'Webhook error'
-      })
-    }
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      success: false,
+      message: 'Method not allowed'
+    })
   }
 
-  return res.status(405).json({
-    success: false,
-    message: 'Method not allowed'
-  })
+  try {
+    const body = req.body
+
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        const value = change.value || {}
+        const contacts = value.contacts || []
+        const messages = value.messages || []
+
+        for (const message of messages) {
+          const phone = cleanPhone(message.from)
+          if (!phone) continue
+
+          const profileName =
+            contacts.find((contact) => cleanPhone(contact.wa_id) === phone)?.profile?.name ||
+            contacts[0]?.profile?.name ||
+            phone
+
+          const receivedAt = message.timestamp
+            ? new Date(Number(message.timestamp) * 1000).toISOString()
+            : new Date().toISOString()
+
+          const bodyText = getIncomingBody(message)
+          const mediaInfo = getMediaInfo(message)
+
+          if (message.id) {
+            const { data: existing } = await supabaseAdmin
+              .from('wa_incoming_messages')
+              .select('id')
+              .eq('whatsapp_message_id', message.id)
+              .maybeSingle()
+
+            if (existing?.id) {
+              continue
+            }
+          }
+
+          await supabaseAdmin
+            .from('wa_incoming_messages')
+            .insert({
+              whatsapp_message_id: message.id || null,
+              phone,
+              profile_name: profileName,
+              body: bodyText,
+              received_at: receivedAt,
+              message_type: message.type || 'text',
+              media_id: mediaInfo.media_id,
+              media_mime_type: mediaInfo.media_mime_type,
+              media_filename: mediaInfo.media_filename,
+              media_caption: mediaInfo.media_caption
+            })
+
+          await supabaseAdmin
+            .from('wa_conversations')
+            .upsert(
+              {
+                phone,
+                profile_name: profileName,
+                last_message: bodyText,
+                last_message_at: receivedAt,
+                unread_count: 1,
+                status: 'open',
+                updated_at: new Date().toISOString()
+              },
+              {
+                onConflict: 'phone'
+              }
+            )
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true
+    })
+  } catch (error) {
+    console.error('Webhook error:', error)
+
+    return res.status(200).json({
+      success: false,
+      message: error.message
+    })
+  }
 }
