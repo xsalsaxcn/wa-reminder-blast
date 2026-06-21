@@ -1,67 +1,179 @@
-﻿import AppLayout from '../components/AppLayout'
-import FeatureCard from '../components/FeatureCard'
-import StatCard from '../components/StatCard'
 
-export default function Home() {
-  return (
-    <AppLayout title="Home">
-      <section className="relative overflow-hidden rounded-[34px] border border-[#e7ecf5] bg-white p-8 shadow-[0_22px_70px_rgba(50,64,99,0.09)]">
-        <div className="absolute right-0 top-0 h-72 w-72 rounded-full bg-[#eeeefe] blur-3xl" />
-        <div className="absolute bottom-0 right-36 h-52 w-52 rounded-full bg-[#e9fbf8] blur-3xl" />
 
-        <div className="relative grid gap-8 lg:grid-cols-[1.4fr_0.8fr] lg:items-center">
-          <div>
-            <div className="mb-5 inline-flex rounded-full border border-[#dff7f3] bg-[#e9fbf8] px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-[#0f766e]">
-              Official Meta API Ready
-            </div>
-            <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-[#172033] md:text-5xl">
-              Notiva
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-8 text-[#718096]">
-              Kelola reminder dan broadcast WhatsApp dengan tampilan yang rapi, aman, efisien, dan profesional untuk operasional layanan kesehatan.
-            </p>
-          </div>
+import Link from 'next/link'
+import Sidebar from '../components/Sidebar'
 
-          <div className="relative rounded-[30px] bg-gradient-to-br from-[#eeeefe] via-white to-[#e9fbf8] p-6 shadow-inner">
-            <div className="rounded-[26px] bg-white p-5 shadow-lg">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wide text-[#98a2b3]">Today</p>
-                  <p className="text-lg font-bold text-[#172033]">Message Queue</p>
-                </div>
-                <div className="rounded-2xl bg-[#e9fbf8] px-3 py-2 text-sm font-bold text-[#0f766e]">Healthy</div>
-              </div>
-              <div className="space-y-3">
-                <div className="rounded-2xl bg-[#f8fafc] p-4">
-                  <div className="h-2 w-2/3 rounded-full bg-[#6d5dfc]" />
-                  <div className="mt-3 h-2 w-full rounded-full bg-[#edf1f7]" />
-                </div>
-                <div className="rounded-2xl bg-[#f8fafc] p-4">
-                  <div className="h-2 w-1/2 rounded-full bg-[#12b8a6]" />
-                  <div className="mt-3 h-2 w-full rounded-full bg-[#edf1f7]" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <FeatureCard href="/admin/reset-db" title="Admin / Reset DB" description="Kelola database dan reset data import dengan akses admin." icon="â†»" tone="rose" />
-        <FeatureCard href="/admin/manage-users" title="Manage Users" description="Buat dan kelola user untuk akses reminder dan broadcast." icon="â—Ž" tone="blue" />
-        <FeatureCard href="/reminder" title="Reminder" description="Pilih database, jalankan reminder, dan lihat log pengiriman." icon="â—´" tone="green" />
-        <FeatureCard href="/blast" title="WhatsApp Blast" description="Kirim broadcast WhatsApp ke banyak kontak secara resmi." icon="âœ¦" tone="purple" />
-        <FeatureCard href="/dashboard" title="Dashboard" description="Pantau jumlah terkirim, gagal, dan performa sistem." icon="â–£" tone="slate" />
-        <FeatureCard href="/logs" title="Logs" description="Lihat riwayat aktivitas reminder dan broadcast dalam satu tempat." icon="â˜°" tone="blue" />
-      </section>
-
-      <section className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Reminder Aktif" value="0" caption="jadwal" icon="â—´" tone="green" />
-        <StatCard title="Blast Terkirim" value="0" caption="pesan" icon="âœ¦" tone="purple" />
-        <StatCard title="Gagal Kirim" value="0" caption="log" icon="!" tone="rose" />
-        <StatCard title="Status Sistem" value="Aman" caption="online" icon="âœ“" tone="blue" />
-      </section>
-    </AppLayout>
-  )
+const menuCards = [
+{
+title: 'Dashboard',
+description: 'Pantau jumlah terkirim, gagal, dan performa sistem.',
+href: '/dashboard',
+code: 'DB',
+accent: 'border-cyan-400 bg-cyan-50 text-cyan-700'
+},
+{
+title: 'Inbox',
+description: 'Kelola pesan masuk dan balasan customer.',
+href: '/inbox',
+code: 'IN',
+accent: 'border-blue-400 bg-blue-50 text-blue-700'
+},
+{
+title: 'Quick Replies',
+description: 'Siapkan template balasan cepat untuk agent.',
+href: '/quick-replies',
+code: 'QR',
+accent: 'border-violet-400 bg-violet-50 text-violet-700'
+},
+{
+title: 'Reply Analysis',
+description: 'Analisa balasan customer dan performa follow-up.',
+href: '/analysis',
+code: 'AN',
+accent: 'border-emerald-400 bg-emerald-50 text-emerald-700'
+},
+{
+title: 'Reminder',
+description: 'Pilih database, jalankan reminder, dan lihat log pengiriman.',
+href: '/reminder',
+code: 'RM',
+accent: 'border-teal-400 bg-teal-50 text-teal-700'
+},
+{
+title: 'WhatsApp Blast',
+description: 'Kirim broadcast WhatsApp ke banyak kontak secara resmi.',
+href: '/blast',
+code: 'BL',
+accent: 'border-indigo-400 bg-indigo-50 text-indigo-700'
+},
+{
+title: 'Import Reminder',
+description: 'Upload database kontak untuk jadwal reminder.',
+href: '/admin/import-reminder',
+code: 'IR',
+accent: 'border-sky-400 bg-sky-50 text-sky-700'
+},
+{
+title: 'Import Blast',
+description: 'Upload database kontak untuk WhatsApp blast.',
+href: '/admin/import-blast',
+code: 'IB',
+accent: 'border-fuchsia-400 bg-fuchsia-50 text-fuchsia-700'
+},
+{
+title: 'Job Queue',
+description: 'Kelola antrean pengiriman pesan dan attachment.',
+href: '/jobs',
+code: 'JQ',
+accent: 'border-amber-400 bg-amber-50 text-amber-700'
+},
+{
+title: 'Logs',
+description: 'Lihat riwayat aktivitas reminder dan broadcast.',
+href: '/logs',
+code: 'LG',
+accent: 'border-slate-400 bg-slate-50 text-slate-700'
+},
+{
+title: 'Manage Users',
+description: 'Buat dan kelola user untuk akses sistem.',
+href: '/admin/manage-users',
+code: 'US',
+accent: 'border-blue-400 bg-blue-50 text-blue-700'
+},
+{
+title: 'Admin / Reset DB',
+description: 'Kelola database dan reset data import dengan akses admin.',
+href: '/admin/reset-db',
+code: 'AD',
+accent: 'border-rose-400 bg-rose-50 text-rose-700'
 }
+]
 
+export default function HomePage() {
+return (
+<div className="min-h-screen bg-slate-50 lg:flex">
+<Sidebar />
+
+<main className="flex-1 p-4 lg:p-8">
+<section className="mb-8 overflow-hidden rounded-[32px] bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-700 p-6 text-white shadow-sm lg:p-8">
+<div className="max-w-4xl">
+<p className="text-xs font-black uppercase tracking-[0.24em] text-cyan-100">
+Notiva
+</p>
+<h1 className="mt-3 text-3xl font-black leading-tight lg:text-5xl">
+WhatsApp Automation Platform
+</h1>
+<p className="mt-4 max-w-2xl text-sm leading-6 text-cyan-50 lg:text-base">
+Kelola WhatsApp blast, reminder, inbox, quick replies, attachment, job queue, dan monitoring dalam satu sistem profesional.
+</p>
+</div>
+</section>
+
+<section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+{menuCards.map((item) => (
+<Link href={item.href} key={item.href} legacyBehavior>
+<a className="group rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-1 hover:border-cyan-200 hover:shadow-lg">
+<div className="flex items-start justify-between gap-4">
+<div
+className={
+'flex h-12 w-12 items-center justify-center rounded-2xl border-l-4 text-sm font-black ' +
+item.accent
+}
+>
+{item.code}
+</div>
+
+<div className="rounded-2xl bg-slate-50 px-3 py-2 text-xs font-black text-slate-500 group-hover:bg-cyan-50 group-hover:text-cyan-700">
+Go
+</div>
+</div>
+
+<h2 className="mt-6 text-lg font-black text-slate-900">
+{item.title}
+</h2>
+<p className="mt-2 text-sm leading-6 text-slate-500">
+{item.description}
+</p>
+</a>
+</Link>
+))}
+</section>
+
+<section className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+<div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+Reminder Aktif
+</p>
+<p className="mt-2 text-3xl font-black text-slate-900">0</p>
+<p className="text-xs text-slate-500">jadwal</p>
+</div>
+
+<div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+Blast Terkirim
+</p>
+<p className="mt-2 text-3xl font-black text-slate-900">0</p>
+<p className="text-xs text-slate-500">pesan</p>
+</div>
+
+<div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+Gagal Kirim
+</p>
+<p className="mt-2 text-3xl font-black text-slate-900">0</p>
+<p className="text-xs text-slate-500">log</p>
+</div>
+
+<div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+Status Sistem
+</p>
+<p className="mt-2 text-3xl font-black text-emerald-600">Aman</p>
+<p className="text-xs text-slate-500">online</p>
+</div>
+</section>
+</main>
+</div>
+)
+}

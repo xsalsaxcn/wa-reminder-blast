@@ -12,7 +12,7 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL
 const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 if (!url || !key) {
-throw new Error('NEXT_PUBLIC_SUPABASE_URL atau NEXT_PUBLIC_SUPABASE_ANON_KEY belum ada di environment.')
+throw new Error('Supabase public environment belum lengkap.')
 }
 
 return createClient(url, key)
@@ -99,24 +99,14 @@ return String(value || '')
 function cleanFileName(fileName) {
 const raw = String(fileName || 'attachment').trim()
 const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.() '
-
 let result = ''
 
 for (const char of raw) {
-if (allowed.includes(char)) {
-result += char
-} else {
-result += '_'
-}
+result += allowed.includes(char) ? char : '_'
 }
 
-while (result.includes(' ')) {
-result = result.split(' ').join(' ')
-}
-
-while (result.includes('')) {
-result = result.split('').join('_')
-}
+while (result.includes(' ')) result = result.split(' ').join(' ')
+while (result.includes('')) result = result.split('').join('_')
 
 result = result.trim().split(' ').join('_').slice(0, 120)
 
@@ -144,10 +134,7 @@ String(date.getDate()).padStart(2, '0')
 }
 
 function getAttachmentType(mimeType) {
-if (String(mimeType || '').startsWith('image/')) {
-return 'image'
-}
-
+if (String(mimeType || '').startsWith('image/')) return 'image'
 return 'document'
 }
 
@@ -174,7 +161,7 @@ throw new Error('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DO
 }
 
 if (file.size > MAX_FILE_SIZE) {
-throw new Error('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.')
+throw new Error('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
 }
 
 const supabase = getSupabaseStorageClient()
@@ -196,10 +183,6 @@ const { data } = supabase.storage
 .from(BUCKET_NAME)
 .getPublicUrl(path)
 
-if (!data || !data.publicUrl) {
-throw new Error('Public URL attachment gagal dibuat.')
-}
-
 return {
 attachment_url: data.publicUrl,
 attachment_type: getAttachmentType(mimeType),
@@ -215,9 +198,7 @@ return JSON.parse(text)
 } catch (err) {
 return {
 success: false,
-message:
-text ||
-'Server mengembalikan response non-JSON.'
+message: text || 'Server mengembalikan response non-JSON.'
 }
 }
 }
@@ -259,9 +240,10 @@ URL.revokeObjectURL(url)
 }
 
 function downloadBlastTemplateWithoutAttachment() {
-const headers = ['name', 'phone', 'message']
-
-const rows = [
+downloadCsvFile(
+'template_blast_tanpa_attachment.csv',
+['name', 'phone', 'message'],
+[
 {
 name: 'Indira',
 phone: '="6285137908391"',
@@ -273,22 +255,14 @@ phone: '="6281234567890"',
 message: 'Halo Kak Andin, ini informasi dari Notiva.'
 }
 ]
-
-downloadCsvFile('template_blast_tanpa_attachment.csv', headers, rows)
+)
 }
 
 function downloadBlastTemplateWithAttachment() {
-const headers = [
-'name',
-'phone',
-'message',
-'attachment_url',
-'attachment_type',
-'attachment_filename',
-'attachment_caption'
-]
-
-const rows = [
+downloadCsvFile(
+'template_blast_dengan_attachment_berbeda.csv',
+['name', 'phone', 'message', 'attachment_url', 'attachment_type', 'attachment_filename', 'attachment_caption'],
+[
 {
 name: 'Indira',
 phone: '="6285137908391"',
@@ -308,30 +282,29 @@ attachment_filename: 'gambar_andin.jpg',
 attachment_caption: 'Berikut gambar untuk Kak Andin.'
 }
 ]
-
-downloadCsvFile('template_blast_dengan_attachment_berbeda.csv', headers, rows)
+)
 }
 
 export default function ImportBlastPage() {
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
 const [rows, setRows] = useState([])
-const [globalAttachment, setGlobalAttachment] = useState(null)
+const [selectedAttachmentFile, setSelectedAttachmentFile] = useState(null)
 const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [loading, setLoading] = useState(false)
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
 
-function rowsWithAttachment() {
+function applyAttachment(uploadedAttachment) {
 return rows.map((row) => {
-if (!globalAttachment || row.attachment_url) return row
+if (!uploadedAttachment || row.attachment_url) return row
 
 return {
 ...row,
-attachment_url: globalAttachment.attachment_url,
-attachment_type: globalAttachment.attachment_type,
-attachment_filename: globalAttachment.attachment_filename,
-attachment_caption: row.attachment_caption || row.message || globalAttachment.attachment_filename
+attachment_url: uploadedAttachment.attachment_url,
+attachment_type: uploadedAttachment.attachment_type,
+attachment_filename: uploadedAttachment.attachment_filename,
+attachment_caption: row.attachment_caption || row.message || uploadedAttachment.attachment_filename
 }
 })
 }
@@ -352,7 +325,7 @@ const parsed = parseCsv(text)
 setRows(normalizeParsedRows(parsed))
 }
 
-async function handleAttachmentChange(e) {
+function handleAttachmentChange(e) {
 const file = e.target.files?.[0]
 
 setMessage('')
@@ -360,20 +333,25 @@ setError('')
 
 if (!file) return
 
-setUploadingAttachment(true)
-
-try {
-const uploaded = await uploadAttachmentDirect(file)
-
-setGlobalAttachment(uploaded)
-setMessage('Attachment berhasil di-upload: ' + uploaded.attachment_filename)
-} catch (err) {
-setGlobalAttachment(null)
-setError(err.message || 'Upload attachment gagal.')
-} finally {
-setUploadingAttachment(false)
+if (file.size > MAX_FILE_SIZE) {
+setSelectedAttachmentFile(null)
+setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
 e.target.value = ''
+return
 }
+
+const mimeType = String(file.type || '').trim().toLowerCase()
+
+if (!validateMimeType(mimeType)) {
+setSelectedAttachmentFile(null)
+setError('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
+e.target.value = ''
+return
+}
+
+setSelectedAttachmentFile(file)
+setMessage('Attachment dipilih: ' + file.name + '. File akan di-upload saat klik Import Blast.')
+e.target.value = ''
 }
 
 async function handleImport(e) {
@@ -384,19 +362,19 @@ setMessage('')
 setError('')
 
 try {
-if (!databaseName.trim()) {
-throw new Error('Nama database wajib diisi')
+if (!databaseName.trim()) throw new Error('Nama database wajib diisi')
+if (rows.length === 0) throw new Error('File CSV belum dipilih atau kosong')
+
+let uploadedAttachment = null
+
+if (selectedAttachmentFile) {
+setUploadingAttachment(true)
+setMessage('Mengupload attachment...')
+uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
+setUploadingAttachment(false)
 }
 
-if (rows.length === 0) {
-throw new Error('File CSV belum dipilih atau kosong')
-}
-
-if (uploadingAttachment) {
-throw new Error('Tunggu upload attachment selesai dulu sebelum import.')
-}
-
-const finalRows = rowsWithAttachment()
+const finalRows = applyAttachment(uploadedAttachment)
 
 const response = await fetch('/api/contacts/import', {
 method: 'POST',
@@ -426,16 +404,16 @@ setMessage(
 
 setRows([])
 setFileName('')
-setGlobalAttachment(null)
+setSelectedAttachmentFile(null)
 } catch (err) {
 setError(err.message || 'Import blast gagal')
 } finally {
+setUploadingAttachment(false)
 setLoading(false)
 }
 }
 
-const previewRows = rowsWithAttachment()
-const attachmentCount = previewRows.filter((row) => row.attachment_url).length
+const attachmentCount = rows.filter((row) => row.attachment_url || selectedAttachmentFile).length
 
 return (
 <div className="min-h-screen bg-slate-50 lg:flex">
@@ -512,11 +490,11 @@ File: {fileName}
 Attachment untuk semua kontak
 </p>
 <p className="mt-1 text-xs text-slate-500">
-Maksimal 1 MB. Upload file di sini kalau semua kontak akan menerima file yang sama.
+Maksimal 1 MB. File akan di-upload saat tombol Import diklik.
 </p>
-{globalAttachment ? (
+{selectedAttachmentFile ? (
 <p className="mt-2 text-xs font-semibold text-indigo-700">
-Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_type})
+File siap: {selectedAttachmentFile.name}
 </p>
 ) : null}
 </div>
@@ -524,26 +502,26 @@ Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_t
 <div className="flex gap-2">
 <label
 className={
-uploadingAttachment
+loading
 ? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
 : 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
 }
 >
-{uploadingAttachment ? 'Uploading...' : 'Attach File'}
+Attach File
 <input
 type="file"
 accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 onChange={handleAttachmentChange}
-disabled={uploadingAttachment || loading}
+disabled={loading}
 className="hidden"
 />
 </label>
 
-{globalAttachment ? (
+{selectedAttachmentFile ? (
 <button
 type="button"
-onClick={() => setGlobalAttachment(null)}
-disabled={uploadingAttachment || loading}
+onClick={() => setSelectedAttachmentFile(null)}
+disabled={loading}
 className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50 disabled:bg-slate-100 disabled:text-slate-400"
 >
 Remove
@@ -566,7 +544,7 @@ Kolom attachment boleh kosong kalau memakai tombol Attach File.
 {rows.length > 0 ? (
 <div className="rounded-2xl border border-slate-200 bg-white p-4">
 <p className="text-sm font-semibold text-slate-700">
-Preview: {previewRows.length} baris
+Preview: {rows.length} baris
 </p>
 <p className="mt-1 text-xs text-slate-500">
 Dengan attachment: {attachmentCount} baris
@@ -576,10 +554,10 @@ Dengan attachment: {attachmentCount} baris
 
 <button
 type="submit"
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
-{uploadingAttachment ? 'Waiting Attachment...' : loading ? 'Importing...' : 'Import Blast'}
+{uploadingAttachment ? 'Uploading Attachment...' : loading ? 'Importing...' : 'Import Blast'}
 </button>
 
 {message ? (

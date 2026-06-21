@@ -1,7 +1,22 @@
 ﻿
 
 import { useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import Sidebar from '../../components/Sidebar'
+
+const BUCKET_NAME = 'wa-attachments'
+const MAX_FILE_SIZE = 1 * 1024 * 1024
+
+function getSupabaseStorageClient() {
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+if (!url || !key) {
+throw new Error('Supabase public environment belum lengkap.')
+}
+
+return createClient(url, key)
+}
 
 function parseCsv(text) {
 const rows = []
@@ -81,13 +96,98 @@ return String(value || '')
 .replace(/^'/, '')
 }
 
-function fileToBase64(file) {
-return new Promise((resolve, reject) => {
-const reader = new FileReader()
-reader.onload = () => resolve(reader.result)
-reader.onerror = reject
-reader.readAsDataURL(file)
+function cleanFileName(fileName) {
+const raw = String(fileName || 'attachment').trim()
+const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.() '
+let result = ''
+
+for (const char of raw) {
+result += allowed.includes(char) ? char : '_'
+}
+
+while (result.includes(' ')) result = result.split(' ').join(' ')
+while (result.includes('')) result = result.split('').join('_')
+
+result = result.trim().split(' ').join('_').slice(0, 120)
+
+return result || 'attachment'
+}
+
+function makeId() {
+if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
+return window.crypto.randomUUID()
+}
+
+return String(Date.now()) + '-' + String(Math.random()).slice(2)
+}
+
+function getFolderName() {
+const date = new Date()
+
+return (
+date.getFullYear() +
+'-' +
+String(date.getMonth() + 1).padStart(2, '0') +
+'-' +
+String(date.getDate()).padStart(2, '0')
+)
+}
+
+function getAttachmentType(mimeType) {
+if (String(mimeType || '').startsWith('image/')) return 'image'
+return 'document'
+}
+
+function validateMimeType(mimeType) {
+const allowed = [
+'image/jpeg',
+'image/png',
+'image/webp',
+'application/pdf',
+'application/msword',
+'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+'application/vnd.ms-excel',
+'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+]
+
+return allowed.includes(String(mimeType || '').toLowerCase())
+}
+
+async function uploadAttachmentDirect(file) {
+const mimeType = String(file.type || '').trim().toLowerCase()
+
+if (!validateMimeType(mimeType)) {
+throw new Error('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
+}
+
+if (file.size > MAX_FILE_SIZE) {
+throw new Error('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
+}
+
+const supabase = getSupabaseStorageClient()
+const cleanName = cleanFileName(file.name)
+const path = getFolderName() + '/' + makeId() + '-' + cleanName
+
+const { error } = await supabase.storage
+.from(BUCKET_NAME)
+.upload(path, file, {
+contentType: mimeType,
+upsert: false
 })
+
+if (error) {
+throw new Error(error.message || 'Upload ke Supabase Storage gagal.')
+}
+
+const { data } = supabase.storage
+.from(BUCKET_NAME)
+.getPublicUrl(path)
+
+return {
+attachment_url: data.publicUrl,
+attachment_type: getAttachmentType(mimeType),
+attachment_filename: cleanName
+}
 }
 
 async function readApiResponse(response) {
@@ -98,24 +198,8 @@ return JSON.parse(text)
 } catch (err) {
 return {
 success: false,
-message:
-text ||
-'Server mengembalikan response non-JSON. Kemungkinan file terlalu besar atau upload gagal di server.'
+message: text || 'Server mengembalikan response non-JSON.'
 }
-}
-}
-
-async function fetchWithTimeout(url, options, timeoutMs) {
-const controller = new AbortController()
-const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-try {
-return await fetch(url, {
-...options,
-signal: controller.signal
-})
-} finally {
-clearTimeout(timer)
 }
 }
 
@@ -171,14 +255,10 @@ URL.revokeObjectURL(url)
 }
 
 function downloadReminderTemplateWithoutAttachment() {
-const headers = [
-'name',
-'phone',
-'message',
-'reminder_date'
-]
-
-const rows = [
+downloadCsvFile(
+'template_reminder_tanpa_attachment.csv',
+['name', 'phone', 'message', 'reminder_date'],
+[
 {
 name: 'Budi',
 phone: '="6285137908391"',
@@ -192,23 +272,14 @@ message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22 10:00'
 }
 ]
-
-downloadCsvFile('template_reminder_tanpa_attachment.csv', headers, rows)
+)
 }
 
 function downloadReminderTemplateWithAttachment() {
-const headers = [
-'name',
-'phone',
-'message',
-'reminder_date',
-'attachment_url',
-'attachment_type',
-'attachment_filename',
-'attachment_caption'
-]
-
-const rows = [
+downloadCsvFile(
+'template_reminder_dengan_attachment_berbeda.csv',
+['name', 'phone', 'message', 'reminder_date', 'attachment_url', 'attachment_type', 'attachment_filename', 'attachment_caption'],
+[
 {
 name: 'Budi',
 phone: '="6285137908391"',
@@ -230,24 +301,14 @@ attachment_filename: 'reminder_sari.jpg',
 attachment_caption: 'Berikut gambar reminder untuk Kak Sari.'
 }
 ]
-
-downloadCsvFile('template_reminder_dengan_attachment_berbeda.csv', headers, rows)
+)
 }
 
 function downloadReminderTemplateWithSeparateTime() {
-const headers = [
-'name',
-'phone',
-'message',
-'reminder_date',
-'reminder_time',
-'attachment_url',
-'attachment_type',
-'attachment_filename',
-'attachment_caption'
-]
-
-const rows = [
+downloadCsvFile(
+'template_reminder_tanggal_dan_jam_terpisah.csv',
+['name', 'phone', 'message', 'reminder_date', 'reminder_time', 'attachment_url', 'attachment_type', 'attachment_filename', 'attachment_caption'],
+[
 {
 name: 'Budi',
 phone: '="6285137908391"',
@@ -271,25 +332,24 @@ attachment_filename: 'reminder_sari.pdf',
 attachment_caption: 'Berikut file reminder untuk Kak Sari.'
 }
 ]
-
-downloadCsvFile('template_reminder_tanggal_dan_jam_terpisah.csv', headers, rows)
+)
 }
 
 export default function ImportReminderPage() {
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
 const [rows, setRows] = useState([])
-const [globalAttachment, setGlobalAttachment] = useState(null)
+const [selectedAttachmentFile, setSelectedAttachmentFile] = useState(null)
 const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [loading, setLoading] = useState(false)
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
 
-function rowsWithAttachment() {
+function buildFinalRows(uploadedAttachment) {
 return rows.map((row) => {
 const finalReminderDate = combineReminderDateTime(row)
 
-if (!globalAttachment || row.attachment_url) {
+if (!uploadedAttachment || row.attachment_url) {
 return {
 ...row,
 reminder_date: finalReminderDate
@@ -299,10 +359,10 @@ reminder_date: finalReminderDate
 return {
 ...row,
 reminder_date: finalReminderDate,
-attachment_url: globalAttachment.attachment_url,
-attachment_type: globalAttachment.attachment_type,
-attachment_filename: globalAttachment.attachment_filename,
-attachment_caption: row.attachment_caption || row.message || globalAttachment.attachment_filename
+attachment_url: uploadedAttachment.attachment_url,
+attachment_type: uploadedAttachment.attachment_type,
+attachment_filename: uploadedAttachment.attachment_filename,
+attachment_caption: row.attachment_caption || row.message || uploadedAttachment.attachment_filename
 }
 })
 }
@@ -323,7 +383,7 @@ const parsed = parseCsv(text)
 setRows(normalizeParsedRows(parsed))
 }
 
-async function handleAttachmentChange(e) {
+function handleAttachmentChange(e) {
 const file = e.target.files?.[0]
 
 setMessage('')
@@ -331,59 +391,25 @@ setError('')
 
 if (!file) return
 
-if (file.size > 1 * 1024 * 1024) {
-setGlobalAttachment(null)
-setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.')
+if (file.size > MAX_FILE_SIZE) {
+setSelectedAttachmentFile(null)
+setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
 e.target.value = ''
 return
 }
 
-setUploadingAttachment(true)
+const mimeType = String(file.type || '').trim().toLowerCase()
 
-try {
-const base64 = await fileToBase64(file)
-
-const response = await fetchWithTimeout(
-'/api/attachments/upload',
-{
-method: 'POST',
-headers: {
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-fileName: file.name,
-mimeType: file.type,
-base64
-})
-},
-20000
-)
-
-const data = await readApiResponse(response)
-
-if (!response.ok || !data.success) {
-throw new Error(data.message || 'Upload attachment gagal')
-}
-
-setGlobalAttachment({
-attachment_url: data.attachment_url,
-attachment_type: data.attachment_type,
-attachment_filename: data.attachment_filename
-})
-
-setMessage('Attachment berhasil di-upload: ' + data.attachment_filename)
-} catch (err) {
-setGlobalAttachment(null)
-
-if (err.name === 'AbortError') {
-setError('Upload terlalu lama. Coba ulangi. Kalau masih gagal, cek bucket wa-attachments di Supabase.')
-} else {
-setError(err.message || 'Upload attachment gagal')
-}
-} finally {
-setUploadingAttachment(false)
+if (!validateMimeType(mimeType)) {
+setSelectedAttachmentFile(null)
+setError('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
 e.target.value = ''
+return
 }
+
+setSelectedAttachmentFile(file)
+setMessage('Attachment dipilih: ' + file.name + '. File akan di-upload saat klik Import Reminder.')
+e.target.value = ''
 }
 
 async function handleImport(e) {
@@ -394,19 +420,19 @@ setMessage('')
 setError('')
 
 try {
-if (!databaseName.trim()) {
-throw new Error('Nama database wajib diisi')
+if (!databaseName.trim()) throw new Error('Nama database wajib diisi')
+if (rows.length === 0) throw new Error('File CSV belum dipilih atau kosong')
+
+let uploadedAttachment = null
+
+if (selectedAttachmentFile) {
+setUploadingAttachment(true)
+setMessage('Mengupload attachment...')
+uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
+setUploadingAttachment(false)
 }
 
-if (rows.length === 0) {
-throw new Error('File CSV belum dipilih atau kosong')
-}
-
-if (uploadingAttachment) {
-throw new Error('Tunggu upload attachment selesai dulu sebelum import.')
-}
-
-const finalRows = rowsWithAttachment()
+const finalRows = buildFinalRows(uploadedAttachment)
 
 const response = await fetch('/api/contacts/import', {
 method: 'POST',
@@ -436,16 +462,17 @@ setMessage(
 
 setRows([])
 setFileName('')
-setGlobalAttachment(null)
+setSelectedAttachmentFile(null)
 } catch (err) {
 setError(err.message || 'Import reminder gagal')
 } finally {
+setUploadingAttachment(false)
 setLoading(false)
 }
 }
 
-const previewRows = rowsWithAttachment()
-const attachmentCount = previewRows.filter((row) => row.attachment_url).length
+const previewRows = buildFinalRows(selectedAttachmentFile ? { attachment_url: 'selected', attachment_type: 'file', attachment_filename: selectedAttachmentFile.name } : null)
+const attachmentCount = rows.filter((row) => row.attachment_url || selectedAttachmentFile).length
 
 return (
 <div className="min-h-screen bg-slate-50 lg:flex">
@@ -530,11 +557,11 @@ File: {fileName}
 Attachment untuk semua kontak
 </p>
 <p className="mt-1 text-xs text-slate-500">
-Maksimal 1 MB. Upload file di sini kalau semua kontak reminder akan menerima file yang sama.
+Maksimal 1 MB. File akan di-upload saat tombol Import diklik.
 </p>
-{globalAttachment ? (
+{selectedAttachmentFile ? (
 <p className="mt-2 text-xs font-semibold text-indigo-700">
-Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_type})
+File siap: {selectedAttachmentFile.name}
 </p>
 ) : null}
 </div>
@@ -542,26 +569,26 @@ Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_t
 <div className="flex gap-2">
 <label
 className={
-uploadingAttachment
+loading
 ? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
 : 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
 }
 >
-{uploadingAttachment ? 'Uploading...' : 'Attach File'}
+Attach File
 <input
 type="file"
 accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 onChange={handleAttachmentChange}
-disabled={uploadingAttachment || loading}
+disabled={loading}
 className="hidden"
 />
 </label>
 
-{globalAttachment ? (
+{selectedAttachmentFile ? (
 <button
 type="button"
-onClick={() => setGlobalAttachment(null)}
-disabled={uploadingAttachment || loading}
+onClick={() => setSelectedAttachmentFile(null)}
+disabled={loading}
 className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50 disabled:bg-slate-100 disabled:text-slate-400"
 >
 Remove
@@ -622,10 +649,10 @@ Dengan attachment: {attachmentCount} baris
 
 <button
 type="submit"
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
-{uploadingAttachment ? 'Waiting Attachment...' : loading ? 'Importing...' : 'Import Reminder'}
+{uploadingAttachment ? 'Uploading Attachment...' : loading ? 'Importing...' : 'Import Reminder'}
 </button>
 
 {message ? (
