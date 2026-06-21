@@ -1,41 +1,53 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+﻿
+
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin', 'user'])
-  if (!authUser) return
+res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+res.setHeader('Pragma', 'no-cache')
+res.setHeader('Expires', '0')
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({
-      success: false,
-      message: 'Method not allowed'
-    })
-  }
+try {
+await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 
-  try {
-    const { type = '' } = req.query
+if (req.method !== 'GET') {
+return res.status(405).json({
+success: false,
+message: 'Method not allowed'
+})
+}
 
-    let query = supabaseAdmin
-      .from('contact_databases')
-      .select('*')
-      .order('created_at', { ascending: false })
+const type = String(req.query.type || '').trim().toLowerCase()
 
-    if (type) {
-      query = query.eq('type', type)
-    }
+let query = supabaseAdmin
+.from('contact_databases')
+.select('*')
+.order('created_at', { ascending: false })
+.limit(500)
 
-    const { data, error } = await query
+if (type === 'blast' || type === 'reminder') {
+query = query.eq('type', type)
+}
 
-    if (error) throw error
+const { data, error } = await query
 
-    return res.status(200).json({
-      success: true,
-      data: data || []
-    })
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Gagal mengambil database list'
-    })
-  }
+if (error) {
+return res.status(500).json({
+success: false,
+message: error.message
+})
+}
+
+return res.status(200).json({
+success: true,
+data: data || [],
+databases: data || []
+})
+} catch (error) {
+return res.status(401).json({
+success: false,
+message: error.message || 'Unauthorized'
+})
+}
 }

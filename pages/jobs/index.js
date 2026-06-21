@@ -39,6 +39,14 @@ if (Array.isArray(data?.data)) return data.data
 return []
 }
 
+function normalizeDatabases(data) {
+if (Array.isArray(data)) return data
+if (Array.isArray(data?.databases)) return data.databases
+if (Array.isArray(data?.rows)) return data.rows
+if (Array.isArray(data?.data)) return data.data
+return []
+}
+
 function countValue(job, keys, fallback = 0) {
 for (const key of keys) {
 if (job?.[key] !== undefined && job?.[key] !== null) {
@@ -49,15 +57,37 @@ return job[key]
 return fallback
 }
 
+function getDatabaseName(database) {
+return (
+database?.name ||
+database?.database_name ||
+database?.title ||
+database?.id ||
+'-'
+)
+}
+
 export default function JobsPage() {
 const [jobs, setJobs] = useState([])
+const [databases, setDatabases] = useState([])
 const [loading, setLoading] = useState(true)
+const [loadingDatabases, setLoadingDatabases] = useState(false)
+const [creating, setCreating] = useState(false)
 const [processing, setProcessing] = useState(false)
+const [jobType, setJobType] = useState('blast')
+const [selectedDatabaseId, setSelectedDatabaseId] = useState('')
 const [batchLimit, setBatchLimit] = useState(10)
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
 const [lastResult, setLastResult] = useState(null)
 const [autoRefresh, setAutoRefresh] = useState(true)
+
+const filteredDatabases = useMemo(() => {
+return databases.filter((database) => {
+const type = String(database.type || '').toLowerCase()
+return type === jobType
+})
+}, [databases, jobType])
 
 const pendingJobs = useMemo(() => {
 return jobs.filter((job) => {
@@ -102,6 +132,70 @@ setJobs(normalizeJobs(data))
 setError(err.message || 'Gagal memuat job queue')
 } finally {
 if (!silent) setLoading(false)
+}
+}
+
+async function loadDatabases() {
+setLoadingDatabases(true)
+
+try {
+const data = await fetchJson('/api/databases/list?t=' + Date.now())
+const rows = normalizeDatabases(data)
+
+setDatabases(rows)
+
+const firstMatch = rows.find((row) => String(row.type || '').toLowerCase() === jobType)
+
+if (!selectedDatabaseId && firstMatch?.id) {
+setSelectedDatabaseId(firstMatch.id)
+}
+} catch (err) {
+setError(err.message || 'Gagal memuat database')
+} finally {
+setLoadingDatabases(false)
+}
+}
+
+async function createJob() {
+setCreating(true)
+setMessage('')
+setError('')
+setLastResult(null)
+
+try {
+if (!selectedDatabaseId) {
+throw new Error('Pilih database dulu')
+}
+
+const data = await fetchJson('/api/jobs/create', {
+method: 'POST',
+headers: {
+'Content-Type': 'application/json'
+},
+body: JSON.stringify({
+type: jobType,
+database_id: selectedDatabaseId,
+batch_limit: Number(batchLimit || 10)
+})
+})
+
+setLastResult({
+create_job: data
+})
+
+setMessage(
+'Job berhasil dibuat. Total: ' +
+Number(data.total_items || 0) +
+'. Attachment: ' +
+Number(data.with_attachment || 0) +
+'.'
+)
+
+await loadJobs(true)
+} catch (err) {
+setError(err.message || 'Gagal membuat job')
+} finally {
+setCreating(false)
 }
 }
 
@@ -162,7 +256,13 @@ setProcessing(false)
 
 useEffect(() => {
 loadJobs()
+loadDatabases()
 }, [])
+
+useEffect(() => {
+const firstMatch = databases.find((row) => String(row.type || '').toLowerCase() === jobType)
+setSelectedDatabaseId(firstMatch?.id || '')
+}, [jobType, databases])
 
 useEffect(() => {
 if (!autoRefresh) return undefined
@@ -186,14 +286,17 @@ return (
 Job Queue
 </h1>
 <p className="mt-2 text-sm text-slate-500">
-Process job WhatsApp Blast dan Reminder. Attachment akan diproses sebagai media terlebih dahulu.
+Pilih database hasil import, buat job, lalu process batch. Attachment akan diproses sebagai media terlebih dahulu.
 </p>
 </div>
 
 <div className="flex flex-wrap items-center gap-2">
 <button
 type="button"
-onClick={() => loadJobs(false)}
+onClick={() => {
+loadJobs(false)
+loadDatabases()
+}}
 className="rounded-2xl bg-white px-4 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
 >
 Refresh
@@ -246,6 +349,79 @@ className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm fon
 />
 </div>
 </div>
+
+<section className="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6">
+<div className="mb-5">
+<h2 className="text-xl font-bold text-slate-900">
+Create Job from Database
+</h2>
+<p className="mt-1 text-sm text-slate-500">
+Pilih database hasil import Blast atau Reminder, lalu buat job baru.
+</p>
+</div>
+
+<div className="grid gap-4 lg:grid-cols-3">
+<div>
+<label className="mb-2 block text-sm font-bold text-slate-700">
+Job Type
+</label>
+<select
+value={jobType}
+onChange={(e) => setJobType(e.target.value)}
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold outline-none focus:border-indigo-600"
+>
+<option value="blast">WhatsApp Blast</option>
+<option value="reminder">Reminder</option>
+</select>
+</div>
+
+<div className="lg:col-span-2">
+<label className="mb-2 block text-sm font-bold text-slate-700">
+Database
+</label>
+<select
+value={selectedDatabaseId}
+onChange={(e) => setSelectedDatabaseId(e.target.value)}
+disabled={loadingDatabases}
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold outline-none focus:border-indigo-600 disabled:bg-slate-100"
+>
+<option value="">
+{loadingDatabases ? 'Loading database...' : 'Pilih database'}
+</option>
+
+{filteredDatabases.map((database) => (
+<option key={database.id} value={database.id}>
+{getDatabaseName(database)} - {formatDate(database.created_at)}
+</option>
+))}
+</select>
+
+<p className="mt-2 text-xs text-slate-500">
+Database tersedia: {filteredDatabases.length}
+</p>
+</div>
+</div>
+
+<div className="mt-5 flex flex-col gap-3 sm:flex-row">
+<button
+type="button"
+onClick={createJob}
+disabled={creating || !selectedDatabaseId}
+className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+>
+{creating ? 'Creating Job...' : 'Create Job'}
+</button>
+
+<button
+type="button"
+onClick={processBatch}
+disabled={processing}
+className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+>
+{processing ? 'Processing...' : 'Process Batch'}
+</button>
+</div>
+</section>
 
 <section className="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6">
 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
