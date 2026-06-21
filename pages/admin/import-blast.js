@@ -1,15 +1,13 @@
 ﻿
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import Sidebar from '../../components/Sidebar'
 import {
-MAX_FILE_SIZE,
 downloadCsvFile,
 fetchWithTimeout,
 normalizeBlastRows,
 parseCsv,
 readApiResponse,
-validateMimeType,
 wait
 } from '../../lib/importClientUtils'
 
@@ -62,31 +60,64 @@ attachment_caption: 'Berikut gambar untuk Kak Andin.'
 )
 }
 
+function guessAttachmentType(url) {
+const text = String(url || '').toLowerCase()
+
+if (
+text.includes('.jpg') ||
+text.includes('.jpeg') ||
+text.includes('.png') ||
+text.includes('.webp')
+) {
+return 'image'
+}
+
+return 'document'
+}
+
+function guessFileName(url) {
+try {
+const parsed = new URL(url)
+const parts = parsed.pathname.split('/')
+const last = parts[parts.length - 1]
+
+if (last) return decodeURIComponent(last)
+} catch (err) {
+return 'attachment'
+}
+
+return 'attachment'
+}
+
+function isValidUrl(value) {
+try {
+const url = new URL(value)
+
+return url.protocol === 'http:' || url.protocol === 'https:'
+} catch (err) {
+return false
+}
+}
+
 export default function ImportBlastPage() {
 const rowsRef = useRef([])
-const workerRef = useRef(null)
 
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
 const [rowCount, setRowCount] = useState(0)
 const [csvAttachmentCount, setCsvAttachmentCount] = useState(0)
+
+const [showAttachBox, setShowAttachBox] = useState(false)
+const [attachmentUrlInput, setAttachmentUrlInput] = useState('')
+const [attachmentTypeInput, setAttachmentTypeInput] = useState('auto')
+const [attachmentCaptionInput, setAttachmentCaptionInput] = useState('')
 const [attachmentMeta, setAttachmentMeta] = useState(null)
 
 const [loading, setLoading] = useState(false)
-const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [progressText, setProgressText] = useState('')
 const [progressPercent, setProgressPercent] = useState(0)
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
-
-useEffect(() => {
-return () => {
-if (workerRef.current) {
-workerRef.current.terminate()
-workerRef.current = null
-}
-}
-}, [])
 
 function resetCsv() {
 rowsRef.current = []
@@ -140,122 +171,44 @@ e.target.value = ''
 }
 }
 
-function handleAttachmentChange(e) {
-const file = e.target.files?.[0]
-
+function handleAttachUrl() {
 setMessage('')
 setError('')
-setProgressText('')
-setProgressPercent(0)
 
-if (!file) return
+const cleanUrl = String(attachmentUrlInput || '').trim()
 
-if (file.size > MAX_FILE_SIZE) {
-setAttachmentMeta(null)
-setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
-e.target.value = ''
+if (!cleanUrl) {
+setError('URL attachment wajib diisi.')
 return
 }
 
-const mimeType = String(file.type || '').trim().toLowerCase()
-
-if (!validateMimeType(mimeType)) {
-setAttachmentMeta(null)
-setError('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
-e.target.value = ''
+if (!isValidUrl(cleanUrl)) {
+setError('URL attachment tidak valid. Harus diawali http:// atau https://')
 return
 }
 
-if (workerRef.current) {
-workerRef.current.terminate()
-workerRef.current = null
-}
+const attachmentType =
+attachmentTypeInput === 'auto'
+? guessAttachmentType(cleanUrl)
+: attachmentTypeInput
 
-const worker = new Worker('/attachment-upload-worker.js')
-workerRef.current = worker
+const attachmentFilename = guessFileName(cleanUrl)
 
-setAttachmentMeta(null)
-setUploadingAttachment(true)
-setProgressText('Mengupload attachment di background...')
-setProgressPercent(1)
-
-worker.onmessage = function (event) {
-const data = event.data || {}
-
-if (data.type === 'upload-progress') {
-setProgressPercent(data.percent || 1)
-setProgressText('Mengupload attachment di background...')
-return
-}
-
-if (data.type === 'upload-success') {
-setAttachmentMeta(data.attachment)
-setUploadingAttachment(false)
-setProgressText('')
-setProgressPercent(0)
-setMessage('Attachment siap: ' + data.attachment.attachment_filename)
-
-if (workerRef.current) {
-workerRef.current.terminate()
-workerRef.current = null
-}
-
-return
-}
-
-if (data.type === 'upload-error') {
-setAttachmentMeta(null)
-setUploadingAttachment(false)
-setProgressText('')
-setProgressPercent(0)
-setError(data.message || 'Upload attachment gagal.')
-
-if (workerRef.current) {
-workerRef.current.terminate()
-workerRef.current = null
-}
-}
-}
-
-worker.onerror = function () {
-setAttachmentMeta(null)
-setUploadingAttachment(false)
-setProgressText('')
-setProgressPercent(0)
-setError('Worker upload attachment error.')
-
-if (workerRef.current) {
-workerRef.current.terminate()
-workerRef.current = null
-}
-}
-
-worker.postMessage({
-type: 'upload',
-file,
-fileName: file.name,
-mimeType
+setAttachmentMeta({
+attachment_url: cleanUrl,
+attachment_type: attachmentType,
+attachment_filename: attachmentFilename,
+attachment_caption: attachmentCaptionInput || attachmentFilename
 })
 
-e.target.value = ''
-}
-
-function cancelAttachmentUpload() {
-if (workerRef.current) {
-workerRef.current.terminate()
-workerRef.current = null
-}
-
-setUploadingAttachment(false)
-setProgressText('')
-setProgressPercent(0)
-setError('Upload attachment dibatalkan.')
+setShowAttachBox(false)
+setMessage('Attachment URL siap: ' + attachmentFilename)
 }
 
 async function handleImport(e) {
 e.preventDefault()
 
-if (loading || uploadingAttachment) return
+if (loading) return
 
 setLoading(true)
 setMessage('')
@@ -298,7 +251,7 @@ type: 'blast',
 default_attachment_url: attachmentMeta?.attachment_url || '',
 default_attachment_type: attachmentMeta?.attachment_type || '',
 default_attachment_filename: attachmentMeta?.attachment_filename || '',
-default_attachment_caption: attachmentMeta?.attachment_filename || ''
+default_attachment_caption: attachmentMeta?.attachment_caption || ''
 })
 },
 15000
@@ -358,7 +311,7 @@ await wait(120)
 
 setProgressPercent(100)
 
-const defaultAttachmentText = attachmentMeta ? ' Default attachment: 1 file.' : ''
+const defaultAttachmentText = attachmentMeta ? ' Default attachment: 1 URL.' : ''
 
 setMessage(
 'Import berhasil: ' +
@@ -376,6 +329,8 @@ setRowCount(0)
 setCsvAttachmentCount(0)
 setFileName('')
 setAttachmentMeta(null)
+setAttachmentUrlInput('')
+setAttachmentCaptionInput('')
 setProgressText('')
 setProgressPercent(0)
 } catch (err) {
@@ -413,7 +368,7 @@ Upload CSV berisi kontak untuk WhatsApp Blast.
 <button
 type="button"
 onClick={downloadBlastTemplateWithoutAttachment}
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
 >
 Download Template Tanpa Attachment
@@ -422,7 +377,7 @@ Download Template Tanpa Attachment
 <button
 type="button"
 onClick={downloadBlastTemplateWithAttachment}
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 Download Template Dengan Attachment
@@ -442,7 +397,7 @@ Nama Database
 <input
 value={databaseName}
 onChange={(e) => setDatabaseName(e.target.value)}
-disabled={loading || uploadingAttachment}
+disabled={loading}
 placeholder="Contoh: Blast Promo MCU Juni"
 className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
@@ -456,7 +411,7 @@ File CSV
 type="file"
 accept=".csv,text/csv"
 onChange={handleFileChange}
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
 {fileName ? (
@@ -473,45 +428,27 @@ File: {fileName}
 Attachment default untuk semua kontak
 </p>
 <p className="mt-1 text-xs text-slate-500">
-File disimpan 1x di database, tidak disebar ke semua baris kontak.
+Pakai URL file agar import tidak freeze. URL disimpan 1x di database.
 </p>
 
 {attachmentMeta ? (
-<p className="mt-2 text-xs font-semibold text-indigo-700">
+<p className="mt-2 break-all text-xs font-semibold text-indigo-700">
 Attachment siap: {attachmentMeta.attachment_filename}
 </p>
 ) : null}
 </div>
 
 <div className="flex gap-2">
-<label
-className={
-loading || uploadingAttachment
-? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
-: 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
-}
->
-{uploadingAttachment ? 'Uploading...' : 'Attach File'}
-<input
-type="file"
-accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-onChange={handleAttachmentChange}
-disabled={loading || uploadingAttachment}
-className="hidden"
-/>
-</label>
-
-{uploadingAttachment ? (
 <button
 type="button"
-onClick={cancelAttachmentUpload}
-className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50"
+onClick={() => setShowAttachBox(true)}
+disabled={loading}
+className="rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
-Cancel
+Attach File / URL
 </button>
-) : null}
 
-{attachmentMeta && !uploadingAttachment ? (
+{attachmentMeta ? (
 <button
 type="button"
 onClick={() => setAttachmentMeta(null)}
@@ -523,6 +460,67 @@ Remove
 ) : null}
 </div>
 </div>
+
+{showAttachBox ? (
+<div className="mt-4 rounded-2xl bg-white p-4 ring-1 ring-indigo-100">
+<label className="mb-2 block text-xs font-bold text-slate-600">
+Attachment URL
+</label>
+<input
+value={attachmentUrlInput}
+onChange={(e) => setAttachmentUrlInput(e.target.value)}
+placeholder="https://..."
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+/>
+
+<div className="mt-3 grid gap-3 md:grid-cols-2">
+<div>
+<label className="mb-2 block text-xs font-bold text-slate-600">
+Attachment Type
+</label>
+<select
+value={attachmentTypeInput}
+onChange={(e) => setAttachmentTypeInput(e.target.value)}
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+>
+<option value="auto">Auto</option>
+<option value="image">Image</option>
+<option value="document">Document</option>
+</select>
+</div>
+
+<div>
+<label className="mb-2 block text-xs font-bold text-slate-600">
+Caption
+</label>
+<input
+value={attachmentCaptionInput}
+onChange={(e) => setAttachmentCaptionInput(e.target.value)}
+placeholder="Opsional"
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+/>
+</div>
+</div>
+
+<div className="mt-4 flex gap-2">
+<button
+type="button"
+onClick={handleAttachUrl}
+className="rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700"
+>
+Simpan Attachment URL
+</button>
+
+<button
+type="button"
+onClick={() => setShowAttachBox(false)}
+className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+>
+Batal
+</button>
+</div>
+</div>
+) : null}
 </div>
 
 {rowCount > 0 ? (
@@ -541,7 +539,7 @@ Import berjalan per {IMPORT_CHUNK_SIZE_SAFE} baris.
 
 <button
 type="submit"
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 {loading ? 'Importing...' : 'Import Blast'}
