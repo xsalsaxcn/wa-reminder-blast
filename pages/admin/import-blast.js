@@ -70,7 +70,7 @@ const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
 const [rowCount, setRowCount] = useState(0)
 const [csvAttachmentCount, setCsvAttachmentCount] = useState(0)
-const [selectedAttachmentFile, setSelectedAttachmentFile] = useState(null)
+const [attachmentMeta, setAttachmentMeta] = useState(null)
 const [loading, setLoading] = useState(false)
 const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [progressText, setProgressText] = useState('')
@@ -112,7 +112,6 @@ try {
 setProgressText('Membaca CSV...')
 
 const text = await file.text()
-
 await wait(50)
 
 const parsed = parseCsv(text)
@@ -140,7 +139,7 @@ e.target.value = ''
 }
 }
 
-function handleAttachmentChange(e) {
+async function handleAttachmentChange(e) {
 const file = e.target.files?.[0]
 
 setMessage('')
@@ -150,7 +149,7 @@ setProgressText('')
 if (!file) return
 
 if (file.size > MAX_FILE_SIZE) {
-setSelectedAttachmentFile(null)
+setAttachmentMeta(null)
 setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
 e.target.value = ''
 return
@@ -159,24 +158,44 @@ return
 const mimeType = String(file.type || '').trim().toLowerCase()
 
 if (!validateMimeType(mimeType)) {
-setSelectedAttachmentFile(null)
+setAttachmentMeta(null)
 setError('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
 e.target.value = ''
 return
 }
 
-setSelectedAttachmentFile(file)
-setMessage('Attachment dipilih: ' + file.name + '. File akan di-upload saat klik Import Blast.')
+try {
+setUploadingAttachment(true)
+setProgressText('Mengupload attachment dari tombol Attach File...')
+await wait(100)
+
+const uploaded = await uploadAttachmentDirect(file)
+
+setAttachmentMeta(uploaded)
+setMessage('Attachment berhasil di-upload: ' + uploaded.attachment_filename)
+setProgressText('')
+} catch (err) {
+setAttachmentMeta(null)
+
+if (err.name === 'AbortError') {
+setError('Upload attachment terlalu lama dan dihentikan otomatis.')
+} else {
+setError(err.message || 'Upload attachment gagal.')
+}
+
+setProgressText('')
+} finally {
+setUploadingAttachment(false)
 e.target.value = ''
+}
 }
 
 async function handleImport(e) {
 e.preventDefault()
 
-if (loading) return
+if (loading || uploadingAttachment) return
 
 setLoading(true)
-setUploadingAttachment(false)
 setMessage('')
 setError('')
 setProgressText('Menyiapkan import...')
@@ -198,22 +217,8 @@ if (rows.length > MAX_ROWS) {
 throw new Error('Maksimal import adalah ' + MAX_ROWS + ' baris.')
 }
 
-let uploadedAttachment = null
-
-if (selectedAttachmentFile) {
-setUploadingAttachment(true)
-setProgressText('Mengupload attachment...')
-await wait(100)
-
-uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
-
-setUploadingAttachment(false)
-setProgressText('Attachment berhasil di-upload. Membuat database kontak...')
-await wait(100)
-} else {
 setProgressText('Membuat database kontak...')
 await wait(100)
-}
 
 const databaseResponse = await fetchWithTimeout(
 '/api/contacts/create-import-database',
@@ -246,7 +251,7 @@ const totalChunk = Math.ceil(rows.length / IMPORT_CHUNK_SIZE_SAFE)
 for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE_SAFE) {
 const currentChunk = Math.floor(i / IMPORT_CHUNK_SIZE_SAFE) + 1
 const chunk = rows.slice(i, i + IMPORT_CHUNK_SIZE_SAFE)
-const finalChunk = applyAttachmentToChunk(chunk, uploadedAttachment)
+const finalChunk = applyAttachmentToChunk(chunk, attachmentMeta)
 
 setProgressText('Import chunk ' + currentChunk + ' dari ' + totalChunk + '...')
 await wait(80)
@@ -295,7 +300,7 @@ rowsRef.current = []
 setRowCount(0)
 setCsvAttachmentCount(0)
 setFileName('')
-setSelectedAttachmentFile(null)
+setAttachmentMeta(null)
 setProgressText('')
 } catch (err) {
 if (err.name === 'AbortError') {
@@ -305,11 +310,10 @@ setError(err.message || 'Import blast gagal.')
 }
 } finally {
 setLoading(false)
-setUploadingAttachment(false)
 }
 }
 
-const attachmentCount = selectedAttachmentFile ? rowCount : csvAttachmentCount
+const attachmentCount = attachmentMeta ? rowCount : csvAttachmentCount
 
 return (
 <div className="min-h-screen bg-slate-50 lg:flex">
@@ -330,7 +334,7 @@ Upload CSV berisi kontak untuk WhatsApp Blast.
 <button
 type="button"
 onClick={downloadBlastTemplateWithoutAttachment}
-disabled={loading}
+disabled={loading || uploadingAttachment}
 className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
 >
 Download Template Tanpa Attachment
@@ -339,7 +343,7 @@ Download Template Tanpa Attachment
 <button
 type="button"
 onClick={downloadBlastTemplateWithAttachment}
-disabled={loading}
+disabled={loading || uploadingAttachment}
 className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 Download Template Dengan Attachment
@@ -359,7 +363,7 @@ Nama Database
 <input
 value={databaseName}
 onChange={(e) => setDatabaseName(e.target.value)}
-disabled={loading}
+disabled={loading || uploadingAttachment}
 placeholder="Contoh: Blast Promo MCU Juni"
 className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
@@ -373,7 +377,7 @@ File CSV
 type="file"
 accept=".csv,text/csv"
 onChange={handleFileChange}
-disabled={loading}
+disabled={loading || uploadingAttachment}
 className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
 {fileName ? (
@@ -390,11 +394,11 @@ File: {fileName}
 Attachment untuk semua kontak
 </p>
 <p className="mt-1 text-xs text-slate-500">
-Maksimal 1 MB. File akan di-upload saat tombol Import diklik.
+Maksimal 1 MB. Klik Attach File untuk upload file sebelum import.
 </p>
-{selectedAttachmentFile ? (
+{attachmentMeta ? (
 <p className="mt-2 text-xs font-semibold text-indigo-700">
-File siap: {selectedAttachmentFile.name}
+Attachment siap: {attachmentMeta.attachment_filename}
 </p>
 ) : null}
 </div>
@@ -402,26 +406,26 @@ File siap: {selectedAttachmentFile.name}
 <div className="flex gap-2">
 <label
 className={
-loading
+loading || uploadingAttachment
 ? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
 : 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
 }
 >
-Attach File
+{uploadingAttachment ? 'Uploading...' : 'Attach File'}
 <input
 type="file"
 accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 onChange={handleAttachmentChange}
-disabled={loading}
+disabled={loading || uploadingAttachment}
 className="hidden"
 />
 </label>
 
-{selectedAttachmentFile ? (
+{attachmentMeta ? (
 <button
 type="button"
-onClick={() => setSelectedAttachmentFile(null)}
-disabled={loading}
+onClick={() => setAttachmentMeta(null)}
+disabled={loading || uploadingAttachment}
 className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50 disabled:bg-slate-100 disabled:text-slate-400"
 >
 Remove
@@ -447,10 +451,10 @@ Import berjalan per {IMPORT_CHUNK_SIZE_SAFE} baris agar browser tidak freeze.
 
 <button
 type="submit"
-disabled={loading}
+disabled={loading || uploadingAttachment}
 className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
-{uploadingAttachment ? 'Uploading Attachment...' : loading ? 'Importing...' : 'Import Blast'}
+{loading ? 'Importing...' : 'Import Blast'}
 </button>
 
 {progressText ? (
