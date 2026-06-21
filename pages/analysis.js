@@ -4,15 +4,41 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
 
+function cleanText(value) {
+return String(value ?? '').trim()
+}
+
 function formatDate(value) {
 if (!value) return '-'
 
 try {
 const date = new Date(value)
+
 if (Number.isNaN(date.getTime())) return String(value)
+
 return date.toLocaleString('id-ID')
 } catch (err) {
 return String(value)
+}
+}
+
+function getRowMessage(row) {
+return cleanText(row.body || row.message || row.text || row.content || '')
+}
+
+function getRowLabel(row) {
+return cleanText(row.label || row.category || row.intent || row.sentiment || 'Netral')
+}
+
+function normalizeSummary(summary) {
+return {
+total: summary?.total || 0,
+interested: summary?.interested || summary?.berminat || 0,
+notInterested: summary?.notInterested || summary?.not_interested || summary?.tidak_berminat || 0,
+followUp: summary?.followUp || summary?.follow_up || 0,
+neutral: summary?.neutral || summary?.netral || 0,
+optOut: summary?.optOut || summary?.opt_out || 0,
+avgScore: summary?.avgScore || summary?.avg_score || 0
 }
 }
 
@@ -38,7 +64,7 @@ if (filters.end) params.set('end', filters.end)
 if (filters.label) params.set('label', filters.label)
 if (filters.job_id) params.set('job_id', filters.job_id)
 
-params.set('t', Date.now())
+params.set('t', String(Date.now()))
 
 return params.toString()
 }
@@ -52,18 +78,28 @@ const response = await fetch('/api/analysis/list?' + buildQuery(), {
 cache: 'no-store'
 })
 
-const data = await response.json().catch(() => ({}))
+const data = await response.json().catch(function () {
+return {}
+})
 
 if (!response.ok || !data.success) {
 throw new Error(data.message || 'Gagal memuat analysis')
 }
 
-setRows(data.rows || data.items || data.data || [])
+const items = Array.isArray(data.rows)
+? data.rows
+: Array.isArray(data.items)
+? data.items
+: Array.isArray(data.data)
+? data.data
+: []
+
+setRows(items)
 setSummary(data.summary || null)
 } catch (err) {
-setError(err.message || 'Gagal memuat analysis')
 setRows([])
 setSummary(null)
+setError(err.message || 'Gagal memuat analysis')
 } finally {
 setLoading(false)
 }
@@ -81,14 +117,17 @@ headers: {
 }
 })
 
-const data = await response.json().catch(() => ({}))
+const data = await response.json().catch(function () {
+return {}
+})
 
 if (!response.ok || !data.success) {
 throw new Error(data.message || 'Gagal menjalankan analisis')
 }
 
 await loadAnalysis()
-alert(Analisis selesai. Total dianalisis: ${data.analyzed || 0}`)
+
+alert('Analisis selesai. Total dianalisis: ' + String(data.analyzed || 0))
 } catch (err) {
 setError(err.message || 'Gagal menjalankan analisis')
 } finally {
@@ -100,9 +139,11 @@ function exportCsv() {
 window.open('/api/analysis/export?' + buildQuery(), '_blank')
 }
 
-useEffect(() => {
+useEffect(function () {
 loadAnalysis()
 }, [])
+
+const safeSummary = normalizeSummary(summary)
 
 return (
 <div className="min-h-screen bg-slate-100 md:flex">
@@ -112,7 +153,9 @@ return (
 <div className="mx-auto max-w-7xl">
 <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
 <div>
-<h1 className="text-2xl font-bold text-slate-900">Reply Analysis</h1>
+<h1 className="text-2xl font-bold text-slate-900">
+Reply Analysis
+</h1>
 <p className="text-sm text-slate-500">
 Analisis otomatis minat customer dari pesan masuk WhatsApp.
 </p>
@@ -120,6 +163,7 @@ Analisis otomatis minat customer dari pesan masuk WhatsApp.
 
 <div className="flex flex-wrap gap-2">
 <button
+type="button"
 onClick={runAnalyze}
 disabled={analyzing}
 className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:bg-slate-300"
@@ -128,6 +172,7 @@ className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white ho
 </button>
 
 <button
+type="button"
 onClick={exportCsv}
 className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
 >
@@ -135,6 +180,7 @@ Export CSV
 </button>
 
 <button
+type="button"
 onClick={loadAnalysis}
 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
 >
@@ -157,7 +203,12 @@ Start
 <input
 type="date"
 value={filters.start}
-onChange={(e) => setFilters({ ...filters, start: e.target.value })}
+onChange={function (e) {
+setFilters({
+...filters,
+start: e.target.value
+})
+}}
 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
 />
 </div>
@@ -169,7 +220,12 @@ End
 <input
 type="date"
 value={filters.end}
-onChange={(e) => setFilters({ ...filters, end: e.target.value })}
+onChange={function (e) {
+setFilters({
+...filters,
+end: e.target.value
+})
+}}
 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
 />
 </div>
@@ -180,13 +236,20 @@ Label
 </label>
 <select
 value={filters.label}
-onChange={(e) => setFilters({ ...filters, label: e.target.value })}
+onChange={function (e) {
+setFilters({
+...filters,
+label: e.target.value
+})
+}}
 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
 >
 <option value="all">Semua</option>
 <option value="Berminat">Berminat</option>
 <option value="Tidak berminat">Tidak berminat</option>
+<option value="Tidak Berminat">Tidak Berminat</option>
 <option value="Follow-up">Follow-up</option>
+<option value="Follow Up">Follow Up</option>
 <option value="Netral">Netral</option>
 <option value="Opt-out">Opt-out</option>
 <option value="Komplain">Komplain</option>
@@ -200,24 +263,27 @@ Job ID optional
 <input
 type="text"
 value={filters.job_id}
-onChange={(e) => setFilters({ ...filters, job_id: e.target.value })}
+onChange={function (e) {
+setFilters({
+...filters,
+job_id: e.target.value
+})
+}}
 placeholder="Kosongkan untuk semua"
 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
 />
 </div>
 </div>
 
-{summary ? (
 <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-7">
-<SummaryCard label="Total" value={summary.total || 0} />
-<SummaryCard label="Berminat" value={summary.interested || 0} />
-<SummaryCard label="Tidak Minat" value={summary.notInterested || summary.not_interested || 0} />
-<SummaryCard label="Follow-up" value={summary.followUp || summary.follow_up || 0} />
-<SummaryCard label="Netral" value={summary.neutral || 0} />
-<SummaryCard label="Opt-out" value={summary.optOut || summary.opt_out || 0} />
-<SummaryCard label="Avg Score" value={summary.avgScore || summary.avg_score || 0} />
+<SummaryCard label="Total" value={safeSummary.total} />
+<SummaryCard label="Berminat" value={safeSummary.interested} />
+<SummaryCard label="Tidak Minat" value={safeSummary.notInterested} />
+<SummaryCard label="Follow-up" value={safeSummary.followUp} />
+<SummaryCard label="Netral" value={safeSummary.neutral} />
+<SummaryCard label="Opt-out" value={safeSummary.optOut} />
+<SummaryCard label="Avg Score" value={safeSummary.avgScore} />
 </div>
-) : null}
 
 <div className="space-y-3 md:hidden">
 {loading ? (
@@ -229,15 +295,19 @@ Loading...
 Belum ada data analysis. Klik Analyze Inbox dulu.
 </div>
 ) : (
-rows.map((row) => (
+rows.map(function (row) {
+return (
 <MobileAnalysisCard key={row.id} row={row} />
-))
+)
+})
 )}
 </div>
 
 <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:block">
 <div className="border-b border-slate-200 p-4">
-<h2 className="font-semibold text-slate-900">Analysis Result</h2>
+<h2 className="font-semibold text-slate-900">
+Analysis Result
+</h2>
 <p className="text-xs text-slate-500">
 Hasil klasifikasi otomatis dari pesan masuk.
 </p>
@@ -273,22 +343,26 @@ Belum ada data analysis. Klik Analyze Inbox dulu.
 </td>
 </tr>
 ) : (
-rows.map((row) => (
+rows.map(function (row) {
+return (
 <tr key={row.id} className="hover:bg-slate-50">
 <Td>{formatDate(row.received_at)}</Td>
 
 <Td>{row.profile_name || '-'}</Td>
 
-<Td>{row.phone}</Td>
+<Td>{row.phone || '-'}</Td>
 
 <Td>
-<div className="max-w-xs truncate" title={row.body}>
-{row.body || row.message || '-'}
+<div
+className="max-w-xs truncate"
+title={getRowMessage(row)}
+>
+{getRowMessage(row) || '-'}
 </div>
 </Td>
 
 <Td>
-<LabelBadge label={row.label} />
+<LabelBadge label={getRowLabel(row)} />
 </Td>
 
 <Td>{row.intent || '-'}</Td>
@@ -296,21 +370,30 @@ rows.map((row) => (
 <Td>{row.score ?? '-'}</Td>
 
 <Td>
-<div className="max-w-[180px] truncate" title={row.source_job_id || ''}>
+<div
+className="max-w-[180px] truncate"
+title={row.source_job_id || row.job_id || ''}
+>
 {row.source_job_id || row.job_id || '-'}
 </div>
 </Td>
 
 <Td>
 <Link
-href={/inbox?phone=${encodeURIComponent(row.phone || '')}`}
+href={{
+pathname: '/inbox',
+query: {
+phone: row.phone || ''
+}
+}}
 className="inline-flex rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700"
 >
 Reply
 </Link>
 </Td>
 </tr>
-))
+)
+})
 )}
 </tbody>
 </table>
@@ -338,27 +421,40 @@ return (
 </div>
 </div>
 
-<LabelBadge label={row.label} />
+<LabelBadge label={getRowLabel(row)} />
 </div>
 
 <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
-{row.body || row.message || '-'}
+{getRowMessage(row) || '-'}
 </div>
 
 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
 <div className="rounded-xl bg-slate-50 p-2">
-<div className="font-semibold text-slate-400">Intent</div>
-<div className="mt-1 font-bold text-slate-700">{row.intent || '-'}</div>
+<div className="font-semibold text-slate-400">
+Intent
+</div>
+<div className="mt-1 font-bold text-slate-700">
+{row.intent || '-'}
+</div>
 </div>
 
 <div className="rounded-xl bg-slate-50 p-2">
-<div className="font-semibold text-slate-400">Score</div>
-<div className="mt-1 font-bold text-slate-700">{row.score ?? '-'}</div>
+<div className="font-semibold text-slate-400">
+Score
+</div>
+<div className="mt-1 font-bold text-slate-700">
+{row.score ?? '-'}
+</div>
 </div>
 </div>
 
 <Link
-href={/inbox?phone=${encodeURIComponent(row.phone || '')}`}
+href={{
+pathname: '/inbox',
+query: {
+phone: row.phone || ''
+}
+}}
 className="mt-3 inline-flex rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white"
 >
 Reply
@@ -370,8 +466,12 @@ Reply
 function SummaryCard({ label, value }) {
 return (
 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-<div className="text-xs font-semibold text-slate-500">{label}</div>
-<div className="mt-1 text-2xl font-bold text-slate-900">{value}</div>
+<div className="text-xs font-semibold text-slate-500">
+{label}
+</div>
+<div className="mt-1 text-2xl font-bold text-slate-900">
+{value}
+</div>
 </div>
 )
 }
@@ -385,7 +485,11 @@ return (
 }
 
 function Td({ children }) {
-return <td className="px-4 py-3 text-slate-700">{children}</td>
+return (
+<td className="px-4 py-3 text-slate-700">
+{children}
+</td>
+)
 }
 
 function LabelBadge({ label }) {
@@ -405,7 +509,7 @@ Komplain: 'bg-orange-50 text-orange-700 ring-orange-200'
 const className = styleMap[finalLabel] || styleMap.Netral
 
 return (
-<span className={inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1${className}`}>
+<span className={'inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ' + className}>
 {finalLabel}
 </span>
 )
