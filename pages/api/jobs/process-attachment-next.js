@@ -30,7 +30,7 @@ role: 'system'
 return requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 }
 
-async function writeLog({ job, item, status, errorMessage, metaMessageId, uploadedMediaId }) {
+async function writeLog({ job, item, status, errorMessage, metaMessageId }) {
 const payload = {
 phone: item.phone,
 name: item.name || null,
@@ -53,8 +53,39 @@ await supabaseAdmin.from('blast_logs').insert(payload)
 }
 }
 
+async function updateJobStatus(jobId) {
+if (!jobId) return
+
+const { count: remaining } = await supabaseAdmin
+.from('send_job_items')
+.select('id', { count: 'exact', head: true })
+.eq('job_id', jobId)
+.in('status', ['pending', 'queued', 'processing'])
+
+if (!remaining || remaining <= 0) {
+await supabaseAdmin
+.from('send_jobs')
+.update({
+status: 'done',
+finished_at: new Date().toISOString(),
+updated_at: new Date().toISOString()
+})
+.eq('id', jobId)
+} else {
+await supabaseAdmin
+.from('send_jobs')
+.update({
+status: 'pending',
+updated_at: new Date().toISOString()
+})
+.eq('id', jobId)
+}
+}
+
 export default async function handler(req, res) {
 res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+res.setHeader('Pragma', 'no-cache')
+res.setHeader('Expires', '0')
 
 try {
 await authorize(req, res)
@@ -70,7 +101,7 @@ const batchLimit = Number(req.query.limit || req.body?.limit || 1)
 
 const { data: items, error: itemError } = await supabaseAdmin
 .from('send_job_items')
-.select(*, send_jobs:job_id (*))
+.select(', send_jobs:job_id ()')
 .not('attachment_url', 'is', null)
 .in('status', ['pending', 'queued'])
 .order('created_at', { ascending: true })
@@ -87,7 +118,10 @@ if (!items || items.length === 0) {
 return res.status(200).json({
 success: true,
 message: 'Tidak ada attachment item pending',
-processed: 0
+processed: 0,
+sent: 0,
+failed: 0,
+results: []
 })
 }
 
@@ -111,6 +145,14 @@ updated_at: new Date().toISOString()
 try {
 if (!attachment.hasAttachment) {
 throw new Error('Item ini tidak punya attachment_url')
+}
+
+const itemForSend = {
+...rawItem,
+attachment_url: attachment.attachment_url,
+attachment_type: attachment.attachment_type,
+attachment_filename: attachment.attachment_filename,
+attachment_caption: attachment.attachment_caption
 }
 
 const result = await sendWhatsAppMedia({
@@ -142,17 +184,10 @@ updated_at: new Date().toISOString()
 
 await writeLog({
 job,
-item: {
-...rawItem,
-attachment_url: attachment.attachment_url,
-attachment_type: attachment.attachment_type,
-attachment_filename: attachment.attachment_filename,
-attachment_caption: attachment.attachment_caption
-},
+item: itemForSend,
 status: 'sent',
 errorMessage: null,
-metaMessageId,
-uploadedMediaId
+metaMessageId
 })
 
 sent += 1
@@ -164,6 +199,8 @@ phone: rawItem.phone,
 status: 'sent',
 mode: 'media',
 attachment_url: attachment.attachment_url,
+attachment_type: attachment.attachment_type,
+attachment_filename: attachment.attachment_filename,
 uploaded_media_id: uploadedMediaId,
 meta_message_id: metaMessageId
 })
@@ -183,8 +220,7 @@ job,
 item: rawItem,
 status: 'failed',
 errorMessage: err.message,
-metaMessageId: null,
-uploadedMediaId: null
+metaMessageId: null
 })
 
 failed += 1
@@ -196,6 +232,8 @@ phone: rawItem.phone,
 status: 'failed',
 mode: 'media',
 attachment_url: attachment.attachment_url || rawItem.attachment_url,
+attachment_type: attachment.attachment_type || rawItem.attachment_type,
+attachment_filename: attachment.attachment_filename || rawItem.attachment_filename,
 error: err.message
 })
 }
@@ -204,30 +242,7 @@ error: err.message
 const affectedJobIds = [...new Set(items.map((item) => item.job_id).filter(Boolean))]
 
 for (const jobId of affectedJobIds) {
-const { count: remaining } = await supabaseAdmin
-.from('send_job_items')
-.select('id', { count: 'exact', head: true })
-.eq('job_id', jobId)
-.in('status', ['pending', 'queued', 'processing'])
-
-if (!remaining || remaining <= 0) {
-await supabaseAdmin
-.from('send_jobs')
-.update({
-status: 'done',
-finished_at: new Date().toISOString(),
-updated_at: new Date().toISOString()
-})
-.eq('id', jobId)
-} else {
-await supabaseAdmin
-.from('send_jobs')
-.update({
-status: 'pending',
-updated_at: new Date().toISOString()
-})
-.eq('id', jobId)
-}
+await updateJobStatus(jobId)
 }
 
 return res.status(200).json({
