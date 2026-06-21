@@ -1,245 +1,433 @@
-﻿import { useEffect, useState } from 'react'
-import AppLayout from '../../components/AppLayout'
+﻿
+
+import { useEffect, useMemo, useState } from 'react'
+import Sidebar from '../../components/Sidebar'
+
+function formatDate(value) {
+if (!value) return '-'
+
+try {
+return new Date(value).toLocaleString('id-ID')
+} catch (err) {
+return '-'
+}
+}
+
+function getStatusBadge(status) {
+const value = String(status || '').toLowerCase()
+
+if (value === 'done' || value === 'sent' || value === 'completed') {
+return 'bg-green-50 text-green-700 ring-green-100'
+}
+
+if (value === 'processing') {
+return 'bg-blue-50 text-blue-700 ring-blue-100'
+}
+
+if (value === 'failed' || value === 'error') {
+return 'bg-red-50 text-red-700 ring-red-100'
+}
+
+return 'bg-amber-50 text-amber-700 ring-amber-100'
+}
+
+function normalizeJobs(data) {
+if (Array.isArray(data)) return data
+if (Array.isArray(data?.jobs)) return data.jobs
+if (Array.isArray(data?.rows)) return data.rows
+if (Array.isArray(data?.data)) return data.data
+return []
+}
+
+function countValue(job, keys, fallback = 0) {
+for (const key of keys) {
+if (job?.[key] !== undefined && job?.[key] !== null) {
+return job[key]
+}
+}
+
+return fallback
+}
 
 export default function JobsPage() {
-  const [type, setType] = useState('blast')
-  const [databases, setDatabases] = useState([])
-  const [databaseId, setDatabaseId] = useState('')
-  const [jobs, setJobs] = useState([])
-  const [selectedJobId, setSelectedJobId] = useState('')
-  const [limit, setLimit] = useState(10)
-  const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState('')
+const [jobs, setJobs] = useState([])
+const [loading, setLoading] = useState(true)
+const [processing, setProcessing] = useState(false)
+const [batchLimit, setBatchLimit] = useState(10)
+const [message, setMessage] = useState('')
+const [error, setError] = useState('')
+const [lastResult, setLastResult] = useState(null)
+const [autoRefresh, setAutoRefresh] = useState(true)
 
-  async function loadDatabases(nextType = type) {
-    const res = await fetch(`/api/contacts/list?type=${nextType}`)
-    const json = await res.json()
-    setDatabases(json.data || [])
-  }
+const pendingJobs = useMemo(() => {
+return jobs.filter((job) => {
+const status = String(job.status || '').toLowerCase()
+return ['pending', 'queued', 'processing'].includes(status)
+})
+}, [jobs])
 
-  async function loadJobs(nextType = type) {
-    const res = await fetch(`/api/jobs/list?type=${nextType}`)
-    const json = await res.json()
-    setJobs(json.data || [])
-  }
+const totalJobs = jobs.length
+const pendingCount = pendingJobs.length
 
-  async function createJob() {
-    if (!databaseId) {
-      alert('Pilih database dulu')
-      return
-    }
+async function fetchJson(url, options = {}) {
+const response = await fetch(url, {
+cache: 'no-store',
+...options
+})
 
-    setLoading(true)
-    setMessage('Membuat job...')
+const data = await response.json().catch(() => null)
 
-    const res = await fetch('/api/jobs/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, databaseId })
-    })
+if (!response.ok || data?.success === false) {
+throw new Error(data?.message || ('Request gagal: ' + url))
+}
 
-    const json = await res.json()
-    setLoading(false)
-    setMessage(json.message || 'Selesai')
+return data
+}
 
-    if (json.success) {
-      setSelectedJobId(json.job.id)
-      loadJobs()
-    }
-  }
+async function loadJobs(silent = false) {
+if (!silent) setLoading(true)
+setError('')
 
-  async function processBatch(jobId = selectedJobId) {
-    if (!jobId) {
-      alert('Pilih job dulu')
-      return
-    }
+try {
+let data
 
-    setLoading(true)
-    setMessage('Memproses batch...')
+try {
+data = await fetchJson('/api/jobs/list?t=' + Date.now())
+} catch (err) {
+data = await fetchJson('/api/jobs?t=' + Date.now())
+}
 
-    const res = await fetch('/api/jobs/process', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId, limit })
-    })
+setJobs(normalizeJobs(data))
+} catch (err) {
+setError(err.message || 'Gagal memuat job queue')
+} finally {
+if (!silent) setLoading(false)
+}
+}
 
-    const json = await res.json()
-    setLoading(false)
-    setMessage(json.message || 'Selesai')
-    loadJobs()
-  }
+async function processBatch() {
+setProcessing(true)
+setMessage('')
+setError('')
+setLastResult(null)
 
-  function changeType(nextType) {
-    setType(nextType)
-    setDatabaseId('')
-    setSelectedJobId('')
-    loadDatabases(nextType)
-    loadJobs(nextType)
-  }
+try {
+const limit = Number(batchLimit || 10)
 
-  useEffect(() => {
-    loadDatabases()
-    loadJobs()
-  }, [])
+const attachmentResult = await fetchJson(
+'/api/jobs/process-attachment-next?limit=' + limit + '&t=' + Date.now()
+)
 
-  return (
-    <AppLayout>
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Job Queue</h1>
-          <p className="mt-2 text-slate-500">
-            Buat job pengiriman dan proses batch supaya tidak terlalu berat.
-          </p>
-        </div>
+const textResult = await fetchJson(
+'/api/jobs/process-next?limit=' + limit + '&t=' + Date.now()
+)
 
-        {message && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-700 shadow-sm">
-            {message}
-          </div>
-        )}
+const attachmentProcessed = Number(attachmentResult.processed || 0)
+const attachmentSent = Number(attachmentResult.sent || 0)
+const attachmentFailed = Number(attachmentResult.failed || 0)
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-900">Create Job</h2>
+const textProcessed = Number(textResult.processed || 0)
+const textSent = Number(textResult.sent || 0)
+const textFailed = Number(textResult.failed || 0)
 
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-4">
-            <select
-              value={type}
-              onChange={(e) => changeType(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3"
-            >
-              <option value="reminder">Reminder</option>
-              <option value="blast">WhatsApp Blast</option>
-            </select>
+setLastResult({
+attachment: attachmentResult,
+text: textResult
+})
 
-            <select
-              value={databaseId}
-              onChange={(e) => setDatabaseId(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 md:col-span-2"
-            >
-              <option value="">-- Pilih Database --</option>
-              {databases.map((db) => (
-                <option key={db.id} value={db.id}>
-                  {db.name} - {db.total_contacts} kontak
-                </option>
-              ))}
-            </select>
+setMessage(
+'Process selesai. Attachment: ' +
+attachmentSent +
+' sent, ' +
+attachmentFailed +
+' failed, ' +
+attachmentProcessed +
+' processed. Text: ' +
+textSent +
+' sent, ' +
+textFailed +
+' failed, ' +
+textProcessed +
+' processed.'
+)
 
-            <button
-              onClick={createJob}
-              disabled={loading}
-              className="rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-            >
-              Create Job
-            </button>
-          </div>
-        </div>
+await loadJobs(true)
+} catch (err) {
+setError(err.message || 'Gagal process batch')
+await loadJobs(true)
+} finally {
+setProcessing(false)
+}
+}
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-900">Process Batch</h2>
+useEffect(() => {
+loadJobs()
+}, [])
 
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-4">
-            <select
-              value={selectedJobId}
-              onChange={(e) => setSelectedJobId(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 md:col-span-2"
-            >
-              <option value="">-- Pilih Job --</option>
-              {jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.contact_databases?.name || job.id} | {job.status} | {job.sent}/{job.total} sent | failed {job.failed}
-                </option>
-              ))}
-            </select>
+useEffect(() => {
+if (!autoRefresh) return undefined
 
-            <input
-              type="number"
-              min="1"
-              max="50"
-              value={limit}
-              onChange={(e) => setLimit(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3"
-            />
+const timer = setInterval(() => {
+loadJobs(true)
+}, 7000)
 
-            <button
-              onClick={() => processBatch()}
-              disabled={loading}
-              className="rounded-2xl bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-            >
-              Process Batch
-            </button>
-          </div>
-        </div>
+return () => clearInterval(timer)
+}, [autoRefresh])
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-xl font-bold text-slate-900">Job List</h2>
-            <button
-              onClick={() => loadJobs()}
-              className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-            >
-              Refresh
-            </button>
-          </div>
+return (
+<div className="min-h-screen bg-slate-50 lg:flex">
+<Sidebar />
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="text-slate-500">
-                <tr>
-                  <th className="py-3">Created</th>
-                  <th>Database</th>
-                  <th>Status</th>
-                  <th>Total</th>
-                  <th>Sent</th>
-                  <th>Failed</th>
-                  <th>Pending</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job) => {
-                  const pending = Math.max((job.total || 0) - (job.sent || 0) - (job.failed || 0), 0)
+<main className="flex-1 p-4 lg:p-8">
+<div className="mx-auto max-w-7xl">
+<div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+<div>
+<h1 className="text-2xl font-bold text-slate-900">
+Job Queue
+</h1>
+<p className="mt-2 text-sm text-slate-500">
+Process job WhatsApp Blast dan Reminder. Attachment akan diproses sebagai media terlebih dahulu.
+</p>
+</div>
 
-                  return (
-                    <tr key={job.id} className="border-t border-slate-100">
-                      <td className="py-3">{new Date(job.created_at).toLocaleString()}</td>
-                      <td>{job.contact_databases?.name || '-'}</td>
-                      <td>
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                          {job.status}
-                        </span>
-                      </td>
-                      <td>{job.total}</td>
-                      <td className="text-emerald-700">{job.sent}</td>
-                      <td className="text-rose-700">{job.failed}</td>
-                      <td>{pending}</td>
-                      <td>
-                        <button
-                          onClick={() => {
-                            setSelectedJobId(job.id)
-                            processBatch(job.id)
-                          }}
-                          disabled={loading || job.status === 'done'}
-                          className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-                        >
-                          Process
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
+<div className="flex flex-wrap items-center gap-2">
+<button
+type="button"
+onClick={() => loadJobs(false)}
+className="rounded-2xl bg-white px-4 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+>
+Refresh
+</button>
 
-                {jobs.length === 0 && (
-                  <tr>
-                    <td colSpan="8" className="py-6 text-center text-slate-400">
-                      Belum ada job
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </AppLayout>
-  )
+<button
+type="button"
+onClick={() => setAutoRefresh((value) => !value)}
+className={
+autoRefresh
+? 'rounded-2xl bg-green-50 px-4 py-2 text-sm font-bold text-green-700 ring-1 ring-green-100'
+: 'rounded-2xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-600 ring-1 ring-slate-200'
+}
+>
+Auto Refresh: {autoRefresh ? 'ON' : 'OFF'}
+</button>
+</div>
+</div>
+
+<div className="mb-6 grid gap-4 md:grid-cols-3">
+<div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-sm font-semibold text-slate-500">
+Total Jobs
+</p>
+<p className="mt-2 text-3xl font-bold text-slate-900">
+{totalJobs}
+</p>
+</div>
+
+<div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-sm font-semibold text-slate-500">
+Pending / Processing
+</p>
+<p className="mt-2 text-3xl font-bold text-amber-600">
+{pendingCount}
+</p>
+</div>
+
+<div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+<p className="text-sm font-semibold text-slate-500">
+Batch Limit
+</p>
+<input
+type="number"
+min="1"
+max="100"
+value={batchLimit}
+onChange={(e) => setBatchLimit(e.target.value)}
+className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold outline-none focus:border-indigo-600"
+/>
+</div>
+</div>
+
+<section className="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6">
+<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+<div>
+<h2 className="text-xl font-bold text-slate-900">
+Process Batch
+</h2>
+<p className="mt-1 text-sm text-slate-500">
+Tombol ini menjalankan attachment processor dulu, lalu text processor.
+</p>
+</div>
+
+<button
+type="button"
+onClick={processBatch}
+disabled={processing}
+className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+>
+{processing ? 'Processing...' : 'Process Batch'}
+</button>
+</div>
+
+<div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+<p className="font-semibold text-slate-700">
+Urutan proses:
+</p>
+<p className="mt-1">
+1. Kirim semua item yang punya <b>attachment_url</b> lewat media endpoint.
+</p>
+<p>
+2. Kirim sisa item tanpa attachment lewat text endpoint biasa.
+</p>
+</div>
+
+{message ? (
+<div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+{message}
+</div>
+) : null}
+
+{error ? (
+<div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+{error}
+</div>
+) : null}
+
+{lastResult ? (
+<details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+<summary className="cursor-pointer text-sm font-bold text-slate-700">
+Detail response terakhir
+</summary>
+
+<pre className="mt-3 max-h-80 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-slate-100">
+{JSON.stringify(lastResult, null, 2)}
+</pre>
+</details>
+) : null}
+</section>
+
+<section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+<div className="border-b border-slate-200 p-5 lg:p-6">
+<h2 className="text-xl font-bold text-slate-900">
+Jobs
+</h2>
+<p className="mt-1 text-sm text-slate-500">
+Daftar job terbaru.
+</p>
+</div>
+
+{loading ? (
+<div className="p-6 text-sm text-slate-500">
+Loading jobs...
+</div>
+) : jobs.length === 0 ? (
+<div className="p-6 text-sm text-slate-500">
+Belum ada job.
+</div>
+) : (
+<div className="overflow-x-auto">
+<table className="min-w-[1050px] w-full text-left text-sm">
+<thead>
+<tr className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase tracking-wide text-slate-500">
+<th className="px-4 py-3">Job</th>
+<th className="px-4 py-3">Type</th>
+<th className="px-4 py-3">Status</th>
+<th className="px-4 py-3">Total</th>
+<th className="px-4 py-3">Sent</th>
+<th className="px-4 py-3">Failed</th>
+<th className="px-4 py-3">Created</th>
+<th className="px-4 py-3">Action</th>
+</tr>
+</thead>
+
+<tbody>
+{jobs.map((job) => {
+const title =
+job.name ||
+job.title ||
+job.database_name ||
+job.contact_database_name ||
+job.id
+
+const total = countValue(job, [
+'total_items',
+'total',
+'item_count',
+'target_count'
+])
+
+const sent = countValue(job, [
+'sent_items',
+'sent_count',
+'sent'
+])
+
+const failed = countValue(job, [
+'failed_items',
+'failed_count',
+'failed'
+])
+
+return (
+<tr key={job.id} className="border-b border-slate-100">
+<td className="px-4 py-4">
+<div className="max-w-sm">
+<p className="truncate font-bold text-slate-900">
+{title}
+</p>
+<p className="mt-1 text-xs text-slate-400">
+{job.id}
+</p>
+</div>
+</td>
+
+<td className="px-4 py-4">
+<span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+{job.type || job.job_type || '-'}
+</span>
+</td>
+
+<td className="px-4 py-4">
+<span className={'rounded-full px-3 py-1 text-xs font-bold ring-1 ' + getStatusBadge(job.status)}>
+{job.status || 'pending'}
+</span>
+</td>
+
+<td className="px-4 py-4 font-semibold text-slate-700">
+{total}
+</td>
+
+<td className="px-4 py-4 font-semibold text-green-700">
+{sent}
+</td>
+
+<td className="px-4 py-4 font-semibold text-red-700">
+{failed}
+</td>
+
+<td className="px-4 py-4 text-xs text-slate-500">
+{formatDate(job.created_at)}
+</td>
+
+<td className="px-4 py-4">
+<button
+type="button"
+onClick={processBatch}
+disabled={processing}
+className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:bg-slate-300"
+>
+{processing ? '...' : 'Process'}
+</button>
+</td>
+</tr>
+)
+})}
+</tbody>
+</table>
+</div>
+)}
+</section>
+</div>
+</main>
+</div>
+)
 }
