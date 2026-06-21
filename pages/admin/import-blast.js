@@ -102,6 +102,83 @@ attachment_caption: row.attachment_caption || row.caption || row.file_caption ||
 }))
 }
 
+function csvEscape(value) {
+const text = String(value ?? '')
+return '"' + text.split('"').join('""') + '"'
+}
+
+function downloadCsvFile(filename, headers, rows) {
+const lines = [
+headers.map(csvEscape).join(','),
+...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(','))
+]
+
+const csv = '\uFEFF' + lines.join('\n')
+const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+const url = URL.createObjectURL(blob)
+const link = document.createElement('a')
+
+link.href = url
+link.download = filename
+document.body.appendChild(link)
+link.click()
+document.body.removeChild(link)
+URL.revokeObjectURL(url)
+}
+
+function downloadBlastTemplateWithoutAttachment() {
+const headers = ['name', 'phone', 'message']
+const rows = [
+{
+name: 'Indira',
+phone: '="6285137908391"',
+message: 'Halo Kak Indira, ini informasi dari inHarmony Clinic.'
+},
+{
+name: 'Andin',
+phone: '="6281234567890"',
+message: 'Halo Kak Andin, ini informasi dari inHarmony Clinic.'
+}
+]
+
+downloadCsvFile('template_blast_tanpa_attachment.csv', headers, rows)
+}
+
+function downloadBlastTemplateWithAttachment() {
+const headers = [
+'name',
+'phone',
+'message',
+'attachment_url',
+'attachment_type',
+'attachment_filename',
+'attachment_caption'
+]
+
+const rows = [
+{
+name: 'Indira',
+phone: '="6285137908391"',
+message: 'Halo Kak Indira, berikut kami kirimkan file PDF dari inHarmony Clinic.',
+attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+attachment_type: 'document',
+attachment_filename: 'file_indira.pdf',
+attachment_caption: 'Berikut file PDF untuk Kak Indira.'
+},
+{
+name: 'Andin',
+phone: '="6281234567890"',
+message: 'Halo Kak Andin, berikut kami kirimkan gambar dari inHarmony Clinic.',
+attachment_url: 'https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg',
+attachment_type: 'image',
+attachment_filename: 'gambar_andin.jpg',
+attachment_caption: 'Berikut gambar untuk Kak Andin.'
+}
+]
+
+downloadCsvFile('template_blast_dengan_attachment_berbeda.csv', headers, rows)
+}
+
 export default function ImportBlastPage() {
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
@@ -255,13 +332,33 @@ return (
 <Sidebar />
 
 <main className="flex-1 p-4 lg:p-8">
-<div className="mb-6">
+<div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+<div>
 <h1 className="text-2xl font-bold text-slate-900">
 Import Database WhatsApp Blast
 </h1>
 <p className="mt-2 text-sm text-slate-500">
 Upload CSV berisi kontak untuk WhatsApp Blast.
 </p>
+</div>
+
+<div className="flex flex-wrap gap-2">
+<button
+type="button"
+onClick={downloadBlastTemplateWithoutAttachment}
+className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+>
+Download Template Tanpa Attachment
+</button>
+
+<button
+type="button"
+onClick={downloadBlastTemplateWithAttachment}
+className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700"
+>
+Download Template Dengan Attachment
+</button>
+</div>
 </div>
 
 <form
@@ -346,6 +443,9 @@ name, phone, message, attachment_url, attachment_type, attachment_filename, atta
 </code>
 <p className="mt-2 text-xs">
 Kolom attachment boleh kosong kalau memakai tombol Attach File.
+</p>
+<p className="mt-1 text-xs">
+Kalau setiap kontak punya file berbeda, gunakan template dengan attachment dan isi attachment_url per baris.
 </p>
 </div>
 

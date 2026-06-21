@@ -117,6 +117,135 @@ if (time) return date + ' ' + time
 return date
 }
 
+function csvEscape(value) {
+const text = String(value ?? '')
+return '"' + text.split('"').join('""') + '"'
+}
+
+function downloadCsvFile(filename, headers, rows) {
+const lines = [
+headers.map(csvEscape).join(','),
+...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(','))
+]
+
+const csv = '\uFEFF' + lines.join('\n')
+const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+const url = URL.createObjectURL(blob)
+const link = document.createElement('a')
+
+link.href = url
+link.download = filename
+document.body.appendChild(link)
+link.click()
+document.body.removeChild(link)
+URL.revokeObjectURL(url)
+}
+
+function downloadReminderTemplateWithoutAttachment() {
+const headers = [
+'name',
+'phone',
+'message',
+'reminder_date'
+]
+
+const rows = [
+{
+name: 'Budi',
+phone: '="6285137908391"',
+message: 'Halo Kak Budi, ini reminder jadwal layanan dari inHarmony Clinic.',
+reminder_date: '2026-06-22 09:00'
+},
+{
+name: 'Sari',
+phone: '="6281234567890"',
+message: 'Halo Kak Sari, ini reminder jadwal layanan dari inHarmony Clinic.',
+reminder_date: '2026-06-22 10:00'
+}
+]
+
+downloadCsvFile('template_reminder_tanpa_attachment.csv', headers, rows)
+}
+
+function downloadReminderTemplateWithAttachment() {
+const headers = [
+'name',
+'phone',
+'message',
+'reminder_date',
+'attachment_url',
+'attachment_type',
+'attachment_filename',
+'attachment_caption'
+]
+
+const rows = [
+{
+name: 'Budi',
+phone: '="6285137908391"',
+message: 'Halo Kak Budi, ini reminder jadwal layanan dari inHarmony Clinic.',
+reminder_date: '2026-06-22 09:00',
+attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+attachment_type: 'document',
+attachment_filename: 'reminder_budi.pdf',
+attachment_caption: 'Berikut file reminder untuk Kak Budi.'
+},
+{
+name: 'Sari',
+phone: '="6281234567890"',
+message: 'Halo Kak Sari, ini reminder jadwal layanan dari inHarmony Clinic.',
+reminder_date: '2026-06-22 10:00',
+attachment_url: 'https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg',
+attachment_type: 'image',
+attachment_filename: 'reminder_sari.jpg',
+attachment_caption: 'Berikut gambar reminder untuk Kak Sari.'
+}
+]
+
+downloadCsvFile('template_reminder_dengan_attachment_berbeda.csv', headers, rows)
+}
+
+function downloadReminderTemplateWithSeparateTime() {
+const headers = [
+'name',
+'phone',
+'message',
+'reminder_date',
+'reminder_time',
+'attachment_url',
+'attachment_type',
+'attachment_filename',
+'attachment_caption'
+]
+
+const rows = [
+{
+name: 'Budi',
+phone: '="6285137908391"',
+message: 'Halo Kak Budi, ini reminder jadwal layanan dari inHarmony Clinic.',
+reminder_date: '2026-06-22',
+reminder_time: '09:00',
+attachment_url: '',
+attachment_type: '',
+attachment_filename: '',
+attachment_caption: ''
+},
+{
+name: 'Sari',
+phone: '="6281234567890"',
+message: 'Halo Kak Sari, ini reminder jadwal layanan dari inHarmony Clinic.',
+reminder_date: '2026-06-22',
+reminder_time: '10:00',
+attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+attachment_type: 'document',
+attachment_filename: 'reminder_sari.pdf',
+attachment_caption: 'Berikut file reminder untuk Kak Sari.'
+}
+]
+
+downloadCsvFile('template_reminder_tanggal_dan_jam_terpisah.csv', headers, rows)
+}
+
 export default function ImportReminderPage() {
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
@@ -278,13 +407,41 @@ return (
 <Sidebar />
 
 <main className="flex-1 p-4 lg:p-8">
-<div className="mb-6">
+<div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+<div>
 <h1 className="text-2xl font-bold text-slate-900">
 Import Database Reminder
 </h1>
 <p className="mt-2 text-sm text-slate-500">
 Upload CSV berisi kontak reminder pasien/customer.
 </p>
+</div>
+
+<div className="flex flex-wrap gap-2">
+<button
+type="button"
+onClick={downloadReminderTemplateWithoutAttachment}
+className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+>
+Download Template Tanpa Attachment
+</button>
+
+<button
+type="button"
+onClick={downloadReminderTemplateWithAttachment}
+className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700"
+>
+Download Template Dengan Attachment
+</button>
+
+<button
+type="button"
+onClick={downloadReminderTemplateWithSeparateTime}
+className="rounded-2xl bg-indigo-600 px-4 py-3 text-xs font-bold text-white hover:bg-indigo-700"
+>
+Download Template Tanggal + Jam
+</button>
+</div>
 </div>
 
 <form
