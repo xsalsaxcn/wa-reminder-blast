@@ -181,25 +181,25 @@ return pathname === href || pathname.startsWith(href + '/')
 }
 
 function MenuLink({ item, pathname, onClick }) {
-const active = isActivePath(pathname, item.href)
+  const active = isActivePath(pathname, item.href)
 
-return (
-<Link href={item.href} legacyBehavior>
-<a
-onClick={onClick}
-className={
-active
-? 'flex items-center justify-between rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-sm'
-: 'flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-}
->
-<span>{item.label}</span>
-{active ? (
-<span className="h-2 w-2 rounded-full bg-cyan-300" />
-) : null}
-</a>
-</Link>
-)
+  return (
+    <Link href={item.href} legacyBehavior>
+      <a
+        onClick={onClick}
+        className={
+          active
+            ? 'flex items-center justify-between rounded-2xl bg-cyan-50 px-4 py-3 text-sm font-extrabold text-slate-950 ring-1 ring-cyan-200 shadow-sm'
+            : 'flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+        }
+      >
+        <span>{item.label}</span>
+        {active ? (
+          <span className="h-2 w-2 rounded-full bg-cyan-500" />
+        ) : null}
+      </a>
+    </Link>
+  )
 }
 
 function BrandBlock() {
