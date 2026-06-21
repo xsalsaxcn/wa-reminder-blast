@@ -1,6 +1,6 @@
 ﻿
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Sidebar from '../../components/Sidebar'
 import {
 MAX_FILE_SIZE,
@@ -9,7 +9,6 @@ fetchWithTimeout,
 normalizeBlastRows,
 parseCsv,
 readApiResponse,
-uploadAttachmentDirect,
 validateMimeType,
 wait
 } from '../../lib/importClientUtils'
@@ -65,6 +64,8 @@ attachment_caption: 'Berikut gambar untuk Kak Andin.'
 
 export default function ImportBlastPage() {
 const rowsRef = useRef([])
+const attachmentInputRef = useRef(null)
+const attachmentFormRef = useRef(null)
 
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
@@ -76,6 +77,38 @@ const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [progressText, setProgressText] = useState('')
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
+
+useEffect(() => {
+function handleAttachmentMessage(event) {
+if (typeof window !== 'undefined' && event.origin !== window.location.origin) return
+
+const data = event.data || {}
+
+if (data.type !== 'notiva-attachment-upload') return
+
+setUploadingAttachment(false)
+setProgressText('')
+
+if (attachmentInputRef.current) {
+attachmentInputRef.current.value = ''
+}
+
+if (!data.success) {
+setAttachmentMeta(null)
+setError(data.message || 'Upload attachment gagal.')
+return
+}
+
+setAttachmentMeta(data.attachment)
+setMessage('Attachment berhasil di-upload: ' + data.attachment.attachment_filename)
+}
+
+window.addEventListener('message', handleAttachmentMessage)
+
+return () => {
+window.removeEventListener('message', handleAttachmentMessage)
+}
+}, [])
 
 function resetCsv() {
 rowsRef.current = []
@@ -139,7 +172,19 @@ e.target.value = ''
 }
 }
 
-async function handleAttachmentChange(e) {
+function openAttachmentPicker() {
+if (loading || uploadingAttachment) return
+
+setMessage('')
+setError('')
+setProgressText('')
+
+if (attachmentInputRef.current) {
+attachmentInputRef.current.click()
+}
+}
+
+function handleAttachmentChange(e) {
 const file = e.target.files?.[0]
 
 setMessage('')
@@ -164,30 +209,14 @@ e.target.value = ''
 return
 }
 
-try {
 setUploadingAttachment(true)
-setProgressText('Mengupload attachment dari tombol Attach File...')
-await wait(100)
+setProgressText('Mengupload attachment via native form...')
 
-const uploaded = await uploadAttachmentDirect(file)
-
-setAttachmentMeta(uploaded)
-setMessage('Attachment berhasil di-upload: ' + uploaded.attachment_filename)
-setProgressText('')
-} catch (err) {
-setAttachmentMeta(null)
-
-if (err.name === 'AbortError') {
-setError('Upload attachment terlalu lama dan dihentikan otomatis.')
-} else {
-setError(err.message || 'Upload attachment gagal.')
+setTimeout(() => {
+if (attachmentFormRef.current) {
+attachmentFormRef.current.submit()
 }
-
-setProgressText('')
-} finally {
-setUploadingAttachment(false)
-e.target.value = ''
-}
+}, 50)
 }
 
 async function handleImport(e) {
@@ -319,6 +348,29 @@ return (
 <div className="min-h-screen bg-slate-50 lg:flex">
 <Sidebar />
 
+<iframe
+title="attachment-upload-frame"
+name="attachment_upload_frame"
+className="hidden"
+/>
+
+<form
+ref={attachmentFormRef}
+action="/api/attachments/upload-form"
+method="post"
+encType="multipart/form-data"
+target="attachment_upload_frame"
+className="hidden"
+>
+<input
+ref={attachmentInputRef}
+type="file"
+name="file"
+accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+onChange={handleAttachmentChange}
+/>
+</form>
+
 <main className="flex-1 p-4 lg:p-8">
 <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
 <div>
@@ -404,22 +456,14 @@ Attachment siap: {attachmentMeta.attachment_filename}
 </div>
 
 <div className="flex gap-2">
-<label
-className={
-loading || uploadingAttachment
-? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
-: 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
-}
+<button
+type="button"
+onClick={openAttachmentPicker}
+disabled={loading || uploadingAttachment}
+className="rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 {uploadingAttachment ? 'Uploading...' : 'Attach File'}
-<input
-type="file"
-accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-onChange={handleAttachmentChange}
-disabled={loading || uploadingAttachment}
-className="hidden"
-/>
-</label>
+</button>
 
 {attachmentMeta ? (
 <button
