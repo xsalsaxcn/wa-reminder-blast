@@ -3,7 +3,7 @@
 function uploadFile(file, fileName, mimeType) {
 var xhr = new XMLHttpRequest()
 
-xhr.open('POST', '/api/attachments/upload-raw', true)
+xhr.open('POST', '/api/attachments/upload-db', true)
 xhr.timeout = 30000
 xhr.withCredentials = true
 
