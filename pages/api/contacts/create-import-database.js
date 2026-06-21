@@ -23,8 +23,15 @@ message: 'Method not allowed'
 })
 }
 
-const databaseName = cleanText(req.body?.databaseName || req.body?.database_name || req.body?.name)
-const type = cleanText(req.body?.type || 'blast').toLowerCase()
+const body = req.body || {}
+
+const databaseName = cleanText(body.databaseName || body.database_name || body.name)
+const type = cleanText(body.type || 'blast').toLowerCase()
+
+const defaultAttachmentUrl = cleanText(body.default_attachment_url)
+const defaultAttachmentType = cleanText(body.default_attachment_type)
+const defaultAttachmentFilename = cleanText(body.default_attachment_filename)
+const defaultAttachmentCaption = cleanText(body.default_attachment_caption)
 
 if (!databaseName) {
 return res.status(400).json({
@@ -40,13 +47,21 @@ message: 'Type harus blast atau reminder.'
 })
 }
 
+const insertData = {
+name: databaseName,
+type,
+default_attachment_url: defaultAttachmentUrl || null,
+default_attachment_type: defaultAttachmentType || null,
+default_attachment_filename: defaultAttachmentFilename || null,
+default_attachment_caption: defaultAttachmentCaption || null
+}
+
 const { data, error } = await supabaseAdmin
 .from('contact_databases')
-.insert({
-name: databaseName,
-type
-})
-.select('id, name, type, created_at')
+.insert(insertData)
+.select(
+'id, name, type, default_attachment_url, default_attachment_type, default_attachment_filename, default_attachment_caption, created_at'
+)
 .single()
 
 if (error) {

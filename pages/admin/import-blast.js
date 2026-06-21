@@ -1,6 +1,6 @@
 ﻿
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import Sidebar from '../../components/Sidebar'
 import {
 MAX_FILE_SIZE,
@@ -9,6 +9,7 @@ fetchWithTimeout,
 normalizeBlastRows,
 parseCsv,
 readApiResponse,
+uploadAttachmentDirect,
 validateMimeType,
 wait
 } from '../../lib/importClientUtils'
@@ -64,71 +65,25 @@ attachment_caption: 'Berikut gambar untuk Kak Andin.'
 
 export default function ImportBlastPage() {
 const rowsRef = useRef([])
-const attachmentInputRef = useRef(null)
-const attachmentFormRef = useRef(null)
 
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
 const [rowCount, setRowCount] = useState(0)
 const [csvAttachmentCount, setCsvAttachmentCount] = useState(0)
 const [attachmentMeta, setAttachmentMeta] = useState(null)
+
 const [loading, setLoading] = useState(false)
 const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [progressText, setProgressText] = useState('')
+const [progressPercent, setProgressPercent] = useState(0)
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
-
-useEffect(() => {
-function handleAttachmentMessage(event) {
-if (typeof window !== 'undefined' && event.origin !== window.location.origin) return
-
-const data = event.data || {}
-
-if (data.type !== 'notiva-attachment-upload') return
-
-setUploadingAttachment(false)
-setProgressText('')
-
-if (attachmentInputRef.current) {
-attachmentInputRef.current.value = ''
-}
-
-if (!data.success) {
-setAttachmentMeta(null)
-setError(data.message || 'Upload attachment gagal.')
-return
-}
-
-setAttachmentMeta(data.attachment)
-setMessage('Attachment berhasil di-upload: ' + data.attachment.attachment_filename)
-}
-
-window.addEventListener('message', handleAttachmentMessage)
-
-return () => {
-window.removeEventListener('message', handleAttachmentMessage)
-}
-}, [])
 
 function resetCsv() {
 rowsRef.current = []
 setFileName('')
 setRowCount(0)
 setCsvAttachmentCount(0)
-}
-
-function applyAttachmentToChunk(chunk, uploadedAttachment) {
-return chunk.map((row) => {
-if (!uploadedAttachment || row.attachment_url) return row
-
-return {
-...row,
-attachment_url: uploadedAttachment.attachment_url,
-attachment_type: uploadedAttachment.attachment_type,
-attachment_filename: uploadedAttachment.attachment_filename,
-attachment_caption: row.attachment_caption || row.message || uploadedAttachment.attachment_filename
-}
-})
 }
 
 async function handleFileChange(e) {
@@ -138,11 +93,13 @@ resetCsv()
 setMessage('')
 setError('')
 setProgressText('')
+setProgressPercent(0)
 
 if (!file) return
 
 try {
 setProgressText('Membaca CSV...')
+setProgressPercent(5)
 
 const text = await file.text()
 await wait(50)
@@ -163,33 +120,24 @@ setRowCount(normalized.length)
 setCsvAttachmentCount(countAttachment)
 setMessage('CSV terbaca: ' + normalized.length + ' baris.')
 setProgressText('')
+setProgressPercent(0)
 } catch (err) {
 resetCsv()
 setError(err.message || 'Gagal membaca CSV.')
 setProgressText('')
+setProgressPercent(0)
 } finally {
 e.target.value = ''
 }
 }
 
-function openAttachmentPicker() {
-if (loading || uploadingAttachment) return
-
-setMessage('')
-setError('')
-setProgressText('')
-
-if (attachmentInputRef.current) {
-attachmentInputRef.current.click()
-}
-}
-
-function handleAttachmentChange(e) {
+async function handleAttachmentChange(e) {
 const file = e.target.files?.[0]
 
 setMessage('')
 setError('')
 setProgressText('')
+setProgressPercent(0)
 
 if (!file) return
 
@@ -209,14 +157,35 @@ e.target.value = ''
 return
 }
 
+try {
 setUploadingAttachment(true)
-setProgressText('Mengupload attachment via native form...')
+setAttachmentMeta(null)
+setProgressText('Mengupload attachment...')
+setProgressPercent(10)
+await wait(100)
 
-setTimeout(() => {
-if (attachmentFormRef.current) {
-attachmentFormRef.current.submit()
+const uploaded = await uploadAttachmentDirect(file)
+
+setProgressPercent(100)
+setAttachmentMeta(uploaded)
+setMessage('Attachment siap: ' + uploaded.attachment_filename)
+setProgressText('')
+setProgressPercent(0)
+} catch (err) {
+setAttachmentMeta(null)
+
+if (err.name === 'AbortError') {
+setError('Upload attachment terlalu lama dan dihentikan otomatis.')
+} else {
+setError(err.message || 'Upload attachment gagal.')
 }
-}, 50)
+
+setProgressText('')
+setProgressPercent(0)
+} finally {
+setUploadingAttachment(false)
+e.target.value = ''
+}
 }
 
 async function handleImport(e) {
@@ -228,6 +197,7 @@ setLoading(true)
 setMessage('')
 setError('')
 setProgressText('Menyiapkan import...')
+setProgressPercent(3)
 
 await wait(100)
 
@@ -247,6 +217,7 @@ throw new Error('Maksimal import adalah ' + MAX_ROWS + ' baris.')
 }
 
 setProgressText('Membuat database kontak...')
+setProgressPercent(8)
 await wait(100)
 
 const databaseResponse = await fetchWithTimeout(
@@ -258,7 +229,12 @@ headers: {
 },
 body: JSON.stringify({
 databaseName: databaseName.trim(),
-type: 'blast'
+type: 'blast',
+
+default_attachment_url: attachmentMeta?.attachment_url || '',
+default_attachment_type: attachmentMeta?.attachment_type || '',
+default_attachment_filename: attachmentMeta?.attachment_filename || '',
+default_attachment_caption: attachmentMeta?.attachment_filename || ''
 })
 },
 15000
@@ -280,9 +256,11 @@ const totalChunk = Math.ceil(rows.length / IMPORT_CHUNK_SIZE_SAFE)
 for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE_SAFE) {
 const currentChunk = Math.floor(i / IMPORT_CHUNK_SIZE_SAFE) + 1
 const chunk = rows.slice(i, i + IMPORT_CHUNK_SIZE_SAFE)
-const finalChunk = applyAttachmentToChunk(chunk, attachmentMeta)
+
+const percent = 10 + Math.round((currentChunk / totalChunk) * 88)
 
 setProgressText('Import chunk ' + currentChunk + ' dari ' + totalChunk + '...')
+setProgressPercent(percent)
 await wait(80)
 
 const response = await fetchWithTimeout(
@@ -295,7 +273,7 @@ headers: {
 body: JSON.stringify({
 databaseId,
 type: 'blast',
-contacts: finalChunk
+contacts: chunk
 })
 },
 15000
@@ -311,18 +289,22 @@ imported += Number(data.imported || 0)
 skipped += Number(data.skipped || 0)
 withAttachment += Number(data.with_attachment || 0)
 
-setProgressText('Progress: ' + Math.min(i + IMPORT_CHUNK_SIZE_SAFE, rows.length) + ' / ' + rows.length + ' baris.')
 await wait(120)
 }
+
+setProgressPercent(100)
+
+const defaultAttachmentText = attachmentMeta ? ' Default attachment: 1 file.' : ''
 
 setMessage(
 'Import berhasil: ' +
 imported +
 ' kontak. Skipped: ' +
 skipped +
-'. Attachment: ' +
+'. Attachment per kontak dari CSV: ' +
 withAttachment +
-'.'
+'.' +
+defaultAttachmentText
 )
 
 rowsRef.current = []
@@ -331,12 +313,16 @@ setCsvAttachmentCount(0)
 setFileName('')
 setAttachmentMeta(null)
 setProgressText('')
+setProgressPercent(0)
 } catch (err) {
 if (err.name === 'AbortError') {
 setError('Request terlalu lama dan dihentikan otomatis. Cek Database Manager apakah data sebagian sudah masuk.')
 } else {
 setError(err.message || 'Import blast gagal.')
 }
+
+setProgressText('')
+setProgressPercent(0)
 } finally {
 setLoading(false)
 }
@@ -347,29 +333,6 @@ const attachmentCount = attachmentMeta ? rowCount : csvAttachmentCount
 return (
 <div className="min-h-screen bg-slate-50 lg:flex">
 <Sidebar />
-
-<iframe
-title="attachment-upload-frame"
-name="attachment_upload_frame"
-className="hidden"
-/>
-
-<form
-ref={attachmentFormRef}
-action="/api/attachments/upload-form"
-method="post"
-encType="multipart/form-data"
-target="attachment_upload_frame"
-className="hidden"
->
-<input
-ref={attachmentInputRef}
-type="file"
-name="file"
-accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-onChange={handleAttachmentChange}
-/>
-</form>
 
 <main className="flex-1 p-4 lg:p-8">
 <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -443,11 +406,12 @@ File: {fileName}
 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 <div>
 <p className="text-sm font-bold text-slate-800">
-Attachment untuk semua kontak
+Attachment default untuk semua kontak
 </p>
 <p className="mt-1 text-xs text-slate-500">
-Maksimal 1 MB. Klik Attach File untuk upload file sebelum import.
+File disimpan 1x di database, tidak disebar ke semua baris kontak.
 </p>
+
 {attachmentMeta ? (
 <p className="mt-2 text-xs font-semibold text-indigo-700">
 Attachment siap: {attachmentMeta.attachment_filename}
@@ -456,14 +420,22 @@ Attachment siap: {attachmentMeta.attachment_filename}
 </div>
 
 <div className="flex gap-2">
-<button
-type="button"
-onClick={openAttachmentPicker}
-disabled={loading || uploadingAttachment}
-className="rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+<label
+className={
+loading || uploadingAttachment
+? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
+: 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
+}
 >
 {uploadingAttachment ? 'Uploading...' : 'Attach File'}
-</button>
+<input
+type="file"
+accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+onChange={handleAttachmentChange}
+disabled={loading || uploadingAttachment}
+className="hidden"
+/>
+</label>
 
 {attachmentMeta ? (
 <button
@@ -488,7 +460,7 @@ Preview: {rowCount} baris
 Dengan attachment: {attachmentCount} baris
 </p>
 <p className="mt-1 text-xs text-slate-400">
-Import berjalan per {IMPORT_CHUNK_SIZE_SAFE} baris agar browser tidak freeze.
+Import berjalan per {IMPORT_CHUNK_SIZE_SAFE} baris.
 </p>
 </div>
 ) : null}
@@ -503,7 +475,16 @@ className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hove
 
 {progressText ? (
 <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
-{progressText}
+<div className="mb-2 flex items-center justify-between gap-3">
+<span>{progressText}</span>
+<span className="font-bold">{progressPercent}%</span>
+</div>
+<div className="h-3 overflow-hidden rounded-full bg-blue-100">
+<div
+className="h-full rounded-full bg-blue-600 transition-all"
+style={{ width: progressPercent + '%' }}
+/>
+</div>
 </div>
 ) : null}
 
