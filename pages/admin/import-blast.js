@@ -153,6 +153,20 @@ const allowed = [
 return allowed.includes(String(mimeType || '').toLowerCase())
 }
 
+function withPromiseTimeout(promise, ms, message) {
+return Promise.race([
+promise,
+new Promise((resolve) => {
+setTimeout(() => {
+resolve({
+timeout: true,
+message
+})
+}, ms)
+})
+])
+}
+
 async function uploadAttachmentDirect(file) {
 const mimeType = String(file.type || '').trim().toLowerCase()
 
@@ -168,15 +182,23 @@ const supabase = getSupabaseStorageClient()
 const cleanName = cleanFileName(file.name)
 const path = getFolderName() + '/' + makeId() + '-' + cleanName
 
-const { error } = await supabase.storage
+const uploadResult = await withPromiseTimeout(
+supabase.storage
 .from(BUCKET_NAME)
 .upload(path, file, {
 contentType: mimeType,
 upsert: false
-})
+}),
+15000,
+'Upload attachment terlalu lama. Coba ulangi.'
+)
 
-if (error) {
-throw new Error(error.message || 'Upload ke Supabase Storage gagal.')
+if (uploadResult.timeout) {
+throw new Error(uploadResult.message)
+}
+
+if (uploadResult.error) {
+throw new Error(uploadResult.error.message || 'Upload ke Supabase Storage gagal.')
 }
 
 const { data } = supabase.storage
@@ -404,7 +426,7 @@ setMessage('Attachment berhasil di-upload. Melanjutkan import kontak...')
 const finalRows = applyAttachment(uploadedAttachment)
 
 const response = await fetchWithTimeout(
-'/api/contacts/import',
+'/api/contacts/import-fast',
 {
 method: 'POST',
 headers: {
@@ -416,7 +438,7 @@ type: 'blast',
 contacts: finalRows
 })
 },
-25000
+10000
 )
 
 const data = await readApiResponse(response)
@@ -438,7 +460,7 @@ setFileName('')
 setSelectedAttachmentFile(null)
 } catch (err) {
 if (err.name === 'AbortError') {
-setError('Import terlalu lama dan dihentikan otomatis. Cek apakah data sebagian sudah masuk di Database Manager, lalu coba ulangi jika belum masuk.')
+setError('Import terlalu lama dan dihentikan otomatis. Cek Database Manager apakah data sudah masuk.')
 } else {
 setError(err.message || 'Import blast gagal')
 }

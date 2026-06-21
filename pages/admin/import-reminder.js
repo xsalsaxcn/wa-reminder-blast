@@ -153,6 +153,20 @@ const allowed = [
 return allowed.includes(String(mimeType || '').toLowerCase())
 }
 
+function withPromiseTimeout(promise, ms, message) {
+return Promise.race([
+promise,
+new Promise((resolve) => {
+setTimeout(() => {
+resolve({
+timeout: true,
+message
+})
+}, ms)
+})
+])
+}
+
 async function uploadAttachmentDirect(file) {
 const mimeType = String(file.type || '').trim().toLowerCase()
 
@@ -168,20 +182,32 @@ const supabase = getSupabaseStorageClient()
 const cleanName = cleanFileName(file.name)
 const path = getFolderName() + '/' + makeId() + '-' + cleanName
 
-const { error } = await supabase.storage
+const uploadResult = await withPromiseTimeout(
+supabase.storage
 .from(BUCKET_NAME)
 .upload(path, file, {
 contentType: mimeType,
 upsert: false
-})
+}),
+15000,
+'Upload attachment terlalu lama. Coba ulangi.'
+)
 
-if (error) {
-throw new Error(error.message || 'Upload ke Supabase Storage gagal.')
+if (uploadResult.timeout) {
+throw new Error(uploadResult.message)
+}
+
+if (uploadResult.error) {
+throw new Error(uploadResult.error.message || 'Upload ke Supabase Storage gagal.')
 }
 
 const { data } = supabase.storage
 .from(BUCKET_NAME)
 .getPublicUrl(path)
+
+if (!data || !data.publicUrl) {
+throw new Error('Public URL attachment gagal dibuat.')
+}
 
 return {
 attachment_url: data.publicUrl,
@@ -200,6 +226,20 @@ return {
 success: false,
 message: text || 'Server mengembalikan response non-JSON.'
 }
+}
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+const controller = new AbortController()
+const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+try {
+return await fetch(url, {
+...options,
+signal: controller.signal
+})
+} finally {
+clearTimeout(timer)
 }
 }
 
@@ -222,9 +262,7 @@ const date = String(row.reminder_date || '').trim()
 const time = String(row.reminder_time || '').trim()
 
 if (!date) return ''
-
 if (date.includes(':')) return date
-
 if (time) return date + ' ' + time
 
 return date
@@ -415,13 +453,21 @@ e.target.value = ''
 async function handleImport(e) {
 e.preventDefault()
 
+if (loading) return
+
 setLoading(true)
+setUploadingAttachment(false)
 setMessage('')
 setError('')
 
 try {
-if (!databaseName.trim()) throw new Error('Nama database wajib diisi')
-if (rows.length === 0) throw new Error('File CSV belum dipilih atau kosong')
+if (!databaseName.trim()) {
+throw new Error('Nama database wajib diisi')
+}
+
+if (rows.length === 0) {
+throw new Error('File CSV belum dipilih atau kosong')
+}
 
 let uploadedAttachment = null
 
@@ -430,11 +476,14 @@ setUploadingAttachment(true)
 setMessage('Mengupload attachment...')
 uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
 setUploadingAttachment(false)
+setMessage('Attachment berhasil di-upload. Melanjutkan import kontak...')
 }
 
 const finalRows = buildFinalRows(uploadedAttachment)
 
-const response = await fetch('/api/contacts/import', {
+const response = await fetchWithTimeout(
+'/api/contacts/import-fast',
+{
 method: 'POST',
 headers: {
 'Content-Type': 'application/json'
@@ -444,7 +493,9 @@ databaseName: databaseName.trim(),
 type: 'reminder',
 contacts: finalRows
 })
-})
+},
+10000
+)
 
 const data = await readApiResponse(response)
 
@@ -464,14 +515,27 @@ setRows([])
 setFileName('')
 setSelectedAttachmentFile(null)
 } catch (err) {
+if (err.name === 'AbortError') {
+setError('Import terlalu lama dan dihentikan otomatis. Cek Database Manager apakah data sudah masuk.')
+} else {
 setError(err.message || 'Import reminder gagal')
+}
 } finally {
 setUploadingAttachment(false)
 setLoading(false)
 }
 }
 
-const previewRows = buildFinalRows(selectedAttachmentFile ? { attachment_url: 'selected', attachment_type: 'file', attachment_filename: selectedAttachmentFile.name } : null)
+const previewRows = buildFinalRows(
+selectedAttachmentFile
+? {
+attachment_url: 'selected',
+attachment_type: 'file',
+attachment_filename: selectedAttachmentFile.name
+}
+: null
+)
+
 const attachmentCount = rows.filter((row) => row.attachment_url || selectedAttachmentFile).length
 
 return (
@@ -493,7 +557,8 @@ Upload CSV berisi kontak reminder pasien/customer.
 <button
 type="button"
 onClick={downloadReminderTemplateWithoutAttachment}
-className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+disabled={loading}
+className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
 >
 Download Template Tanpa Attachment
 </button>
@@ -501,7 +566,8 @@ Download Template Tanpa Attachment
 <button
 type="button"
 onClick={downloadReminderTemplateWithAttachment}
-className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700"
+disabled={loading}
+className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 Download Template Dengan Attachment
 </button>
@@ -509,7 +575,8 @@ Download Template Dengan Attachment
 <button
 type="button"
 onClick={downloadReminderTemplateWithSeparateTime}
-className="rounded-2xl bg-indigo-600 px-4 py-3 text-xs font-bold text-white hover:bg-indigo-700"
+disabled={loading}
+className="rounded-2xl bg-indigo-600 px-4 py-3 text-xs font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 Download Template Tanggal + Jam
 </button>
@@ -528,8 +595,9 @@ Nama Database
 <input
 value={databaseName}
 onChange={(e) => setDatabaseName(e.target.value)}
+disabled={loading}
 placeholder="Contoh: Reminder MCU Juni"
-className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
 </div>
 
@@ -541,7 +609,8 @@ File CSV
 type="file"
 accept=".csv,text/csv"
 onChange={handleFileChange}
-className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+disabled={loading}
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
 {fileName ? (
 <p className="mt-2 text-xs text-slate-500">
@@ -606,9 +675,6 @@ name, phone, message, reminder_date, attachment_url, attachment_type, attachment
 <p className="mt-2 text-xs">
 Kolom attachment boleh kosong kalau memakai tombol Attach File.
 </p>
-<p className="mt-1 text-xs">
-Bisa juga pakai kolom reminder_time terpisah, contoh: reminder_date = 2026-06-22 dan reminder_time = 09:00.
-</p>
 </div>
 
 {rows.length > 0 ? (
@@ -619,31 +685,6 @@ Preview: {previewRows.length} baris
 <p className="mt-1 text-xs text-slate-500">
 Dengan attachment: {attachmentCount} baris
 </p>
-
-<div className="mt-3 overflow-x-auto">
-<table className="min-w-[980px] text-left text-xs">
-<thead>
-<tr className="border-b text-slate-500">
-<th className="py-2 pr-4">Name</th>
-<th className="py-2 pr-4">Phone</th>
-<th className="py-2 pr-4">Reminder Date</th>
-<th className="py-2 pr-4">Attachment</th>
-<th className="py-2 pr-4">Type</th>
-</tr>
-</thead>
-<tbody>
-{previewRows.slice(0, 5).map((row, index) => (
-<tr key={index} className="border-b">
-<td className="py-2 pr-4">{row.name}</td>
-<td className="py-2 pr-4">{row.phone}</td>
-<td className="py-2 pr-4">{row.reminder_date}</td>
-<td className="max-w-xs truncate py-2 pr-4">{row.attachment_url || '-'}</td>
-<td className="py-2 pr-4">{row.attachment_type || '-'}</td>
-</tr>
-))}
-</tbody>
-</table>
-</div>
 </div>
 ) : null}
 
