@@ -60,8 +60,8 @@ const sent = toNumber(getFirst(row, ['sent', 'sent_items', 'sent_count'], 0))
 const failed = toNumber(getFirst(row, ['failed', 'failed_items', 'failed_count'], 0))
 const pending = toNumber(getFirst(row, ['pending', 'pending_items', 'pending_count'], 0))
 const replies = toNumber(getFirst(row, ['replies', 'reply_count', 'total_replies'], 0))
-const positive = toNumber(getFirst(row, ['positive', 'positive_count'], 0))
-const negative = toNumber(getFirst(row, ['negative', 'negative_count'], 0))
+const interested = toNumber(getFirst(row, ['interested', 'interested_count', 'positive', 'positive_count'], 0))
+const notInterested = toNumber(getFirst(row, ['not_interested', 'notInterested', 'not_interested_count', 'negative', 'negative_count'], 0))
 const neutral = toNumber(getFirst(row, ['neutral', 'neutral_count'], 0))
 
 const responseRateRaw = getFirst(row, ['response_rate', 'reply_rate'], '')
@@ -84,8 +84,8 @@ sent,
 failed,
 pending,
 replies,
-positive,
-negative,
+interested,
+notInterested,
 neutral,
 responseRate
 }
@@ -173,10 +173,10 @@ Reply Analysis
 </p>
 <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold">
 <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700 ring-1 ring-emerald-100">
-Positive {item.positive}
+Interested {item.interested}
 </span>
 <span className="rounded-full bg-red-50 px-3 py-1 text-red-700 ring-1 ring-red-100">
-Negative {item.negative}
+Not Interested {item.notInterested}
 </span>
 <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 ring-1 ring-blue-100">
 Neutral {item.neutral}
@@ -190,11 +190,31 @@ Neutral {item.neutral}
 export default function JobPerformancePage() {
 const [rows, setRows] = useState([])
 const [loading, setLoading] = useState(true)
+const [refreshingAnalysis, setRefreshingAnalysis] = useState(false)
 const [error, setError] = useState('')
+
+async function refreshAnalysis() {
+setRefreshingAnalysis(true)
+
+try {
+await fetch('/api/admin/analyze-inbox', {
+method: 'POST',
+headers: {
+'Content-Type': 'application/json'
+}
+})
+} catch (err) {
+console.warn('analyze-inbox skipped:', err.message)
+} finally {
+setRefreshingAnalysis(false)
+}
+}
 
 async function loadData() {
 setLoading(true)
 setError('')
+
+await refreshAnalysis()
 
 const endpoints = [
 '/api/job-performance',
@@ -268,13 +288,19 @@ acc.totalJobs += 1
 acc.totalSent += item.sent
 acc.totalFailed += item.failed
 acc.totalReplies += item.replies
+acc.interested += item.interested
+acc.notInterested += item.notInterested
+acc.neutral += item.neutral
 return acc
 },
 {
 totalJobs: 0,
 totalSent: 0,
 totalFailed: 0,
-totalReplies: 0
+totalReplies: 0,
+interested: 0,
+notInterested: 0,
+neutral: 0
 }
 )
 }, [items])
@@ -297,10 +323,10 @@ Data gabungan dari Job Queue, Usage Log, dan Reply Analysis.
 <button
 type="button"
 onClick={loadData}
-disabled={loading}
+disabled={loading || refreshingAnalysis}
 className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
-{loading ? 'Loading...' : 'Refresh'}
+{loading || refreshingAnalysis ? 'Refreshing...' : 'Refresh'}
 </button>
 </div>
 
@@ -325,6 +351,29 @@ className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover
 <p className="mt-2 text-2xl font-black text-blue-600">{summary.totalReplies}</p>
 </div>
 </section>
+
+<section className="mb-5 grid grid-cols-3 gap-3">
+<div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-wide text-emerald-500">Interested</p>
+<p className="mt-2 text-2xl font-black text-emerald-700">{summary.interested}</p>
+</div>
+
+<div className="rounded-3xl border border-red-100 bg-red-50 p-4 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-wide text-red-500">Not</p>
+<p className="mt-2 text-2xl font-black text-red-700">{summary.notInterested}</p>
+</div>
+
+<div className="rounded-3xl border border-blue-100 bg-blue-50 p-4 shadow-sm">
+<p className="text-xs font-bold uppercase tracking-wide text-blue-500">Neutral</p>
+<p className="mt-2 text-2xl font-black text-blue-700">{summary.neutral}</p>
+</div>
+</section>
+
+{refreshingAnalysis ? (
+<div className="mb-5 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+Menganalisis inbox terbaru...
+</div>
+) : null}
 
 {error ? (
 <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -365,8 +414,8 @@ Belum ada data campaign/job result.
 <th className="px-5 py-4">Failed</th>
 <th className="px-5 py-4">Pending</th>
 <th className="px-5 py-4">Replies</th>
-<th className="px-5 py-4">Positive</th>
-<th className="px-5 py-4">Negative</th>
+<th className="px-5 py-4">Interested</th>
+<th className="px-5 py-4">Not</th>
 <th className="px-5 py-4">Neutral</th>
 <th className="px-5 py-4">Rate</th>
 </tr>
@@ -403,8 +452,8 @@ Belum ada data campaign/job result.
 <td className="px-5 py-4 font-bold text-red-700">{item.failed}</td>
 <td className="px-5 py-4 font-bold text-slate-700">{item.pending}</td>
 <td className="px-5 py-4 font-bold text-blue-700">{item.replies}</td>
-<td className="px-5 py-4 font-bold text-emerald-700">{item.positive}</td>
-<td className="px-5 py-4 font-bold text-red-700">{item.negative}</td>
+<td className="px-5 py-4 font-bold text-emerald-700">{item.interested}</td>
+<td className="px-5 py-4 font-bold text-red-700">{item.notInterested}</td>
 <td className="px-5 py-4 font-bold text-blue-700">{item.neutral}</td>
 <td className="px-5 py-4 font-bold text-slate-900">{item.responseRate}%</td>
 </tr>
