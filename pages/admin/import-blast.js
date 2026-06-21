@@ -90,6 +90,21 @@ reader.readAsDataURL(file)
 })
 }
 
+async function readApiResponse(response) {
+const text = await response.text()
+
+try {
+return JSON.parse(text)
+} catch (err) {
+return {
+success: false,
+message:
+text ||
+'Server mengembalikan response non-JSON. Kemungkinan file terlalu besar atau upload gagal di server.'
+}
+}
+}
+
 function normalizeParsedRows(parsed) {
 return parsed.map((row) => ({
 name: row.name || row.nama || row.customer_name || '',
@@ -128,6 +143,7 @@ URL.revokeObjectURL(url)
 
 function downloadBlastTemplateWithoutAttachment() {
 const headers = ['name', 'phone', 'message']
+
 const rows = [
 {
 name: 'Indira',
@@ -227,13 +243,16 @@ setError('')
 
 if (!file) return
 
+if (file.size > 1 * 1024 * 1024) {
+setGlobalAttachment(null)
+setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.')
+e.target.value = ''
+return
+}
+
 setUploadingAttachment(true)
 
 try {
-if (file.size > 5 * 1024 * 1024) {
-throw new Error('Ukuran attachment maksimal 5 MB')
-}
-
 const base64 = await fileToBase64(file)
 
 const response = await fetch('/api/attachments/upload', {
@@ -248,7 +267,7 @@ base64
 })
 })
 
-const data = await response.json()
+const data = await readApiResponse(response)
 
 if (!response.ok || !data.success) {
 throw new Error(data.message || 'Upload attachment gagal')
@@ -286,6 +305,10 @@ if (rows.length === 0) {
 throw new Error('File CSV belum dipilih atau kosong')
 }
 
+if (uploadingAttachment) {
+throw new Error('Tunggu upload attachment selesai dulu sebelum import.')
+}
+
 const finalRows = rowsWithAttachment()
 
 const response = await fetch('/api/contacts/import', {
@@ -300,7 +323,7 @@ contacts: finalRows
 })
 })
 
-const data = await response.json()
+const data = await readApiResponse(response)
 
 if (!response.ok || !data.success) {
 throw new Error(data.message || 'Import blast gagal')
@@ -402,7 +425,7 @@ File: {fileName}
 Attachment untuk semua kontak
 </p>
 <p className="mt-1 text-xs text-slate-500">
-Upload file di sini kalau semua kontak akan menerima file yang sama.
+Maksimal 1 MB. Upload file di sini kalau semua kontak akan menerima file yang sama.
 </p>
 {globalAttachment ? (
 <p className="mt-2 text-xs font-semibold text-indigo-700">
@@ -412,13 +435,17 @@ Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_t
 </div>
 
 <div className="flex gap-2">
-<label className="cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700">
+<label className={
+uploadingAttachment
+? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
+: 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
+}>
 {uploadingAttachment ? 'Uploading...' : 'Attach File'}
 <input
 type="file"
 accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 onChange={handleAttachmentChange}
-disabled={uploadingAttachment}
+disabled={uploadingAttachment || loading}
 className="hidden"
 />
 </label>
@@ -427,7 +454,8 @@ className="hidden"
 <button
 type="button"
 onClick={() => setGlobalAttachment(null)}
-className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50"
+disabled={uploadingAttachment || loading}
+className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50 disabled:bg-slate-100 disabled:text-slate-400"
 >
 Remove
 </button>
@@ -444,9 +472,6 @@ name, phone, message, attachment_url, attachment_type, attachment_filename, atta
 <p className="mt-2 text-xs">
 Kolom attachment boleh kosong kalau memakai tombol Attach File.
 </p>
-<p className="mt-1 text-xs">
-Kalau setiap kontak punya file berbeda, gunakan template dengan attachment dan isi attachment_url per baris.
-</p>
 </div>
 
 {rows.length > 0 ? (
@@ -457,38 +482,15 @@ Preview: {previewRows.length} baris
 <p className="mt-1 text-xs text-slate-500">
 Dengan attachment: {attachmentCount} baris
 </p>
-
-<div className="mt-3 overflow-x-auto">
-<table className="min-w-[900px] text-left text-xs">
-<thead>
-<tr className="border-b text-slate-500">
-<th className="py-2 pr-4">Name</th>
-<th className="py-2 pr-4">Phone</th>
-<th className="py-2 pr-4">Attachment</th>
-<th className="py-2 pr-4">Type</th>
-</tr>
-</thead>
-<tbody>
-{previewRows.slice(0, 5).map((row, index) => (
-<tr key={index} className="border-b">
-<td className="py-2 pr-4">{row.name}</td>
-<td className="py-2 pr-4">{row.phone}</td>
-<td className="max-w-xs truncate py-2 pr-4">{row.attachment_url || '-'}</td>
-<td className="py-2 pr-4">{row.attachment_type || '-'}</td>
-</tr>
-))}
-</tbody>
-</table>
-</div>
 </div>
 ) : null}
 
 <button
 type="submit"
-disabled={loading}
-className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:bg-slate-300"
+disabled={loading || uploadingAttachment}
+className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
-{loading ? 'Importing...' : 'Import Blast'}
+{uploadingAttachment ? 'Waiting Attachment...' : loading ? 'Importing...' : 'Import Blast'}
 </button>
 
 {message ? (

@@ -7,12 +7,13 @@ import { requireRole } from '../../../lib/auth'
 export const config = {
 api: {
 bodyParser: {
-sizeLimit: '10mb'
+sizeLimit: '2mb'
 }
 }
 }
 
 const BUCKET_NAME = 'wa-attachments'
+const MAX_FILE_SIZE = 1 * 1024 * 1024
 
 function cleanFileName(fileName) {
 const raw = String(fileName || 'attachment').trim()
@@ -83,7 +84,7 @@ if (exists) return
 
 await supabaseAdmin.storage.createBucket(BUCKET_NAME, {
 public: true,
-fileSizeLimit: 5242880,
+fileSizeLimit: MAX_FILE_SIZE,
 allowedMimeTypes: [
 'image/jpeg',
 'image/png',
@@ -132,14 +133,14 @@ const buffer = Buffer.from(parseBase64(base64), 'base64')
 if (!buffer.length) {
 return res.status(400).json({
 success: false,
-message: 'File kosong'
+message: 'File kosong.'
 })
 }
 
-if (buffer.length > 5 * 1024 * 1024) {
+if (buffer.length > MAX_FILE_SIZE) {
 return res.status(400).json({
 success: false,
-message: 'Ukuran file maksimal 5 MB'
+message: 'Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.'
 })
 }
 
@@ -184,7 +185,7 @@ path
 } catch (error) {
 return res.status(500).json({
 success: false,
-message: error.message || 'Upload attachment gagal'
+message: error.message || 'Upload attachment gagal.'
 })
 }
 }
