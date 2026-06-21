@@ -1,6 +1,6 @@
 ﻿
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Sidebar from '../../components/Sidebar'
 import {
 MAX_FILE_SIZE,
@@ -9,7 +9,6 @@ fetchWithTimeout,
 normalizeBlastRows,
 parseCsv,
 readApiResponse,
-uploadAttachmentDirect,
 validateMimeType,
 wait
 } from '../../lib/importClientUtils'
@@ -65,6 +64,7 @@ attachment_caption: 'Berikut gambar untuk Kak Andin.'
 
 export default function ImportBlastPage() {
 const rowsRef = useRef([])
+const workerRef = useRef(null)
 
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
@@ -78,6 +78,15 @@ const [progressText, setProgressText] = useState('')
 const [progressPercent, setProgressPercent] = useState(0)
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
+
+useEffect(() => {
+return () => {
+if (workerRef.current) {
+workerRef.current.terminate()
+workerRef.current = null
+}
+}
+}, [])
 
 function resetCsv() {
 rowsRef.current = []
@@ -131,7 +140,7 @@ e.target.value = ''
 }
 }
 
-async function handleAttachmentChange(e) {
+function handleAttachmentChange(e) {
 const file = e.target.files?.[0]
 
 setMessage('')
@@ -157,35 +166,90 @@ e.target.value = ''
 return
 }
 
-try {
-setUploadingAttachment(true)
-setAttachmentMeta(null)
-setProgressText('Mengupload attachment...')
-setProgressPercent(10)
-await wait(100)
-
-const uploaded = await uploadAttachmentDirect(file)
-
-setProgressPercent(100)
-setAttachmentMeta(uploaded)
-setMessage('Attachment siap: ' + uploaded.attachment_filename)
-setProgressText('')
-setProgressPercent(0)
-} catch (err) {
-setAttachmentMeta(null)
-
-if (err.name === 'AbortError') {
-setError('Upload attachment terlalu lama dan dihentikan otomatis.')
-} else {
-setError(err.message || 'Upload attachment gagal.')
+if (workerRef.current) {
+workerRef.current.terminate()
+workerRef.current = null
 }
 
+const worker = new Worker('/attachment-upload-worker.js')
+workerRef.current = worker
+
+setAttachmentMeta(null)
+setUploadingAttachment(true)
+setProgressText('Mengupload attachment di background...')
+setProgressPercent(1)
+
+worker.onmessage = function (event) {
+const data = event.data || {}
+
+if (data.type === 'upload-progress') {
+setProgressPercent(data.percent || 1)
+setProgressText('Mengupload attachment di background...')
+return
+}
+
+if (data.type === 'upload-success') {
+setAttachmentMeta(data.attachment)
+setUploadingAttachment(false)
 setProgressText('')
 setProgressPercent(0)
-} finally {
+setMessage('Attachment siap: ' + data.attachment.attachment_filename)
+
+if (workerRef.current) {
+workerRef.current.terminate()
+workerRef.current = null
+}
+
+return
+}
+
+if (data.type === 'upload-error') {
+setAttachmentMeta(null)
 setUploadingAttachment(false)
+setProgressText('')
+setProgressPercent(0)
+setError(data.message || 'Upload attachment gagal.')
+
+if (workerRef.current) {
+workerRef.current.terminate()
+workerRef.current = null
+}
+}
+}
+
+worker.onerror = function () {
+setAttachmentMeta(null)
+setUploadingAttachment(false)
+setProgressText('')
+setProgressPercent(0)
+setError('Worker upload attachment error.')
+
+if (workerRef.current) {
+workerRef.current.terminate()
+workerRef.current = null
+}
+}
+
+worker.postMessage({
+type: 'upload',
+file,
+fileName: file.name,
+mimeType
+})
+
 e.target.value = ''
 }
+
+function cancelAttachmentUpload() {
+if (workerRef.current) {
+workerRef.current.terminate()
+workerRef.current = null
+}
+
+setUploadingAttachment(false)
+setProgressText('')
+setProgressPercent(0)
+setError('Upload attachment dibatalkan.')
 }
 
 async function handleImport(e) {
@@ -437,11 +501,21 @@ className="hidden"
 />
 </label>
 
-{attachmentMeta ? (
+{uploadingAttachment ? (
+<button
+type="button"
+onClick={cancelAttachmentUpload}
+className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50"
+>
+Cancel
+</button>
+) : null}
+
+{attachmentMeta && !uploadingAttachment ? (
 <button
 type="button"
 onClick={() => setAttachmentMeta(null)}
-disabled={loading || uploadingAttachment}
+disabled={loading}
 className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50 disabled:bg-slate-100 disabled:text-slate-400"
 >
 Remove

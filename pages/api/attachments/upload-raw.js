@@ -66,15 +66,15 @@ function readRawBody(req) {
 return new Promise((resolve, reject) => {
 const chunks = []
 let total = 0
-let rejected = false
+let stopped = false
 
 req.on('data', (chunk) => {
-if (rejected) return
+if (stopped) return
 
 total += chunk.length
 
 if (total > MAX_FILE_SIZE) {
-rejected = true
+stopped = true
 reject(new Error('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.'))
 req.destroy()
 return
@@ -84,12 +84,12 @@ chunks.push(chunk)
 })
 
 req.on('end', () => {
-if (rejected) return
+if (stopped) return
 resolve(Buffer.concat(chunks))
 })
 
 req.on('error', (error) => {
-if (rejected) return
+if (stopped) return
 reject(error)
 })
 })
@@ -117,7 +117,8 @@ res.setHeader('Pragma', 'no-cache')
 res.setHeader('Expires', '0')
 
 try {
-await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+if (!authUser) return
 
 if (req.method !== 'POST') {
 return res.status(405).json({
@@ -155,13 +156,6 @@ message: 'File kosong.'
 })
 }
 
-if (buffer.length > MAX_FILE_SIZE) {
-return res.status(400).json({
-success: false,
-message: 'Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.'
-})
-}
-
 const path = getFolderName() + '/' + randomUUID() + '-' + fileName
 
 const uploadResult = await withTimeout(
@@ -171,7 +165,7 @@ supabaseAdmin.storage
 contentType: mimeType,
 upsert: false
 }),
-15000,
+20000,
 'Upload ke Supabase Storage terlalu lama.'
 )
 
