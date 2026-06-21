@@ -1,39 +1,165 @@
 ﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { normalizeImportRow } from '../../../lib/importRowNormalizer'
 
-function cleanPhone(phone) {
-  if (!phone) return ''
-  let value = String(phone).trim()
-  value = value.replace(/[^\d+]/g, '')
+function cleanText(value) {
+  return String(value || '').trim()
+}
 
-  if (value.startsWith('0')) {
-    value = '62' + value.slice(1)
+function getDatabaseType(type) {
+  const value = String(type || '').trim().toLowerCase()
+
+  if (value === 'reminder') return 'reminder'
+  if (value === 'blast') return 'blast'
+
+  return 'blast'
+}
+
+function buildMessage(row) {
+  const message = cleanText(row.message)
+  const attachmentCaption = cleanText(row.attachment_caption)
+  const attachmentFilename = cleanText(row.attachment_filename)
+  const attachmentUrl = cleanText(row.attachment_url)
+
+  if (message) return message
+  if (attachmentCaption) return attachmentCaption
+  if (attachmentFilename) return `[Attachment] ${attachmentFilename}`
+  if (attachmentUrl) return `[Attachment] ${attachmentUrl}`
+
+  return ''
+}
+
+function cleanAttachmentType(type, url) {
+  const value = String(type || '').trim().toLowerCase()
+  const lowerUrl = String(url || '').toLowerCase()
+
+  if (value === 'image') return 'image'
+  if (value === 'document') return 'document'
+
+  if (
+    lowerUrl.endsWith('.jpg') ||
+    lowerUrl.endsWith('.jpeg') ||
+    lowerUrl.endsWith('.png') ||
+    lowerUrl.endsWith('.webp')
+  ) {
+    return 'image'
   }
 
-  if (value.startsWith('+')) {
-    value = value.slice(1)
+  if (lowerUrl) return 'document'
+
+  return ''
+}
+
+function guessFilenameFromUrl(url) {
+  try {
+    const parsed = new URL(url)
+    const last = parsed.pathname.split('/').filter(Boolean).pop()
+
+    if (last) {
+      return decodeURIComponent(last)
+    }
+  } catch (err) {
+    // ignore
   }
 
-  return value
+  return ''
+}
+
+function normalizeContact(row, type) {
+  const normalized = normalizeImportRow(row)
+
+  const message = buildMessage(normalized)
+  const attachmentUrl = cleanText(normalized.attachment_url)
+  const attachmentType = cleanAttachmentType(normalized.attachment_type, attachmentUrl)
+  const attachmentFilename =
+    cleanText(normalized.attachment_filename) ||
+    guessFilenameFromUrl(attachmentUrl)
+
+  return {
+    name: cleanText(normalized.name),
+    phone: cleanText(normalized.phone),
+    message,
+    reminder_date: type === 'reminder' ? cleanText(normalized.reminder_date) : null,
+    attachment_url: attachmentUrl || null,
+    attachment_type: attachmentType || null,
+    attachment_filename: attachmentFilename || null,
+    attachment_caption: cleanText(normalized.attachment_caption) || null
+  }
+}
+
+async function createContactDatabase({ databaseName, type, totalContacts }) {
+  const now = new Date().toISOString()
+
+  const payloads = [
+    {
+      name: databaseName,
+      type,
+      total_contacts: totalContacts,
+      created_at: now,
+      updated_at: now
+    },
+    {
+      name: databaseName,
+      type,
+      total_contacts: totalContacts,
+      created_at: now
+    },
+    {
+      database_name: databaseName,
+      type,
+      total_contacts: totalContacts,
+      created_at: now,
+      updated_at: now
+    },
+    {
+      database_name: databaseName,
+      type,
+      total_contacts: totalContacts,
+      created_at: now
+    }
+  ]
+
+  let lastError = null
+
+  for (const payload of payloads) {
+    const { data, error } = await supabaseAdmin
+      .from('contact_databases')
+      .insert(payload)
+      .select('*')
+      .single()
+
+    if (!error && data) {
+      return data
+    }
+
+    lastError = error
+  }
+
+  throw lastError || new Error('Gagal membuat database kontak')
 }
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin', 'agent'])
-  if (!authUser) return
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' })
-  }
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
 
   try {
-    const { databaseName, type, contacts } = req.body
+    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 
-    if (!databaseName || !type) {
-      return res.status(400).json({
+    if (req.method !== 'POST') {
+      return res.status(405).json({
         success: false,
-        message: 'databaseName dan type wajib diisi'
+        message: 'Method not allowed'
       })
     }
+
+    const { databaseName, name, type, contacts } = req.body || {}
+
+    const cleanDatabaseName =
+      cleanText(databaseName || name) ||
+      `Import ${new Date().toLocaleString('id-ID')}`
+
+    const databaseType = getDatabaseType(type)
 
     if (!Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({
@@ -51,63 +177,80 @@ export default async function handler(req, res) {
       })
     }
 
-    const seenPhones = new Set()
-
     const validContacts = contacts
-      .map((row) => ({
-        name: row.name || row.nama || '',
-        phone: cleanPhone(row.phone || row.nomor || row.no_hp || row.whatsapp),
-        message: row.message || row.pesan || '',
-        reminder_date: row.reminder_date || row.tanggal || null,
-        reminder_time: row.reminder_time || row.jam || null,
-        status: 'active'
-      }))
-      .filter((row) => row.phone)
-      .filter((row) => {
-        if (seenPhones.has(row.phone)) return false
-        seenPhones.add(row.phone)
+      .map((contact) => normalizeContact(contact, databaseType))
+      .filter((contact) => {
+        if (!contact.phone) return false
+        if (!contact.message) return false
+
+        if (databaseType === 'reminder' && !contact.reminder_date) {
+          return false
+        }
+
         return true
       })
 
     if (validContacts.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Tidak ada nomor WhatsApp valid'
+        message:
+          databaseType === 'reminder'
+            ? 'Tidak ada kontak valid. Pastikan kolom name, phone, message, reminder_date terisi.'
+            : 'Tidak ada kontak valid. Pastikan kolom name, phone, message terisi.'
       })
     }
 
-    const { data: database, error: dbError } = await supabaseAdmin
-      .from('contact_databases')
-      .insert({
-        name: databaseName,
-        type,
-        total_contacts: validContacts.length
-      })
-      .select()
-      .single()
+    const database = await createContactDatabase({
+      databaseName: cleanDatabaseName,
+      type: databaseType,
+      totalContacts: validContacts.length
+    })
 
-    if (dbError) throw dbError
+    const now = new Date().toISOString()
 
     const contactsToInsert = validContacts.map((contact) => ({
-      ...contact,
-      database_id: database.id
+      database_id: database.id,
+      name: contact.name || null,
+      phone: contact.phone,
+      message: contact.message,
+      reminder_date: contact.reminder_date || null,
+      attachment_url: contact.attachment_url || null,
+      attachment_type: contact.attachment_type || null,
+      attachment_filename: contact.attachment_filename || null,
+      attachment_caption: contact.attachment_caption || null,
+      created_at: now,
+      updated_at: now
     }))
 
     const { error: contactsError } = await supabaseAdmin
       .from('contacts')
       .insert(contactsToInsert)
 
-    if (contactsError) throw contactsError
+    if (contactsError) {
+      await supabaseAdmin
+        .from('contact_databases')
+        .delete()
+        .eq('id', database.id)
+
+      return res.status(500).json({
+        success: false,
+        message: contactsError.message
+      })
+    }
 
     return res.status(200).json({
       success: true,
-      message: `Berhasil import ${validContacts.length} kontak. Duplikat nomor dalam file otomatis dilewati.`,
-      database
+      database,
+      total: contacts.length,
+      imported: contactsToInsert.length,
+      skipped: contacts.length - contactsToInsert.length,
+      with_attachment: contactsToInsert.filter((item) => item.attachment_url).length,
+      message: `Import berhasil: ${contactsToInsert.length} kontak`
     })
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: error.message || 'Import gagal'
+      message: error.message || 'Import failed'
     })
   }
 }

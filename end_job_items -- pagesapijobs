@@ -1,0 +1,4 @@
+[35mpages/api/jobs/create.js[m[36m:[m[32m50[m[36m:[m      .[1;31minsert[m({
+[35mpages/api/jobs/create.js[m[36m:[m[32m73[m[36m:[m      .[1;31minsert[m(items)
+[35mpages/api/jobs/process-next.js[m[36m:[m[32m81[m[36m:[m    await supabaseAdmin.from('reminder_logs').[1;31minsert[m(payload)
+[35mpages/api/jobs/process-next.js[m[36m:[m[32m83[m[36m:[m    await supabaseAdmin.from('blast_logs').[1;31minsert[m(payload)
