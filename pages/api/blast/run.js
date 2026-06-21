@@ -13,29 +13,17 @@ return String(value || '').trim()
 function cleanPhone(value) {
 let phone = String(value || '').trim()
 
-if (phone.startsWith('="')) {
-phone = phone.slice(2)
-}
-
-if (phone.endsWith('"')) {
-phone = phone.slice(0, -1)
-}
-
-if (phone.startsWith("'")) {
-phone = phone.slice(1)
-}
+if (phone.startsWith('="')) phone = phone.slice(2)
+if (phone.endsWith('"')) phone = phone.slice(0, -1)
+if (phone.startsWith("'")) phone = phone.slice(1)
 
 let result = ''
 
 for (const char of phone) {
-if ('0123456789'.includes(char)) {
-result += char
-}
+if ('0123456789'.includes(char)) result += char
 }
 
-if (result.startsWith('0')) {
-result = '62' + result.slice(1)
-}
+if (result.startsWith('0')) result = '62' + result.slice(1)
 
 return result
 }
@@ -43,13 +31,14 @@ return result
 function getContactAttachment(contact, database) {
 const contactAttachmentUrl = cleanText(contact.attachment_url)
 const defaultAttachmentUrl = cleanText(database?.default_attachment_url)
+const messageText = cleanText(contact.message)
 
 if (contactAttachmentUrl) {
 return {
 attachment_url: contactAttachmentUrl,
 attachment_type: cleanText(contact.attachment_type) || cleanText(database?.default_attachment_type) || null,
 attachment_filename: cleanText(contact.attachment_filename) || cleanText(database?.default_attachment_filename) || null,
-attachment_caption: cleanText(contact.attachment_caption) || cleanText(contact.message) || null
+attachment_caption: cleanText(contact.attachment_caption) || messageText || cleanText(database?.default_attachment_caption) || null
 }
 }
 
@@ -58,7 +47,7 @@ return {
 attachment_url: defaultAttachmentUrl,
 attachment_type: cleanText(database?.default_attachment_type) || null,
 attachment_filename: cleanText(database?.default_attachment_filename) || null,
-attachment_caption: cleanText(database?.default_attachment_caption) || cleanText(contact.message) || null
+attachment_caption: messageText || cleanText(database?.default_attachment_caption) || cleanText(database?.default_attachment_filename) || null
 }
 }
 
@@ -80,9 +69,7 @@ const { error } = await supabaseAdmin
 .from('send_job_items')
 .insert(chunk)
 
-if (error) {
-throw new Error(error.message)
-}
+if (error) throw new Error(error.message)
 
 inserted += chunk.length
 }
@@ -133,7 +120,9 @@ message: databaseError?.message || 'Database tidak ditemukan.'
 
 const { data: contacts, error: contactsError } = await supabaseAdmin
 .from('contacts')
-.select('id, name, phone, message, attachment_url, attachment_type, attachment_filename, attachment_caption')
+.select(
+'id, name, phone, message, attachment_url, attachment_type, attachment_filename, attachment_caption, created_at'
+)
 .eq('database_id', databaseId)
 .order('created_at', { ascending: true })
 
