@@ -1,206 +1,353 @@
+
+
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import { analyzeLeadMessage } from '../../../lib/leadAnalyzer'
-import { upsertBlacklist } from '../../../lib/blacklist'
 
-async function findSourceJob(phone, receivedAt) {
-  const { data: items } = await supabaseAdmin
-    .from('send_job_items')
-    .select('job_id, processed_at, status')
-    .eq('phone', phone)
-    .eq('status', 'sent')
-    .lte('processed_at', receivedAt)
-    .order('processed_at', { ascending: false })
-    .limit(1)
-
-  const item = items?.[0]
-
-  if (!item?.job_id) {
-    return {
-      source_job_id: null,
-      source_job_type: null
-    }
-  }
-
-  const { data: job } = await supabaseAdmin
-    .from('send_jobs')
-    .select('id, type')
-    .eq('id', item.job_id)
-    .single()
-
-  return {
-    source_job_id: item.job_id,
-    source_job_type: job?.type || null
-  }
+function cleanText(value) {
+return String(value || '').trim()
 }
 
-async function updateContactScore(phone) {
-  const { data: rows, error } = await supabaseAdmin
-    .from('wa_message_analysis')
-    .select('*')
-    .eq('phone', phone)
-    .order('received_at', { ascending: false })
-    .limit(200)
+function cleanPhone(value) {
+let phone = String(value || '').trim()
 
-  if (error || !rows || rows.length === 0) return
+if (phone.startsWith('="')) phone = phone.slice(2)
+if (phone.endsWith('"')) phone = phone.slice(0, -1)
+if (phone.startsWith("'")) phone = phone.slice(1)
 
-  const latest = rows[0]
+let result = ''
 
-  const interestedCount = rows.filter((row) => row.label === 'Berminat').length
-  const notInterestedCount = rows.filter((row) => row.label === 'Tidak berminat').length
-  const neutralCount = rows.filter(
-    (row) => row.label === 'Netral' || row.label === 'Follow-up'
-  ).length
-  const optOut = rows.some((row) => row.label === 'Opt-out')
-  const complaintCount = rows.filter((row) => row.label === 'Komplain').length
+for (const char of phone) {
+if ('0123456789'.includes(char)) result += char
+}
 
-  const avgScore = Math.round(
-    rows.reduce((sum, row) => sum + Number(row.score || 0), 0) / rows.length
-  )
+if (result.startsWith('0')) result = '62' + result.slice(1)
 
-  let status = 'neutral'
+return result
+}
 
-  if (optOut) {
-    status = 'opt_out'
-  } else if (complaintCount > 0) {
-    status = 'complaint'
-  } else if (avgScore >= 80 || interestedCount >= 2) {
-    status = 'hot'
-  } else if (avgScore >= 55 || interestedCount >= 1) {
-    status = 'warm'
-  } else if (notInterestedCount > interestedCount) {
-    status = 'cold'
-  }
+function getValue(row, keys) {
+for (const key of keys) {
+if (row && row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+return row[key]
+}
+}
 
-  await supabaseAdmin
-    .from('wa_contact_scores')
-    .upsert(
-      {
-        phone,
-        profile_name: latest.profile_name,
-        latest_label: latest.label,
-        latest_intent: latest.intent,
-        lead_score: optOut ? 0 : avgScore,
-        status,
-        last_message: latest.body,
-        last_message_at: latest.received_at,
-        total_messages: rows.length,
-        interested_count: interestedCount,
-        not_interested_count: notInterestedCount,
-        neutral_count: neutralCount,
-        opt_out: optOut,
-        source_job_id: latest.source_job_id,
-        updated_at: new Date().toISOString()
-      },
-      {
-        onConflict: 'phone'
-      }
-    )
+return ''
+}
+
+function normalizeIncomingMessage(row) {
+const rawId = cleanText(
+getValue(row, [
+'id',
+'message_id',
+'whatsapp_message_id',
+'wa_message_id',
+'meta_message_id'
+])
+)
+
+const phone = cleanPhone(
+getValue(row, [
+'phone',
+'from',
+'wa_id',
+'wa_phone',
+'sender_phone',
+'customer_phone',
+'contact_phone'
+])
+)
+
+const profileName = cleanText(
+getValue(row, [
+'profile_name',
+'name',
+'sender_name',
+'contact_name',
+'customer_name'
+])
+)
+
+const message = cleanText(
+getValue(row, [
+'message',
+'text',
+'body',
+'content',
+'caption',
+'media_caption'
+])
+)
+
+const direction = cleanText(
+getValue(row, [
+'direction',
+'message_direction',
+'type'
+])
+).toLowerCase()
+
+const createdAt =
+getValue(row, [
+'created_at',
+'timestamp',
+'received_at',
+'message_created_at'
+]) || new Date().toISOString()
+
+return {
+source_message_id: 'wa_incoming_messages:' + rawId,
+raw_id: rawId,
+phone,
+profile_name: profileName,
+message,
+direction,
+created_at: createdAt
+}
+}
+
+function isIncomingMessage(message) {
+const direction = cleanText(message.direction).toLowerCase()
+
+if (!message.phone || !message.message) return false
+
+if (!direction) return true
+
+if (direction.includes('out')) return false
+if (direction.includes('sent')) return false
+
+return true
+}
+
+function classifyReply(text) {
+const message = cleanText(text).toLowerCase()
+
+const negativePhrases = [
+'tidak berminat',
+'tidak minat',
+'ga minat',
+'gak minat',
+'nggak minat',
+'enggak minat',
+'tidak tertarik',
+'ga tertarik',
+'gak tertarik',
+'jangan kirim',
+'jangan chat',
+'stop',
+'unsubscribe',
+'batal',
+'cancel'
+]
+
+for (const phrase of negativePhrases) {
+if (message.includes(phrase)) {
+return {
+category: 'not_interested',
+sentiment: 'negative',
+intent: 'not_interested'
+}
+}
+}
+
+const interestedKeywords = [
+'berminat',
+'minat',
+'mau',
+'boleh',
+'info',
+'lanjut',
+'ya',
+'iya',
+'y',
+'ok',
+'oke',
+'okay',
+'tertarik',
+'daftar',
+'ikut',
+'booking',
+'jadwal',
+'harga',
+'biaya',
+'minta',
+'kirim',
+'setuju',
+'deal',
+'confirm',
+'konfirmasi',
+'ambil',
+'pesan'
+]
+
+for (const keyword of interestedKeywords) {
+if (message === keyword || message.includes(keyword)) {
+return {
+category: 'interested',
+sentiment: 'positive',
+intent: 'interested'
+}
+}
+}
+
+const notInterestedKeywords = [
+'tidak',
+'nggak',
+'enggak',
+'belum',
+'nanti',
+'skip',
+'jangan',
+'hapus',
+'salah nomor'
+]
+
+for (const keyword of notInterestedKeywords) {
+if (message === keyword || message.includes(keyword)) {
+return {
+category: 'not_interested',
+sentiment: 'negative',
+intent: 'not_interested'
+}
+}
+}
+
+return {
+category: 'neutral',
+sentiment: 'neutral',
+intent: 'neutral'
+}
+}
+
+async function loadIncomingMessages() {
+const { data, error } = await supabaseAdmin
+.from('wa_incoming_messages')
+.select('*')
+.order('created_at', { ascending: false })
+.limit(500)
+
+if (error) {
+throw new Error(error.message)
+}
+
+return Array.isArray(data) ? data : []
+}
+
+async function findLatestSentItem(phone) {
+const clean = cleanPhone(phone)
+
+if (!clean) return null
+
+const { data, error } = await supabaseAdmin
+.from('send_job_items')
+.select('id, job_id, phone, message, status, processed_at, created_at, send_jobs:job_id (id, database_id, type)')
+.eq('phone', clean)
+.eq('status', 'sent')
+.order('processed_at', { ascending: false, nullsFirst: false })
+.order('created_at', { ascending: false })
+.limit(1)
+
+if (error || !Array.isArray(data) || !data.length) return null
+
+return data[0]
+}
+
+async function saveAnalysis(message, classification, matchedItem) {
+const job = matchedItem?.send_jobs || null
+
+const payload = {
+source_message_id: message.source_message_id,
+phone: message.phone,
+profile_name: message.profile_name || null,
+message: message.message,
+category: classification.category,
+sentiment: classification.sentiment,
+intent: classification.intent,
+job_id: matchedItem?.job_id || null,
+database_id: job?.database_id || null,
+send_job_item_id: matchedItem?.id || null,
+message_created_at: message.created_at || null,
+updated_at: new Date().toISOString()
+}
+
+await supabaseAdmin
+.from('reply_analysis')
+.delete()
+.eq('source_message_id', message.source_message_id)
+
+const { error } = await supabaseAdmin
+.from('reply_analysis')
+.insert(payload)
+
+if (error) {
+throw new Error(error.message)
+}
+
+return payload
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  res.setHeader('Pragma', 'no-cache')
-  res.setHeader('Expires', '0')
+res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+res.setHeader('Pragma', 'no-cache')
+res.setHeader('Expires', '0')
 
-  try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+try {
+const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+if (!authUser) return
 
-    if (req.method !== 'POST') {
-      return res.status(405).json({
-        success: false,
-        message: 'Method not allowed'
-      })
-    }
+if (req.method !== 'POST' && req.method !== 'GET') {
+return res.status(405).json({
+success: false,
+message: 'Method not allowed'
+})
+}
 
-    const limit = Number(req.query.limit || req.body?.limit || 500)
+const rows = await loadIncomingMessages()
 
-    const { data: messages, error } = await supabaseAdmin
-      .from('wa_incoming_messages')
-      .select('*')
-      .not('phone', 'is', null)
-      .order('received_at', { ascending: false })
-      .limit(limit)
+const messages = rows
+.map(normalizeIncomingMessage)
+.filter(isIncomingMessage)
 
-    if (error) {
-      return res.status(500).json({
-        success: false,
-        message: error.message
-      })
-    }
+let analyzed = 0
+let interested = 0
+let notInterested = 0
+let neutral = 0
+const results = []
 
-    let analyzed = 0
-    let autoBlacklisted = 0
-    let failed = 0
-    const errors = []
+for (const message of messages) {
+const classification = classifyReply(message.message)
+const matchedItem = await findLatestSentItem(message.phone)
+const saved = await saveAnalysis(message, classification, matchedItem)
 
-    for (const msg of messages || []) {
-      try {
-        const result = analyzeLeadMessage(msg.body || '')
-        const source = await findSourceJob(msg.phone, msg.received_at)
+analyzed += 1
 
-        const { error: upsertError } = await supabaseAdmin
-          .from('wa_message_analysis')
-          .upsert(
-            {
-              incoming_message_id: msg.id,
-              phone: msg.phone,
-              profile_name: msg.profile_name,
-              body: msg.body || '',
-              received_at: msg.received_at,
-              label: result.label,
-              intent: result.intent,
-              score: result.score,
-              confidence: result.confidence,
-              reasons: result.reasons,
-              source_job_id: source.source_job_id,
-              source_job_type: source.source_job_type,
-              updated_at: new Date().toISOString()
-            },
-            {
-              onConflict: 'incoming_message_id'
-            }
-          )
+if (classification.category === 'interested') interested += 1
+else if (classification.category === 'not_interested') notInterested += 1
+else neutral += 1
 
-        if (upsertError) {
-          failed += 1
-          errors.push(upsertError.message)
-          continue
-        }
+results.push({
+phone: message.phone,
+message: message.message,
+category: classification.category,
+job_id: saved.job_id,
+database_id: saved.database_id
+})
+}
 
-        analyzed += 1
-
-        await updateContactScore(msg.phone)
-
-        if (result.label === 'Opt-out') {
-          await upsertBlacklist({
-            phone: msg.phone,
-            profile_name: msg.profile_name,
-            reason: msg.body || 'Detected opt-out from incoming message',
-            source: 'auto_analysis',
-            created_by: 'system'
-          })
-
-          autoBlacklisted += 1
-        }
-      } catch (itemError) {
-        failed += 1
-        errors.push(itemError.message || 'Failed to analyze message')
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      analyzed,
-      autoBlacklisted,
-      failed,
-      total: messages?.length || 0,
-      errors: errors.slice(0, 10)
-    })
-  } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: error.message || 'Unauthorized'
-    })
-  }
+return res.status(200).json({
+success: true,
+source_table: 'wa_incoming_messages',
+total_inbox_rows: rows.length,
+analyzed,
+interested,
+not_interested: notInterested,
+neutral,
+results: results.slice(0, 30)
+})
+} catch (error) {
+return res.status(500).json({
+success: false,
+message: error.message || 'Analyze inbox gagal.'
+})
+}
 }
