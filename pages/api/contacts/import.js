@@ -1,256 +1,220 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+﻿
+
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import { normalizeImportRow } from '../../../lib/importRowNormalizer'
+
+const MAX_IMPORT_CONTACTS = 5000
+const CHUNK_SIZE = 500
 
 function cleanText(value) {
-  return String(value || '').trim()
+return String(value || '').trim()
 }
 
-function getDatabaseType(type) {
-  const value = String(type || '').trim().toLowerCase()
+function cleanPhone(value) {
+let phone = String(value || '').trim()
 
-  if (value === 'reminder') return 'reminder'
-  if (value === 'blast') return 'blast'
-
-  return 'blast'
+if (phone.startsWith('="')) {
+phone = phone.slice(2)
 }
 
-function buildMessage(row) {
-  const message = cleanText(row.message)
-  const attachmentCaption = cleanText(row.attachment_caption)
-  const attachmentFilename = cleanText(row.attachment_filename)
-  const attachmentUrl = cleanText(row.attachment_url)
-
-  if (message) return message
-  if (attachmentCaption) return attachmentCaption
-  if (attachmentFilename) return `[Attachment] ${attachmentFilename}`
-  if (attachmentUrl) return `[Attachment] ${attachmentUrl}`
-
-  return ''
+if (phone.endsWith('"')) {
+phone = phone.slice(0, -1)
 }
 
-function cleanAttachmentType(type, url) {
-  const value = String(type || '').trim().toLowerCase()
-  const lowerUrl = String(url || '').toLowerCase()
-
-  if (value === 'image') return 'image'
-  if (value === 'document') return 'document'
-
-  if (
-    lowerUrl.endsWith('.jpg') ||
-    lowerUrl.endsWith('.jpeg') ||
-    lowerUrl.endsWith('.png') ||
-    lowerUrl.endsWith('.webp')
-  ) {
-    return 'image'
-  }
-
-  if (lowerUrl) return 'document'
-
-  return ''
+if (phone.startsWith("'")) {
+phone = phone.slice(1)
 }
 
-function guessFilenameFromUrl(url) {
-  try {
-    const parsed = new URL(url)
-    const last = parsed.pathname.split('/').filter(Boolean).pop()
+let onlyNumber = ''
 
-    if (last) {
-      return decodeURIComponent(last)
-    }
-  } catch (err) {
-    // ignore
-  }
-
-  return ''
+for (const char of phone) {
+if ('0123456789'.includes(char)) {
+onlyNumber += char
+}
 }
 
-function normalizeContact(row, type) {
-  const normalized = normalizeImportRow(row)
-
-  const message = buildMessage(normalized)
-  const attachmentUrl = cleanText(normalized.attachment_url)
-  const attachmentType = cleanAttachmentType(normalized.attachment_type, attachmentUrl)
-  const attachmentFilename =
-    cleanText(normalized.attachment_filename) ||
-    guessFilenameFromUrl(attachmentUrl)
-
-  return {
-    name: cleanText(normalized.name),
-    phone: cleanText(normalized.phone),
-    message,
-    reminder_date: type === 'reminder' ? cleanText(normalized.reminder_date) : null,
-    attachment_url: attachmentUrl || null,
-    attachment_type: attachmentType || null,
-    attachment_filename: attachmentFilename || null,
-    attachment_caption: cleanText(normalized.attachment_caption) || null
-  }
+if (onlyNumber.startsWith('0')) {
+onlyNumber = '62' + onlyNumber.slice(1)
 }
 
-async function createContactDatabase({ databaseName, type, totalContacts }) {
-  const now = new Date().toISOString()
+return onlyNumber
+}
 
-  const payloads = [
-    {
-      name: databaseName,
-      type,
-      total_contacts: totalContacts,
-      created_at: now,
-      updated_at: now
-    },
-    {
-      name: databaseName,
-      type,
-      total_contacts: totalContacts,
-      created_at: now
-    },
-    {
-      database_name: databaseName,
-      type,
-      total_contacts: totalContacts,
-      created_at: now,
-      updated_at: now
-    },
-    {
-      database_name: databaseName,
-      type,
-      total_contacts: totalContacts,
-      created_at: now
-    }
-  ]
+function getValue(row, keys) {
+for (const key of keys) {
+if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+return row[key]
+}
 
-  let lastError = null
+const foundKey = Object.keys(row || {}).find(
+(item) => item.trim().toLowerCase() === String(key).trim().toLowerCase()
+)
 
-  for (const payload of payloads) {
-    const { data, error } = await supabaseAdmin
-      .from('contact_databases')
-      .insert(payload)
-      .select('*')
-      .single()
+if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null && String(row[foundKey]).trim() !== '') {
+return row[foundKey]
+}
+}
 
-    if (!error && data) {
-      return data
-    }
+return ''
+}
 
-    lastError = error
-  }
+function normalizeContact(row, type, databaseId) {
+const name = cleanText(getValue(row, ['name', 'nama', 'customer_name', 'profile_name']))
+const phone = cleanPhone(getValue(row, ['phone', 'nomor', 'no_hp', 'whatsapp', 'wa', 'number']))
+const message = cleanText(getValue(row, ['message', 'pesan', 'text', 'body']))
+const reminderDate = cleanText(getValue(row, ['reminder_date', 'tanggal', 'date', 'scheduled_at', 'send_at']))
+const attachmentUrl = cleanText(getValue(row, ['attachment_url', 'file_url', 'document_url', 'image_url', 'media_url', 'link_file']))
+const attachmentType = cleanText(getValue(row, ['attachment_type', 'file_type', 'media_type'])).toLowerCase()
+const attachmentFilename = cleanText(getValue(row, ['attachment_filename', 'filename', 'file_name', 'nama_file']))
+const attachmentCaption = cleanText(getValue(row, ['attachment_caption', 'caption', 'file_caption']))
 
-  throw lastError || new Error('Gagal membuat database kontak')
+return {
+database_id: databaseId,
+type,
+name,
+phone,
+message,
+reminder_date: reminderDate || null,
+attachment_url: attachmentUrl || null,
+attachment_type: attachmentType || null,
+attachment_filename: attachmentFilename || null,
+attachment_caption: attachmentCaption || null
+}
+}
+
+async function insertInChunks(tableName, rows) {
+let inserted = 0
+
+for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+const chunk = rows.slice(i, i + CHUNK_SIZE)
+
+const { error } = await supabaseAdmin
+.from(tableName)
+.insert(chunk)
+
+if (error) {
+throw new Error(error.message)
+}
+
+inserted += chunk.length
+}
+
+return inserted
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  res.setHeader('Pragma', 'no-cache')
-  res.setHeader('Expires', '0')
+res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+res.setHeader('Pragma', 'no-cache')
+res.setHeader('Expires', '0')
 
-  try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+try {
+const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+if (!authUser) return
 
-    if (req.method !== 'POST') {
-      return res.status(405).json({
-        success: false,
-        message: 'Method not allowed'
-      })
-    }
+if (req.method !== 'POST') {
+return res.status(405).json({
+success: false,
+message: 'Method not allowed'
+})
+}
 
-    const { databaseName, name, type, contacts } = req.body || {}
+const body = req.body || {}
 
-    const cleanDatabaseName =
-      cleanText(databaseName || name) ||
-      `Import ${new Date().toLocaleString('id-ID')}`
+const databaseName = cleanText(
+body.databaseName ||
+body.database_name ||
+body.name ||
+body.title
+)
 
-    const databaseType = getDatabaseType(type)
+const type = cleanText(body.type || 'blast').toLowerCase()
+const contacts = Array.isArray(body.contacts)
+? body.contacts
+: Array.isArray(body.rows)
+? body.rows
+: []
 
-    if (!Array.isArray(contacts) || contacts.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'contacts kosong'
-      })
-    }
+if (!databaseName) {
+return res.status(400).json({
+success: false,
+message: 'Nama database wajib diisi.'
+})
+}
 
-    const maxImportContacts = Number(process.env.MAX_IMPORT_CONTACTS || 5000)
+if (type !== 'blast' && type !== 'reminder') {
+return res.status(400).json({
+success: false,
+message: 'Type harus blast atau reminder.'
+})
+}
 
-    if (contacts.length > maxImportContacts) {
-      return res.status(400).json({
-        success: false,
-        message: `Import ditolak. Maksimal ${maxImportContacts} kontak per upload. File ini berisi ${contacts.length} baris. Pecah file menjadi beberapa batch.`
-      })
-    }
+if (!contacts.length) {
+return res.status(400).json({
+success: false,
+message: 'Data kontak kosong.'
+})
+}
 
-    const validContacts = contacts
-      .map((contact) => normalizeContact(contact, databaseType))
-      .filter((contact) => {
-        if (!contact.phone) return false
-        if (!contact.message) return false
+if (contacts.length > MAX_IMPORT_CONTACTS) {
+return res.status(400).json({
+success: false,
+message: 'Maksimal import ' + MAX_IMPORT_CONTACTS + ' kontak.'
+})
+}
 
-        if (databaseType === 'reminder' && !contact.reminder_date) {
-          return false
-        }
+const { data: database, error: databaseError } = await supabaseAdmin
+.from('contact_databases')
+.insert({
+name: databaseName,
+type
+})
+.select('*')
+.single()
 
-        return true
-      })
+if (databaseError) {
+return res.status(500).json({
+success: false,
+message: databaseError.message
+})
+}
 
-    if (validContacts.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          databaseType === 'reminder'
-            ? 'Tidak ada kontak valid. Pastikan kolom name, phone, message, reminder_date terisi.'
-            : 'Tidak ada kontak valid. Pastikan kolom name, phone, message terisi.'
-      })
-    }
+if (!database || !database.id) {
+return res.status(500).json({
+success: false,
+message: 'Database berhasil dibuat tapi ID tidak ditemukan.'
+})
+}
 
-    const database = await createContactDatabase({
-      databaseName: cleanDatabaseName,
-      type: databaseType,
-      totalContacts: validContacts.length
-    })
+const normalizedContacts = contacts
+.map((row) => normalizeContact(row, type, database.id))
+.filter((row) => row.phone && row.message)
 
-    const now = new Date().toISOString()
+const skipped = contacts.length - normalizedContacts.length
 
-    const contactsToInsert = validContacts.map((contact) => ({
-      database_id: database.id,
-      name: contact.name || null,
-      phone: contact.phone,
-      message: contact.message,
-      reminder_date: contact.reminder_date || null,
-      attachment_url: contact.attachment_url || null,
-      attachment_type: contact.attachment_type || null,
-      attachment_filename: contact.attachment_filename || null,
-      attachment_caption: contact.attachment_caption || null,
-      created_at: now,
-      updated_at: now
-    }))
+if (!normalizedContacts.length) {
+return res.status(400).json({
+success: false,
+message: 'Tidak ada kontak valid. Pastikan kolom phone dan message terisi.'
+})
+}
 
-    const { error: contactsError } = await supabaseAdmin
-      .from('contacts')
-      .insert(contactsToInsert)
+const imported = await insertInChunks('contacts', normalizedContacts)
 
-    if (contactsError) {
-      await supabaseAdmin
-        .from('contact_databases')
-        .delete()
-        .eq('id', database.id)
+const withAttachment = normalizedContacts.filter((row) => row.attachment_url).length
 
-      return res.status(500).json({
-        success: false,
-        message: contactsError.message
-      })
-    }
-
-    return res.status(200).json({
-      success: true,
-      database,
-      total: contacts.length,
-      imported: contactsToInsert.length,
-      skipped: contacts.length - contactsToInsert.length,
-      with_attachment: contactsToInsert.filter((item) => item.attachment_url).length,
-      message: `Import berhasil: ${contactsToInsert.length} kontak`
-    })
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Import failed'
-    })
-  }
+return res.status(200).json({
+success: true,
+message: 'Import berhasil.',
+database,
+total: contacts.length,
+imported,
+skipped,
+with_attachment: withAttachment
+})
+} catch (error) {
+return res.status(500).json({
+success: false,
+message: error.message || 'Import gagal.'
+})
+}
 }
