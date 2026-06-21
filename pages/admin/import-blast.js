@@ -1,7 +1,22 @@
 ﻿
 
 import { useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import Sidebar from '../../components/Sidebar'
+
+const BUCKET_NAME = 'wa-attachments'
+const MAX_FILE_SIZE = 1 * 1024 * 1024
+
+function getSupabaseStorageClient() {
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+if (!url || !key) {
+throw new Error('NEXT_PUBLIC_SUPABASE_URL atau NEXT_PUBLIC_SUPABASE_ANON_KEY belum ada di environment.')
+}
+
+return createClient(url, key)
+}
 
 function parseCsv(text) {
 const rows = []
@@ -81,13 +96,115 @@ return String(value || '')
 .replace(/^'/, '')
 }
 
-function fileToBase64(file) {
-return new Promise((resolve, reject) => {
-const reader = new FileReader()
-reader.onload = () => resolve(reader.result)
-reader.onerror = reject
-reader.readAsDataURL(file)
+function cleanFileName(fileName) {
+const raw = String(fileName || 'attachment').trim()
+const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.() '
+
+let result = ''
+
+for (const char of raw) {
+if (allowed.includes(char)) {
+result += char
+} else {
+result += '_'
+}
+}
+
+while (result.includes(' ')) {
+result = result.split(' ').join(' ')
+}
+
+while (result.includes('')) {
+result = result.split('').join('_')
+}
+
+result = result.trim().split(' ').join('_').slice(0, 120)
+
+return result || 'attachment'
+}
+
+function makeId() {
+if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
+return window.crypto.randomUUID()
+}
+
+return String(Date.now()) + '-' + String(Math.random()).slice(2)
+}
+
+function getFolderName() {
+const date = new Date()
+
+return (
+date.getFullYear() +
+'-' +
+String(date.getMonth() + 1).padStart(2, '0') +
+'-' +
+String(date.getDate()).padStart(2, '0')
+)
+}
+
+function getAttachmentType(mimeType) {
+if (String(mimeType || '').startsWith('image/')) {
+return 'image'
+}
+
+return 'document'
+}
+
+function validateMimeType(mimeType) {
+const allowed = [
+'image/jpeg',
+'image/png',
+'image/webp',
+'application/pdf',
+'application/msword',
+'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+'application/vnd.ms-excel',
+'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+]
+
+return allowed.includes(String(mimeType || '').toLowerCase())
+}
+
+async function uploadAttachmentDirect(file) {
+const mimeType = String(file.type || '').trim().toLowerCase()
+
+if (!validateMimeType(mimeType)) {
+throw new Error('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
+}
+
+if (file.size > MAX_FILE_SIZE) {
+throw new Error('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.')
+}
+
+const supabase = getSupabaseStorageClient()
+const cleanName = cleanFileName(file.name)
+const path = getFolderName() + '/' + makeId() + '-' + cleanName
+
+const { error } = await supabase.storage
+.from(BUCKET_NAME)
+.upload(path, file, {
+contentType: mimeType,
+upsert: false
 })
+
+if (error) {
+throw new Error(error.message || 'Upload ke Supabase Storage gagal.')
+}
+
+const { data } = supabase.storage
+.from(BUCKET_NAME)
+.getPublicUrl(path)
+
+if (!data || !data.publicUrl) {
+throw new Error('Public URL attachment gagal dibuat.')
+}
+
+return {
+attachment_url: data.publicUrl,
+attachment_type: getAttachmentType(mimeType),
+attachment_filename: cleanName
+}
 }
 
 async function readApiResponse(response) {
@@ -100,22 +217,8 @@ return {
 success: false,
 message:
 text ||
-'Server mengembalikan response non-JSON. Kemungkinan file terlalu besar atau upload gagal di server.'
+'Server mengembalikan response non-JSON.'
 }
-}
-}
-
-async function fetchWithTimeout(url, options, timeoutMs) {
-const controller = new AbortController()
-const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-try {
-return await fetch(url, {
-...options,
-signal: controller.signal
-})
-} finally {
-clearTimeout(timer)
 }
 }
 
@@ -257,55 +360,16 @@ setError('')
 
 if (!file) return
 
-if (file.size > 1 * 1024 * 1024) {
-setGlobalAttachment(null)
-setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.')
-e.target.value = ''
-return
-}
-
 setUploadingAttachment(true)
 
 try {
-const base64 = await fileToBase64(file)
+const uploaded = await uploadAttachmentDirect(file)
 
-const response = await fetchWithTimeout(
-'/api/attachments/upload',
-{
-method: 'POST',
-headers: {
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-fileName: file.name,
-mimeType: file.type,
-base64
-})
-},
-20000
-)
-
-const data = await readApiResponse(response)
-
-if (!response.ok || !data.success) {
-throw new Error(data.message || 'Upload attachment gagal')
-}
-
-setGlobalAttachment({
-attachment_url: data.attachment_url,
-attachment_type: data.attachment_type,
-attachment_filename: data.attachment_filename
-})
-
-setMessage('Attachment berhasil di-upload: ' + data.attachment_filename)
+setGlobalAttachment(uploaded)
+setMessage('Attachment berhasil di-upload: ' + uploaded.attachment_filename)
 } catch (err) {
 setGlobalAttachment(null)
-
-if (err.name === 'AbortError') {
-setError('Upload terlalu lama. Coba ulangi. Kalau masih gagal, cek bucket wa-attachments di Supabase.')
-} else {
-setError(err.message || 'Upload attachment gagal')
-}
+setError(err.message || 'Upload attachment gagal.')
 } finally {
 setUploadingAttachment(false)
 e.target.value = ''
@@ -496,9 +560,6 @@ name, phone, message, attachment_url, attachment_type, attachment_filename, atta
 </code>
 <p className="mt-2 text-xs">
 Kolom attachment boleh kosong kalau memakai tombol Attach File.
-</p>
-<p className="mt-1 text-xs">
-Kalau setiap kontak punya file berbeda, gunakan template dengan attachment dan isi attachment_url per baris.
 </p>
 </div>
 
