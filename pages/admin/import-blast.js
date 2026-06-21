@@ -183,6 +183,10 @@ const { data } = supabase.storage
 .from(BUCKET_NAME)
 .getPublicUrl(path)
 
+if (!data || !data.publicUrl) {
+throw new Error('Public URL attachment gagal dibuat.')
+}
+
 return {
 attachment_url: data.publicUrl,
 attachment_type: getAttachmentType(mimeType),
@@ -200,6 +204,20 @@ return {
 success: false,
 message: text || 'Server mengembalikan response non-JSON.'
 }
+}
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+const controller = new AbortController()
+const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+try {
+return await fetch(url, {
+...options,
+signal: controller.signal
+})
+} finally {
+clearTimeout(timer)
 }
 }
 
@@ -357,13 +375,21 @@ e.target.value = ''
 async function handleImport(e) {
 e.preventDefault()
 
+if (loading) return
+
 setLoading(true)
+setUploadingAttachment(false)
 setMessage('')
 setError('')
 
 try {
-if (!databaseName.trim()) throw new Error('Nama database wajib diisi')
-if (rows.length === 0) throw new Error('File CSV belum dipilih atau kosong')
+if (!databaseName.trim()) {
+throw new Error('Nama database wajib diisi')
+}
+
+if (rows.length === 0) {
+throw new Error('File CSV belum dipilih atau kosong')
+}
 
 let uploadedAttachment = null
 
@@ -372,11 +398,14 @@ setUploadingAttachment(true)
 setMessage('Mengupload attachment...')
 uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
 setUploadingAttachment(false)
+setMessage('Attachment berhasil di-upload. Melanjutkan import kontak...')
 }
 
 const finalRows = applyAttachment(uploadedAttachment)
 
-const response = await fetch('/api/contacts/import', {
+const response = await fetchWithTimeout(
+'/api/contacts/import',
+{
 method: 'POST',
 headers: {
 'Content-Type': 'application/json'
@@ -386,7 +415,9 @@ databaseName: databaseName.trim(),
 type: 'blast',
 contacts: finalRows
 })
-})
+},
+25000
+)
 
 const data = await readApiResponse(response)
 
@@ -406,7 +437,11 @@ setRows([])
 setFileName('')
 setSelectedAttachmentFile(null)
 } catch (err) {
+if (err.name === 'AbortError') {
+setError('Import terlalu lama dan dihentikan otomatis. Cek apakah data sebagian sudah masuk di Database Manager, lalu coba ulangi jika belum masuk.')
+} else {
 setError(err.message || 'Import blast gagal')
+}
 } finally {
 setUploadingAttachment(false)
 setLoading(false)
@@ -434,7 +469,8 @@ Upload CSV berisi kontak untuk WhatsApp Blast.
 <button
 type="button"
 onClick={downloadBlastTemplateWithoutAttachment}
-className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+disabled={loading}
+className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
 >
 Download Template Tanpa Attachment
 </button>
@@ -442,7 +478,8 @@ Download Template Tanpa Attachment
 <button
 type="button"
 onClick={downloadBlastTemplateWithAttachment}
-className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700"
+disabled={loading}
+className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
 >
 Download Template Dengan Attachment
 </button>
@@ -461,8 +498,9 @@ Nama Database
 <input
 value={databaseName}
 onChange={(e) => setDatabaseName(e.target.value)}
+disabled={loading}
 placeholder="Contoh: Blast Promo MCU Juni"
-className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
 </div>
 
@@ -474,7 +512,8 @@ File CSV
 type="file"
 accept=".csv,text/csv"
 onChange={handleFileChange}
-className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600"
+disabled={loading}
+className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
 />
 {fileName ? (
 <p className="mt-2 text-xs text-slate-500">
