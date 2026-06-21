@@ -1,6 +1,10 @@
 ﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import { sendWhatsAppMessage, normalizeAttachment } from '../../../lib/whatsappSender'
+import {
+  sendWhatsAppText,
+  sendWhatsAppMedia,
+  normalizeAttachment
+} from '../../../lib/whatsappSender'
 
 function getSecret(req) {
   return (
@@ -29,13 +33,9 @@ async function authorize(req, res) {
 }
 
 async function getContactAttachmentFallback(item, job) {
-  if (item.attachment_url) {
-    return item
-  }
+  if (item.attachment_url) return item
 
-  if (!job?.database_id || !item.phone) {
-    return item
-  }
+  if (!job?.database_id || !item.phone) return item
 
   const { data } = await supabaseAdmin
     .from('contacts')
@@ -44,9 +44,7 @@ async function getContactAttachmentFallback(item, job) {
     .eq('phone', item.phone)
     .maybeSingle()
 
-  if (!data?.attachment_url) {
-    return item
-  }
+  if (!data?.attachment_url) return item
 
   return {
     ...item,
@@ -55,6 +53,26 @@ async function getContactAttachmentFallback(item, job) {
     attachment_filename: data.attachment_filename,
     attachment_caption: data.attachment_caption
   }
+}
+
+async function sendItem(item) {
+  const attachment = normalizeAttachment(item)
+
+  if (attachment.hasAttachment) {
+    return sendWhatsAppMedia({
+      phone: item.phone,
+      message: item.message,
+      attachment_url: attachment.attachment_url,
+      attachment_type: attachment.attachment_type,
+      attachment_filename: attachment.attachment_filename,
+      attachment_caption: attachment.attachment_caption
+    })
+  }
+
+  return sendWhatsAppText({
+    phone: item.phone,
+    message: item.message
+  })
 }
 
 async function writeLog({ job, item, status, errorMessage, metaMessageId }) {
@@ -75,9 +93,9 @@ async function writeLog({ job, item, status, errorMessage, metaMessageId }) {
     created_at: new Date().toISOString()
   }
 
-  const type = String(job.type || '').toLowerCase()
+  const jobType = String(job.type || '').toLowerCase()
 
-  if (type === 'reminder') {
+  if (jobType === 'reminder') {
     await supabaseAdmin.from('reminder_logs').insert(payload)
   } else {
     await supabaseAdmin.from('blast_logs').insert(payload)
@@ -135,7 +153,7 @@ export default async function handler(req, res) {
       })
       .eq('id', job.id)
 
-    const { data: items, error: itemsError } = await supabaseAdmin
+    const { data: rawItems, error: itemsError } = await supabaseAdmin
       .from('send_job_items')
       .select('*')
       .eq('job_id', job.id)
@@ -150,7 +168,7 @@ export default async function handler(req, res) {
       })
     }
 
-    if (!items || items.length === 0) {
+    if (!rawItems || rawItems.length === 0) {
       await supabaseAdmin
         .from('send_jobs')
         .update({
@@ -172,7 +190,7 @@ export default async function handler(req, res) {
     let failed = 0
     const results = []
 
-    for (const rawItem of items) {
+    for (const rawItem of rawItems) {
       const item = await getContactAttachmentFallback(rawItem, job)
       const attachment = normalizeAttachment(item)
 
@@ -185,21 +203,21 @@ export default async function handler(req, res) {
         .eq('id', item.id)
 
       try {
-        const sendResult = await sendWhatsAppMessage({
-          phone: item.phone,
-          message: item.message,
+        const result = await sendItem({
+          ...item,
           attachment_url: attachment.attachment_url,
           attachment_type: attachment.attachment_type,
           attachment_filename: attachment.attachment_filename,
           attachment_caption: attachment.attachment_caption
         })
 
-        const metaMessageId = sendResult?.messages?.[0]?.id || null
+        const metaMessageId = result?.messages?.[0]?.id || null
 
         await supabaseAdmin
           .from('send_job_items')
           .update({
             status: 'sent',
+            error_message: null,
             processed_at: new Date().toISOString(),
             meta_message_id: metaMessageId,
             attachment_url: attachment.attachment_url || null,
@@ -225,11 +243,14 @@ export default async function handler(req, res) {
         })
 
         sent += 1
+
         results.push({
           item_id: item.id,
           phone: item.phone,
           status: 'sent',
-          attachment: Boolean(attachment.attachment_url),
+          mode: attachment.hasAttachment ? 'media' : 'text',
+          attachment_url: attachment.attachment_url || null,
+          uploaded_media_id: result?.uploaded_media_id || null,
           meta_message_id: metaMessageId
         })
       } catch (err) {
@@ -262,11 +283,13 @@ export default async function handler(req, res) {
         })
 
         failed += 1
+
         results.push({
           item_id: item.id,
           phone: item.phone,
           status: 'failed',
-          attachment: Boolean(attachment.attachment_url),
+          mode: attachment.hasAttachment ? 'media' : 'text',
+          attachment_url: attachment.attachment_url || null,
           error: err.message
         })
       }
@@ -292,7 +315,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       job_id: job.id,
-      processed: items.length,
+      processed: rawItems.length,
       sent,
       failed,
       remaining: remaining || 0,
