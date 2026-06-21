@@ -17,6 +17,7 @@ export default function InboxPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [lastUpdated, setLastUpdated] = useState(null)
+  const [mobileView, setMobileView] = useState('list')
 
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
@@ -150,6 +151,10 @@ export default function InboxPage() {
       setSelectedConversation(nextSelected)
       selectedPhoneRef.current = nextSelected.phone
 
+      if (queryPhone) {
+        setMobileView('chat')
+      }
+
       await loadMessages(nextSelected.phone, true)
     } catch (err) {
       setError(err.message || 'Gagal memuat inbox')
@@ -161,6 +166,7 @@ export default function InboxPage() {
   async function selectConversation(conversation) {
     setSelectedConversation(conversation)
     selectedPhoneRef.current = conversation.phone
+    setMobileView('chat')
     await loadMessages(conversation.phone)
   }
 
@@ -205,6 +211,7 @@ export default function InboxPage() {
 
     if (router.query.phone && typeof router.query.phone === 'string') {
       selectedPhoneRef.current = router.query.phone
+      setMobileView('chat')
     }
 
     loadConversations()
@@ -222,58 +229,62 @@ export default function InboxPage() {
   }, [router.isReady, router.query.phone])
 
   return (
-    <div className="min-h-screen bg-slate-100 md:flex">
+    <div className="min-h-[100dvh] bg-slate-100 md:flex">
       <Sidebar />
 
-      <main className="flex-1 p-4 md:p-6">
-        <div className="mx-auto flex h-[calc(100vh-48px)] max-w-7xl flex-col">
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <main className="flex-1">
+        <div className="mx-auto flex h-[100dvh] max-w-7xl flex-col p-3 md:h-[calc(100vh-48px)] md:p-6">
+          <div className="mb-3 flex shrink-0 flex-col gap-3 md:mb-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Inbox</h1>
-              <p className="text-sm text-slate-500">
-                Lihat balasan WhatsApp dari customer dan balas langsung dari aplikasi.
+              <h1 className="text-xl font-bold text-slate-900 md:text-2xl">Inbox</h1>
+              <p className="text-xs text-slate-500 md:text-sm">
+                Lihat dan balas pesan WhatsApp customer.
               </p>
-              <p className="mt-1 text-xs text-slate-400">
-                Live auto-refresh setiap 5 detik
+              <p className="mt-1 text-[11px] text-slate-400 md:text-xs">
+                Auto-refresh 5 detik
                 {lastUpdated
-                  ? ` • Update terakhir: ${lastUpdated.toLocaleTimeString('id-ID')}`
+                  ? ` • ${lastUpdated.toLocaleTimeString('id-ID')}`
                   : ''}
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-3 gap-2 md:flex md:flex-wrap">
               <button
                 onClick={() => exportInboxContacts('24h')}
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-700"
+                className="rounded-xl bg-green-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-green-700 md:px-4 md:text-sm"
               >
-                Export 24 Jam
+                Export 24J
               </button>
 
               <button
                 onClick={() => exportInboxContacts('all')}
-                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 md:px-4 md:text-sm"
               >
-                Export Semua
+                Export All
               </button>
 
               <button
                 onClick={() => loadConversations(false)}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700"
+                className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 md:px-4 md:text-sm"
               >
-                Refresh Inbox
+                Refresh
               </button>
             </div>
           </div>
 
           {error ? (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="mb-3 shrink-0 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700 md:mb-4 md:p-4 md:text-sm">
               {error}
             </div>
           ) : null}
 
-          <div className="grid flex-1 min-h-0 grid-cols-1 gap-4 lg:grid-cols-12">
-            <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-4">
-              <div className="border-b border-slate-200 p-4">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-12 lg:gap-4">
+            <section
+              className={`min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-4 lg:flex ${
+                mobileView === 'chat' ? 'hidden lg:flex' : 'flex'
+              }`}
+            >
+              <div className="shrink-0 border-b border-slate-200 p-3 md:p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="font-semibold text-slate-900">Conversations</h2>
@@ -290,12 +301,12 @@ export default function InboxPage() {
                   </span>
                 </div>
 
-                <div className="mt-4 flex gap-2">
+                <div className="mt-3 flex gap-2">
                   <input
                     type="text"
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
-                    placeholder="Search nama, nomor, atau pesan..."
+                    placeholder="Cari nama, nomor, pesan..."
                     className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
                   />
 
@@ -319,7 +330,7 @@ export default function InboxPage() {
                   </div>
                 ) : filteredConversations.length === 0 ? (
                   <div className="p-4 text-sm text-slate-500">
-                    Tidak ada conversation yang cocok dengan pencarian.
+                    Tidak ada conversation yang cocok.
                   </div>
                 ) : (
                   filteredConversations.map((item) => {
@@ -367,19 +378,35 @@ export default function InboxPage() {
               </div>
             </section>
 
-            <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-8">
-              <div className="border-b border-slate-200 p-4">
-                <h2 className="font-semibold text-slate-900">
-                  {selectedConversation
-                    ? selectedConversation.profile_name || selectedConversation.phone
-                    : 'Detail Pesan'}
-                </h2>
-                <p className="text-xs text-slate-500">
-                  {selectedConversation ? selectedConversation.phone : 'Pilih conversation'}
-                </p>
+            <section
+              className={`min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-8 lg:flex ${
+                mobileView === 'list' ? 'hidden lg:flex' : 'flex'
+              }`}
+            >
+              <div className="shrink-0 border-b border-slate-200 bg-white p-3 md:p-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setMobileView('list')}
+                    className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 lg:hidden"
+                  >
+                    ← Back
+                  </button>
+
+                  <div className="min-w-0">
+                    <h2 className="truncate font-semibold text-slate-900">
+                      {selectedConversation
+                        ? selectedConversation.profile_name || selectedConversation.phone
+                        : 'Detail Pesan'}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {selectedConversation ? selectedConversation.phone : 'Pilih conversation'}
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-3 md:p-4">
                 {!selectedConversation ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-500">
                     Pilih conversation.
@@ -400,13 +427,13 @@ export default function InboxPage() {
                         className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}
                       >
                         <div
-                          className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                          className={`max-w-[86%] rounded-2xl px-4 py-3 text-sm shadow-sm md:max-w-[78%] ${
                             outgoing
                               ? 'bg-green-600 text-white'
                               : 'bg-white text-slate-900'
                           }`}
                         >
-                          <div className="whitespace-pre-wrap">
+                          <div className="whitespace-pre-wrap break-words">
                             {msg.message || '-'}
                           </div>
 
@@ -434,12 +461,12 @@ export default function InboxPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <form onSubmit={sendReply} className="border-t border-slate-200 bg-white p-4">
+              <form onSubmit={sendReply} className="shrink-0 border-t border-slate-200 bg-white p-3 md:p-4">
                 {selectedConversation ? (
                   <div className="mb-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Quick Reply Template
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 md:text-xs">
+                        Quick Reply
                       </p>
 
                       <div className="flex items-center gap-3">
@@ -447,7 +474,7 @@ export default function InboxPage() {
                           href="/quick-replies"
                           className="text-xs font-semibold text-blue-600 hover:text-blue-700"
                         >
-                          Kelola Template
+                          Kelola
                         </Link>
 
                         {replyText ? (
@@ -456,7 +483,7 @@ export default function InboxPage() {
                             onClick={() => setReplyText('')}
                             className="text-xs font-semibold text-red-600 hover:text-red-700"
                           >
-                            Clear Text
+                            Clear
                           </button>
                         ) : null}
                       </div>
@@ -464,23 +491,16 @@ export default function InboxPage() {
 
                     {quickReplyTemplates.length === 0 ? (
                       <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
-                        Belum ada template aktif. Buka{' '}
-                        <Link
-                          href="/quick-replies"
-                          className="font-semibold text-blue-600 hover:text-blue-700"
-                        >
-                          Kelola Template
-                        </Link>{' '}
-                        untuk menambahkan quick reply.
+                        Belum ada template aktif.
                       </div>
                     ) : (
-                      <div className="flex flex-wrap gap-2">
+                      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
                         {quickReplyTemplates.map((template) => (
                           <button
                             key={template.id || template.template_key}
                             type="button"
                             onClick={() => applyQuickReply(template.answer)}
-                            className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                            className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
                             title={template.question || template.answer || ''}
                           >
                             {template.label}
@@ -491,26 +511,26 @@ export default function InboxPage() {
                   </div>
                 ) : null}
 
-                <div className="flex gap-2">
+                <div className="flex items-end gap-2">
                   <textarea
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
-                    placeholder="Tulis balasan WhatsApp..."
-                    rows={3}
+                    placeholder="Tulis balasan..."
+                    rows={2}
                     disabled={!selectedConversation || sending}
-                    className="flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100"
+                    className="max-h-32 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100 md:rows-3"
                   />
 
                   <button
                     type="submit"
                     disabled={!selectedConversation || !replyText.trim() || sending}
-                    className="rounded-xl bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    className="rounded-xl bg-green-600 px-4 py-3 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300 md:px-5"
                   >
-                    {sending ? 'Sending...' : 'Send'}
+                    {sending ? '...' : 'Send'}
                   </button>
                 </div>
 
-                <p className="mt-2 text-xs text-slate-400">
+                <p className="mt-2 hidden text-xs text-slate-400 md:block">
                   Klik template hanya mengisi kotak balasan. Pesan tetap belum dikirim sampai tombol Send diklik.
                 </p>
               </form>
