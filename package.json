@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "wa-reminder-blast",
   "version": "1.0.0",
   "private": true,
-  "description": "WA Reminder & Blast",
+  "description": "WhatsApp Blast & Reminder",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -24,3 +24,4 @@
     "tailwindcss": "^4.0.0"
   }
 }
+

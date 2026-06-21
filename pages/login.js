@@ -64,7 +64,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
       <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <div className="rounded-3xl bg-gradient-to-br from-indigo-600 to-sky-500 p-5 text-white">
-          <p className="text-sm font-medium opacity-90">Harmony Health</p>
+          <p className="text-sm font-medium opacity-90">Notiva</p>
           <h1 className="mt-1 text-2xl font-bold">Login</h1>
         </div>
 

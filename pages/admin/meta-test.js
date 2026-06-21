@@ -3,7 +3,7 @@ import AppLayout from '../../components/AppLayout'
 
 export default function MetaTestPage() {
   const [phone, setPhone] = useState('')
-  const [message, setMessage] = useState('Halo, ini test pesan dari sistem WA Reminder & Blast.')
+  const [message, setMessage] = useState('Halo, ini test pesan dari sistem Notiva.')
   const [templateName, setTemplateName] = useState('')
   const [languageCode, setLanguageCode] = useState('id')
   const [variablesText, setVariablesText] = useState('')
@@ -142,3 +142,4 @@ export default function MetaTestPage() {
     </AppLayout>
   )
 }
+

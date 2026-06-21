@@ -1,4 +1,4 @@
-New-Item -ItemType Directory -Force -Path "lib" | Out-Null
+﻿New-Item -ItemType Directory -Force -Path "lib" | Out-Null
 New-Item -ItemType Directory -Force -Path "pages\api\meta" | Out-Null
 New-Item -ItemType Directory -Force -Path "pages\admin" | Out-Null
 
@@ -194,7 +194,7 @@ import AppLayout from '../../components/AppLayout'
 
 export default function MetaTestPage() {
   const [phone, setPhone] = useState('')
-  const [message, setMessage] = useState('Halo, ini test pesan dari sistem WA Reminder & Blast.')
+  const [message, setMessage] = useState('Halo, ini test pesan dari sistem WhatsApp Blast & Reminder.')
   const [templateName, setTemplateName] = useState('')
   const [languageCode, setLanguageCode] = useState('id')
   const [variablesText, setVariablesText] = useState('')

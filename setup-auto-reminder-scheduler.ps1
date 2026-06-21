@@ -1,4 +1,4 @@
-New-Item -ItemType Directory -Force -Path "pages\api\scheduler" | Out-Null
+﻿New-Item -ItemType Directory -Force -Path "pages\api\scheduler" | Out-Null
 New-Item -ItemType Directory -Force -Path "pages\admin" | Out-Null
 
 @'
@@ -309,9 +309,9 @@ export default function Sidebar({ user }) {
   return (
     <aside className="hidden min-h-screen w-72 shrink-0 border-r border-slate-200 bg-white px-5 py-6 lg:block">
       <div className="rounded-3xl bg-gradient-to-br from-indigo-600 to-sky-500 p-5 text-white shadow-lg shadow-indigo-100">
-        <p className="text-sm font-medium opacity-90">Harmony Health</p>
+        <p className="text-sm font-medium opacity-90">Notiva</p>
         <h1 className="mt-1 text-2xl font-bold leading-tight">
-          WA Reminder & Blast
+          WhatsApp Blast & Reminder
         </h1>
       </div>
 

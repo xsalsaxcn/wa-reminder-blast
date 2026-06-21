@@ -1,253 +1,450 @@
-import { useEffect, useState } from 'react'
+
+
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 
-const navItems = [
-  { href: '/', label: 'Home', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/dashboard', label: 'Dashboard', roles: ['master', 'admin', 'user', 'agent'] },
+const LOGO_URL = 'https://cdn.phototourl.com/free/2026-06-21-c4d82306-6ffd-4d1e-badb-95ea9484d1b9.jpg'
 
-  { href: '/inbox', label: 'Inbox', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/quick-replies', label: 'Quick Replies', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/analysis', label: 'Reply Analysis', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/usage', label: 'Usage Log', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/blacklist', label: 'Blacklist', roles: ['master', 'admin', 'user', 'agent'] },
-
-  { href: '/reminder', label: 'Reminder', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/blast', label: 'WhatsApp Blast', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/admin/import-reminder', label: 'Import Reminder', roles: ['master', 'admin', 'agent'] },
-  { href: '/admin/import-blast', label: 'Import Blast', roles: ['master', 'admin', 'agent'] },
-  { href: '/jobs', label: 'Job Queue', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/job-performance', label: 'Job Performance', roles: ['master', 'admin', 'user', 'agent'] },
-  { href: '/logs', label: 'Logs', roles: ['master', 'admin', 'user', 'agent'] },
-
-  { href: '/admin/database-manager', label: 'Database Manager', roles: ['master', 'admin'] },
-  { href: '/admin/auto-worker', label: 'Auto Worker', roles: ['master', 'admin'] },
-  { href: '/admin/meta-test', label: 'Meta API Test', roles: ['master', 'admin'] },
-  { href: '/admin/waba-profile', label: 'WABA Profile', roles: ['master', 'admin'] },
-  { href: '/admin/whatsapp-settings', label: 'WhatsApp Settings', roles: ['master', 'admin'] },
-  { href: '/admin/manage-users', label: 'Manage Users', roles: ['master', 'admin'] },
-  { href: '/admin/reset-db', label: 'Reset DB', roles: ['master'] }
+const OPERATIONAL_MENUS = [
+{
+label: 'Home',
+href: '/',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Dashboard',
+href: '/dashboard',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Inbox',
+href: '/inbox',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Quick Replies',
+href: '/quick-replies',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Reply Analysis',
+href: '/analysis',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Usage Log',
+href: '/usage',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Blacklist',
+href: '/blacklist',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Reminder',
+href: '/reminder',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'WhatsApp Blast',
+href: '/blast',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Import Reminder',
+href: '/admin/import-reminder',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Import Blast',
+href: '/admin/import-blast',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Job Queue',
+href: '/jobs',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Job Performance',
+href: '/job-performance',
+roles: ['master', 'admin', 'user', 'agent']
+},
+{
+label: 'Logs',
+href: '/logs',
+roles: ['master', 'admin', 'user', 'agent']
+}
 ]
 
-export default function Sidebar({ user }) {
-  const router = useRouter()
-  const [loadedUser, setLoadedUser] = useState(user || null)
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const [hideMobileButton, setHideMobileButton] = useState(false)
+const ADMIN_MENUS = [
+{
+label: 'Database Manager',
+href: '/admin/database-manager',
+roles: ['master', 'admin']
+},
+{
+label: 'Auto Worker',
+href: '/admin/auto-worker',
+roles: ['master', 'admin']
+},
+{
+label: 'Meta API Test',
+href: '/admin/meta-test',
+roles: ['master', 'admin']
+},
+{
+label: 'WABA Profile',
+href: '/admin/waba-profile',
+roles: ['master', 'admin']
+},
+{
+label: 'WhatsApp Settings',
+href: '/admin/whatsapp-settings',
+roles: ['master', 'admin']
+},
+{
+label: 'Manage Users',
+href: '/admin/manage-users',
+roles: ['master', 'admin']
+},
+{
+label: 'Reset DB',
+href: '/admin/reset-db',
+roles: ['master']
+}
+]
 
-  const role = user?.role || loadedUser?.role || 'user'
-  const username = user?.username || loadedUser?.username || 'User'
+function normalizeRole(value) {
+return String(value || 'master').trim().toLowerCase()
+}
 
-  const visibleItems = navItems.filter((item) => item.roles.includes(role))
+function getStoredUser() {
+if (typeof window === 'undefined') {
+return null
+}
 
-  async function loadMe() {
-    if (user?.role) return
+const keys = [
+'authUser',
+'user',
+'currentUser',
+'notivaUser',
+'waUser',
+'loggedInUser'
+]
 
-    try {
-      const response = await fetch('/api/auth/me?t=' + Date.now(), {
-        cache: 'no-store'
-      })
+for (const key of keys) {
+try {
+const value = window.localStorage.getItem(key)
 
-      const data = await response.json()
+if (!value) continue
 
-      if (response.ok && data.success) {
-        setLoadedUser(data.user)
-      }
-    } catch (err) {
-      console.error('Failed to load sidebar user:', err)
-    }
-  }
+const parsed = JSON.parse(value)
 
-  function isActive(item) {
-    if (item.href === '/') {
-      return router.pathname === '/'
-    }
+if (parsed) return parsed
+} catch (err) {
+// ignore invalid localStorage value
+}
+}
 
-    return router.pathname === item.href || router.pathname.startsWith(item.href + '/')
-  }
+return null
+}
 
-  useEffect(() => {
-    loadMe()
-  }, [user?.role])
+function getUserName(user) {
+return (
+user?.name ||
+user?.username ||
+user?.email ||
+user?.full_name ||
+user?.user_name ||
+'masteradmin'
+)
+}
 
-  useEffect(() => {
-    setMobileOpen(false)
-  }, [router.pathname])
+function getUserRole(user) {
+return normalizeRole(
+user?.role ||
+user?.user_role ||
+user?.account_role ||
+'master'
+)
+}
 
-  useEffect(() => {
-    let lastScrollY = window.scrollY
-    let timer = null
+function isActivePath(pathname, href) {
+if (href === '/') {
+return pathname === '/'
+}
 
-    function handleScroll() {
-      const current = window.scrollY
-      const scrollingDown = current > lastScrollY + 8
+return pathname === href || pathname.startsWith(href + '/')
+}
 
-      if (scrollingDown) {
-        setHideMobileButton(true)
+function MenuLink({ item, pathname, onClick }) {
+const active = isActivePath(pathname, item.href)
 
-        if (timer) clearTimeout(timer)
-        timer = setTimeout(() => setHideMobileButton(false), 1200)
-      }
+return (
+<Link href={item.href} legacyBehavior>
+<a
+onClick={onClick}
+className={
+active
+? 'flex items-center justify-between rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-sm'
+: 'flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+}
+>
+<span>{item.label}</span>
+{active ? (
+<span className="h-2 w-2 rounded-full bg-cyan-300" />
+) : null}
+</a>
+</Link>
+)
+}
 
-      lastScrollY = current
-    }
+function BrandBlock() {
+return (
+<div className="mb-5 overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+<div className="bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-700 p-4">
+<div className="rounded-3xl bg-white p-3 shadow-sm">
+<img
+src={LOGO_URL}
+alt="Notiva Logo"
+className="h-24 w-full rounded-2xl object-contain"
+/>
+</div>
 
-    function handleFocusIn(event) {
-      const tag = event.target?.tagName?.toLowerCase()
-      if (['input', 'textarea', 'select'].includes(tag)) {
-        setHideMobileButton(true)
-      }
-    }
+<div className="mt-4">
+<p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-100">
+Notiva
+</p>
+<h1 className="mt-1 text-2xl font-black leading-tight text-white">
+WA Automation
+</h1>
+<p className="mt-1 text-xs font-medium text-cyan-50">
+Blast · Reminder · Inbox
+</p>
+</div>
+</div>
+</div>
+)
+}
 
-    function handleFocusOut() {
-      setTimeout(() => setHideMobileButton(false), 250)
-    }
+function UserCard({ userName, role }) {
+return (
+<div className="mb-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+<p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+Logged in as
+</p>
+<p className="mt-2 truncate text-sm font-extrabold text-slate-900">
+{userName}
+</p>
+<p className="mt-1 text-xs font-bold text-indigo-600">
+{role}
+</p>
+</div>
+)
+}
 
-    window.addEventListener('scroll', handleScroll, { passive: true })
-    document.addEventListener('focusin', handleFocusIn)
-    document.addEventListener('focusout', handleFocusOut)
+export default function Sidebar() {
+const router = useRouter()
+const [open, setOpen] = useState(false)
+const [user, setUser] = useState(null)
+const [loadingUser, setLoadingUser] = useState(true)
 
-    return () => {
-      window.removeEventListener('scroll', handleScroll)
-      document.removeEventListener('focusin', handleFocusIn)
-      document.removeEventListener('focusout', handleFocusOut)
-      if (timer) clearTimeout(timer)
-    }
-  }, [])
+useEffect(() => {
+let mounted = true
 
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setMobileOpen(true)}
-        className={`fixed bottom-5 left-4 z-50 inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-xl shadow-slate-300 transition-all duration-300 lg:hidden ${
-          hideMobileButton
-            ? '-translate-x-[120%] opacity-0 pointer-events-none'
-            : 'translate-x-0 opacity-100'
-        }`}
-      >
-        <span className="text-lg leading-none">☰</span>
-        Menu
-      </button>
+async function loadUser() {
+try {
+const endpoints = [
+'/api/auth/me',
+'/api/me',
+'/api/user/me'
+]
 
-      {mobileOpen ? (
-        <div className="fixed inset-0 z-[80] lg:hidden">
-          <button
-            type="button"
-            aria-label="Close menu"
-            onClick={() => setMobileOpen(false)}
-            className="absolute inset-0 bg-slate-900/45"
-          />
+for (const endpoint of endpoints) {
+try {
+const response = await fetch(endpoint, {
+method: 'GET',
+cache: 'no-store'
+})
 
-          <aside className="absolute left-0 top-0 flex h-full w-[82vw] max-w-xs flex-col bg-white shadow-2xl">
-            <div className="shrink-0 border-b border-slate-100 p-4">
-              <div className="rounded-3xl bg-gradient-to-br from-indigo-600 to-sky-500 p-5 text-white shadow-lg shadow-indigo-100">
-                <p className="text-sm font-medium opacity-90">Harmony Health</p>
-                <h1 className="mt-1 text-2xl font-bold leading-tight">
-                  WA Reminder & Blast
-                </h1>
-              </div>
+if (!response.ok) continue
 
-              <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Logged in as
-                </p>
+const data = await response.json()
+const foundUser = data.user || data.data || data.authUser || data
 
-                <p className="mt-1 text-sm font-bold text-slate-800">
-                  {username}
-                </p>
+if (foundUser && mounted) {
+setUser(foundUser)
+setLoadingUser(false)
+return
+}
+} catch (err) {
+// try next endpoint
+}
+}
 
-                <p className="text-xs font-semibold text-indigo-600">
-                  {role}
-                </p>
-              </div>
-            </div>
+const storedUser = getStoredUser()
 
-            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4 pb-28">
-              {visibleItems.map((item) => {
-                const active = isActive(item)
+if (mounted) {
+setUser(storedUser || { name: 'masteradmin', role: 'master' })
+setLoadingUser(false)
+}
+} catch (err) {
+if (mounted) {
+setUser({ name: 'masteradmin', role: 'master' })
+setLoadingUser(false)
+}
+}
+}
 
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={
-                      active
-                        ? 'block rounded-2xl bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700'
-                        : 'block rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }
-                  >
-                    {item.label}
-                  </Link>
-                )
-              })}
-            </nav>
+loadUser()
 
-            <div className="shrink-0 border-t border-slate-100 p-4">
-              <button
-                type="button"
-                onClick={() => setMobileOpen(false)}
-                className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
-              >
-                Tutup Menu
-              </button>
-            </div>
-          </aside>
-        </div>
-      ) : null}
+return () => {
+mounted = false
+}
+}, [])
 
-      <aside className="hidden min-h-screen w-72 shrink-0 border-r border-slate-200 bg-white px-5 py-6 lg:block">
-        <div className="rounded-3xl bg-gradient-to-br from-indigo-600 to-sky-500 p-5 text-white shadow-lg shadow-indigo-100">
-          <p className="text-sm font-medium opacity-90">Harmony Health</p>
-          <h1 className="mt-1 text-2xl font-bold leading-tight">
-            WA Reminder & Blast
-          </h1>
-        </div>
+useEffect(() => {
+setOpen(false)
+}, [router.pathname])
 
-        <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Logged in as
-          </p>
+useEffect(() => {
+function handleResize() {
+if (window.innerWidth >= 1024) {
+setOpen(false)
+}
+}
 
-          <p className="mt-1 text-sm font-bold text-slate-800">
-            {username}
-          </p>
+window.addEventListener('resize', handleResize)
 
-          <p className="text-xs font-semibold text-indigo-600">
-            {role}
-          </p>
-        </div>
+return () => {
+window.removeEventListener('resize', handleResize)
+}
+}, [])
 
-        <nav className="mt-6 space-y-1">
-          {visibleItems.map((item) => {
-            const active = isActive(item)
+const userName = getUserName(user)
+const role = getUserRole(user)
 
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={
-                  active
-                    ? 'block rounded-2xl bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700'
-                    : 'block rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                }
-              >
-                {item.label}
-              </Link>
-            )
-          })}
-        </nav>
+const operationalMenus = useMemo(() => {
+return OPERATIONAL_MENUS.filter((item) => item.roles.includes(role))
+}, [role])
 
-        <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
-          <p className="text-sm font-bold text-emerald-700">System Online</p>
+const adminMenus = useMemo(() => {
+return ADMIN_MENUS.filter((item) => item.roles.includes(role))
+}, [role])
 
-          <p className="mt-1 text-xs text-emerald-600">
-            {role === 'agent'
-              ? 'Agent access: Inbox, Quick Replies, Reply Analysis, Usage Log, Blacklist, Reminder, Blast, Import Data, Jobs, and Logs.'
-              : 'Admin access: full operational dashboard, WABA Profile, inbox, analytics, import data, and system settings.'}
-          </p>
-        </div>
-      </aside>
-    </>
-  )
+async function handleLogout() {
+try {
+await fetch('/api/auth/logout', {
+method: 'POST'
+})
+} catch (err) {
+try {
+await fetch('/api/logout', {
+method: 'POST'
+})
+} catch (err2) {
+// ignore
+}
+}
+
+try {
+window.localStorage.removeItem('authUser')
+window.localStorage.removeItem('user')
+window.localStorage.removeItem('currentUser')
+window.localStorage.removeItem('notivaUser')
+window.localStorage.removeItem('waUser')
+window.localStorage.removeItem('loggedInUser')
+} catch (err) {
+// ignore
+}
+
+window.location.href = '/login'
+}
+
+const sidebarContent = (
+<aside className="flex h-full w-[290px] flex-col border-r border-slate-200 bg-white">
+<div className="flex-1 overflow-y-auto p-4">
+<BrandBlock />
+
+<UserCard
+userName={loadingUser ? 'Loading...' : userName}
+role={loadingUser ? '-' : role}
+/>
+
+<nav className="space-y-1">
+{operationalMenus.map((item) => (
+<MenuLink
+key={item.href}
+item={item}
+pathname={router.pathname}
+onClick={() => setOpen(false)}
+/>
+))}
+</nav>
+
+{adminMenus.length > 0 ? (
+<div className="mt-6">
+<p className="mb-2 px-4 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">
+Admin Tools
+</p>
+
+<nav className="space-y-1">
+{adminMenus.map((item) => (
+<MenuLink
+key={item.href}
+item={item}
+pathname={router.pathname}
+onClick={() => setOpen(false)}
+/>
+))}
+</nav>
+</div>
+) : null}
+</div>
+
+<div className="border-t border-slate-200 p-4">
+<button
+type="button"
+onClick={handleLogout}
+className="w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-red-50 hover:text-red-600"
+>
+Logout
+</button>
+</div>
+</aside>
+)
+
+return (
+<>
+<button
+type="button"
+onClick={() => setOpen(true)}
+className="fixed left-4 top-4 z-50 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-lg lg:hidden"
+>
+Menu
+</button>
+
+<div className="hidden min-h-screen lg:block">
+{sidebarContent}
+</div>
+
+{open ? (
+<div className="fixed inset-0 z-[80] lg:hidden">
+<button
+type="button"
+aria-label="Close sidebar"
+onClick={() => setOpen(false)}
+className="absolute inset-0 bg-slate-950/40"
+/>
+
+<div className="absolute left-0 top-0 h-full">
+{sidebarContent}
+</div>
+</div>
+) : null}
+</>
+)
 }

@@ -1,4 +1,4 @@
-# WA Reminder & Blast - Fixed Professional UI
+﻿# WhatsApp Blast & Reminder - Fixed Professional UI
 
 Project ini sudah diperbaiki dari error:
 - `The default export is not a React Component`
@@ -33,3 +33,4 @@ Setelah UI jalan:
 - Setup Supabase table
 - Setup Meta WhatsApp Cloud API
 - Isi logic di `pages/api/...`
+

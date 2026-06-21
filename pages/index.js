@@ -1,4 +1,4 @@
-import AppLayout from '../components/AppLayout'
+﻿import AppLayout from '../components/AppLayout'
 import FeatureCard from '../components/FeatureCard'
 import StatCard from '../components/StatCard'
 
@@ -15,7 +15,7 @@ export default function Home() {
               Official Meta API Ready
             </div>
             <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-[#172033] md:text-5xl">
-              WA Reminder & Blast
+              Notiva
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-8 text-[#718096]">
               Kelola reminder dan broadcast WhatsApp dengan tampilan yang rapi, aman, efisien, dan profesional untuk operasional layanan kesehatan.
@@ -47,20 +47,21 @@ export default function Home() {
       </section>
 
       <section className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <FeatureCard href="/admin/reset-db" title="Admin / Reset DB" description="Kelola database dan reset data import dengan akses admin." icon="↻" tone="rose" />
-        <FeatureCard href="/admin/manage-users" title="Manage Users" description="Buat dan kelola user untuk akses reminder dan broadcast." icon="◎" tone="blue" />
-        <FeatureCard href="/reminder" title="Reminder" description="Pilih database, jalankan reminder, dan lihat log pengiriman." icon="◴" tone="green" />
-        <FeatureCard href="/blast" title="WhatsApp Blast" description="Kirim broadcast WhatsApp ke banyak kontak secara resmi." icon="✦" tone="purple" />
-        <FeatureCard href="/dashboard" title="Dashboard" description="Pantau jumlah terkirim, gagal, dan performa sistem." icon="▣" tone="slate" />
-        <FeatureCard href="/logs" title="Logs" description="Lihat riwayat aktivitas reminder dan broadcast dalam satu tempat." icon="☰" tone="blue" />
+        <FeatureCard href="/admin/reset-db" title="Admin / Reset DB" description="Kelola database dan reset data import dengan akses admin." icon="â†»" tone="rose" />
+        <FeatureCard href="/admin/manage-users" title="Manage Users" description="Buat dan kelola user untuk akses reminder dan broadcast." icon="â—Ž" tone="blue" />
+        <FeatureCard href="/reminder" title="Reminder" description="Pilih database, jalankan reminder, dan lihat log pengiriman." icon="â—´" tone="green" />
+        <FeatureCard href="/blast" title="WhatsApp Blast" description="Kirim broadcast WhatsApp ke banyak kontak secara resmi." icon="âœ¦" tone="purple" />
+        <FeatureCard href="/dashboard" title="Dashboard" description="Pantau jumlah terkirim, gagal, dan performa sistem." icon="â–£" tone="slate" />
+        <FeatureCard href="/logs" title="Logs" description="Lihat riwayat aktivitas reminder dan broadcast dalam satu tempat." icon="â˜°" tone="blue" />
       </section>
 
       <section className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Reminder Aktif" value="0" caption="jadwal" icon="◴" tone="green" />
-        <StatCard title="Blast Terkirim" value="0" caption="pesan" icon="✦" tone="purple" />
+        <StatCard title="Reminder Aktif" value="0" caption="jadwal" icon="â—´" tone="green" />
+        <StatCard title="Blast Terkirim" value="0" caption="pesan" icon="âœ¦" tone="purple" />
         <StatCard title="Gagal Kirim" value="0" caption="log" icon="!" tone="rose" />
-        <StatCard title="Status Sistem" value="Aman" caption="online" icon="✓" tone="blue" />
+        <StatCard title="Status Sistem" value="Aman" caption="online" icon="âœ“" tone="blue" />
       </section>
     </AppLayout>
   )
 }
+
