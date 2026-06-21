@@ -5,7 +5,7 @@ import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
 
 function cleanText(value) {
-return String(value ?? '').trim()
+return String(value || '').trim()
 }
 
 function formatDate(value) {
@@ -31,14 +31,16 @@ return cleanText(row.label || row.category || row.intent || row.sentiment || 'Ne
 }
 
 function normalizeSummary(summary) {
+const safe = summary || {}
+
 return {
-total: summary?.total || 0,
-interested: summary?.interested || summary?.berminat || 0,
-notInterested: summary?.notInterested || summary?.not_interested || summary?.tidak_berminat || 0,
-followUp: summary?.followUp || summary?.follow_up || 0,
-neutral: summary?.neutral || summary?.netral || 0,
-optOut: summary?.optOut || summary?.opt_out || 0,
-avgScore: summary?.avgScore || summary?.avg_score || 0
+total: safe.total || 0,
+interested: safe.interested || safe.berminat || 0,
+notInterested: safe.notInterested || safe.not_interested || safe.tidak_berminat || 0,
+followUp: safe.followUp || safe.follow_up || 0,
+neutral: safe.neutral || safe.netral || 0,
+optOut: safe.optOut || safe.opt_out || 0,
+avgScore: safe.avgScore || safe.avg_score || 0
 }
 }
 
