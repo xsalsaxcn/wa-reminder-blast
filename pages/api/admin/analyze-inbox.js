@@ -35,7 +35,103 @@ return row[key]
 return ''
 }
 
+function safeJsonParse(value) {
+if (!value) return null
+
+if (typeof value === 'object') return value
+
+try {
+return JSON.parse(String(value))
+} catch (err) {
+return null
+}
+}
+
+function findDeepText(payload) {
+if (!payload || typeof payload !== 'object') return ''
+
+const directPaths = [
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body,
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.button?.text,
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.button_reply?.title,
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.list_reply?.title,
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.image?.caption,
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.document?.caption,
+payload?.messages?.[0]?.text?.body,
+payload?.messages?.[0]?.button?.text,
+payload?.messages?.[0]?.interactive?.button_reply?.title,
+payload?.messages?.[0]?.interactive?.list_reply?.title,
+payload?.messages?.[0]?.image?.caption,
+payload?.messages?.[0]?.document?.caption,
+payload?.text?.body,
+payload?.button?.text,
+payload?.interactive?.button_reply?.title,
+payload?.interactive?.list_reply?.title,
+payload?.image?.caption,
+payload?.document?.caption,
+payload?.body,
+payload?.message,
+payload?.text
+]
+
+for (const value of directPaths) {
+const text = cleanText(value)
+if (text) return text
+}
+
+return ''
+}
+
+function findDeepPhone(payload) {
+if (!payload || typeof payload !== 'object') return ''
+
+const directPaths = [
+payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from,
+payload?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.wa_id,
+payload?.messages?.[0]?.from,
+payload?.contacts?.[0]?.wa_id,
+payload?.from,
+payload?.wa_id,
+payload?.phone
+]
+
+for (const value of directPaths) {
+const phone = cleanPhone(value)
+if (phone) return phone
+}
+
+return ''
+}
+
+function findDeepName(payload) {
+if (!payload || typeof payload !== 'object') return ''
+
+const directPaths = [
+payload?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name,
+payload?.contacts?.[0]?.profile?.name,
+payload?.profile?.name,
+payload?.profile_name,
+payload?.name
+]
+
+for (const value of directPaths) {
+const text = cleanText(value)
+if (text) return text
+}
+
+return ''
+}
+
 function normalizeIncomingMessage(row) {
+const payload =
+safeJsonParse(row?.payload) ||
+safeJsonParse(row?.raw_payload) ||
+safeJsonParse(row?.webhook_payload) ||
+safeJsonParse(row?.message_payload) ||
+safeJsonParse(row?.data) ||
+safeJsonParse(row?.raw) ||
+null
+
 const rawId = cleanText(
 getValue(row, [
 'id',
@@ -46,7 +142,8 @@ getValue(row, [
 ])
 )
 
-const phone = cleanPhone(
+const phone =
+cleanPhone(
 getValue(row, [
 'phone',
 'from',
@@ -54,11 +151,13 @@ getValue(row, [
 'wa_phone',
 'sender_phone',
 'customer_phone',
-'contact_phone'
+'contact_phone',
+'from_phone'
 ])
-)
+) || findDeepPhone(payload)
 
-const profileName = cleanText(
+const profileName =
+cleanText(
 getValue(row, [
 'profile_name',
 'name',
@@ -66,18 +165,22 @@ getValue(row, [
 'contact_name',
 'customer_name'
 ])
-)
+) || findDeepName(payload)
 
-const message = cleanText(
+const message =
+cleanText(
 getValue(row, [
 'message',
 'text',
 'body',
 'content',
 'caption',
-'media_caption'
+'media_caption',
+'message_text',
+'text_body',
+'message_body'
 ])
-)
+) || findDeepText(payload)
 
 const direction = cleanText(
 getValue(row, [
@@ -112,7 +215,6 @@ const direction = cleanText(message.direction).toLowerCase()
 if (!message.phone || !message.message) return false
 
 if (!direction) return true
-
 if (direction.includes('out')) return false
 if (direction.includes('sent')) return false
 
@@ -154,6 +256,9 @@ const interestedKeywords = [
 'berminat',
 'minat',
 'mau',
+'mau vaksin',
+'vaksin',
+'vaksinasi',
 'boleh',
 'info',
 'lanjut',
@@ -247,9 +352,43 @@ const { data, error } = await supabaseAdmin
 .order('created_at', { ascending: false })
 .limit(1)
 
-if (error || !Array.isArray(data) || !data.length) return null
-
+if (!error && Array.isArray(data) && data.length) {
 return data[0]
+}
+
+const { data: fallbackData } = await supabaseAdmin
+.from('send_job_items')
+.select('id, job_id, phone, message, status, processed_at, created_at, send_jobs:job_id (id, database_id, type)')
+.eq('status', 'sent')
+.order('processed_at', { ascending: false, nullsFirst: false })
+.order('created_at', { ascending: false })
+.limit(1000)
+
+if (!Array.isArray(fallbackData)) return null
+
+return fallbackData.find((item) => cleanPhone(item.phone) === clean) || null
+}
+
+async function saveToTable(tableName, payload) {
+await supabaseAdmin
+.from(tableName)
+.delete()
+.eq('source_message_id', payload.source_message_id)
+
+const { error } = await supabaseAdmin
+.from(tableName)
+.insert(payload)
+
+if (error) {
+return {
+success: false,
+message: error.message
+}
+}
+
+return {
+success: true
+}
 }
 
 async function saveAnalysis(message, classification, matchedItem) {
@@ -270,20 +409,14 @@ message_created_at: message.created_at || null,
 updated_at: new Date().toISOString()
 }
 
-await supabaseAdmin
-.from('reply_analysis')
-.delete()
-.eq('source_message_id', message.source_message_id)
+const replyResult = await saveToTable('reply_analysis', payload)
+const waResult = await saveToTable('wa_message_analysis', payload)
 
-const { error } = await supabaseAdmin
-.from('reply_analysis')
-.insert(payload)
-
-if (error) {
-throw new Error(error.message)
+return {
+payload,
+reply_result: replyResult,
+wa_result: waResult
 }
-
-return payload
 }
 
 export default async function handler(req, res) {
@@ -329,8 +462,12 @@ results.push({
 phone: message.phone,
 message: message.message,
 category: classification.category,
-job_id: saved.job_id,
-database_id: saved.database_id
+job_id: saved.payload.job_id,
+database_id: saved.payload.database_id,
+reply_saved: saved.reply_result.success,
+wa_saved: saved.wa_result.success,
+reply_error: saved.reply_result.message || null,
+wa_error: saved.wa_result.message || null
 })
 }
 
@@ -338,11 +475,12 @@ return res.status(200).json({
 success: true,
 source_table: 'wa_incoming_messages',
 total_inbox_rows: rows.length,
+normalized_messages: messages.length,
 analyzed,
 interested,
 not_interested: notInterested,
 neutral,
-results: results.slice(0, 30)
+latest_results: results.slice(0, 30)
 })
 } catch (error) {
 return res.status(500).json({
