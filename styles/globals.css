@@ -53,3 +53,31 @@ textarea {
 .soft-ring {
   box-shadow: 0 0 0 1px rgba(231, 236, 245, 0.8), 0 14px 34px rgba(50, 64, 99, 0.08);
 }
+
+@media (max-width: 768px) {
+  main {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  table {
+    font-size: 12px;
+  }
+
+  table th,
+  table td {
+    white-space: nowrap;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  .overflow-x-auto,
+  .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-table-card table {
+    min-width: 680px;
+  }
+}
