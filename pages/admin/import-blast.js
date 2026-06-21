@@ -1,9 +1,8 @@
 ﻿
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Sidebar from '../../components/Sidebar'
 import {
-IMPORT_CHUNK_SIZE,
 MAX_FILE_SIZE,
 downloadCsvFile,
 fetchWithTimeout,
@@ -14,6 +13,9 @@ uploadAttachmentDirect,
 validateMimeType,
 wait
 } from '../../lib/importClientUtils'
+
+const MAX_ROWS = 5000
+const IMPORT_CHUNK_SIZE_SAFE = 25
 
 function downloadBlastTemplateWithoutAttachment() {
 downloadCsvFile(
@@ -62,15 +64,25 @@ attachment_caption: 'Berikut gambar untuk Kak Andin.'
 }
 
 export default function ImportBlastPage() {
+const rowsRef = useRef([])
+
 const [databaseName, setDatabaseName] = useState('')
 const [fileName, setFileName] = useState('')
-const [rows, setRows] = useState([])
+const [rowCount, setRowCount] = useState(0)
+const [csvAttachmentCount, setCsvAttachmentCount] = useState(0)
 const [selectedAttachmentFile, setSelectedAttachmentFile] = useState(null)
 const [loading, setLoading] = useState(false)
 const [uploadingAttachment, setUploadingAttachment] = useState(false)
 const [progressText, setProgressText] = useState('')
 const [message, setMessage] = useState('')
 const [error, setError] = useState('')
+
+function resetCsv() {
+rowsRef.current = []
+setFileName('')
+setRowCount(0)
+setCsvAttachmentCount(0)
+}
 
 function applyAttachmentToChunk(chunk, uploadedAttachment) {
 return chunk.map((row) => {
@@ -89,21 +101,43 @@ attachment_caption: row.attachment_caption || row.message || uploadedAttachment.
 async function handleFileChange(e) {
 const file = e.target.files?.[0]
 
-setRows([])
-setFileName('')
+resetCsv()
 setMessage('')
 setError('')
 setProgressText('')
 
 if (!file) return
 
+try {
+setProgressText('Membaca CSV...')
+
 const text = await file.text()
+
+await wait(50)
+
 const parsed = parseCsv(text)
 const normalized = normalizeBlastRows(parsed)
 
+if (normalized.length > MAX_ROWS) {
+throw new Error('Maksimal import adalah ' + MAX_ROWS + ' baris. Pecah CSV menjadi beberapa file.')
+}
+
+rowsRef.current = normalized
+
+const countAttachment = normalized.filter((row) => row.attachment_url).length
+
 setFileName(file.name)
-setRows(normalized)
+setRowCount(normalized.length)
+setCsvAttachmentCount(countAttachment)
 setMessage('CSV terbaca: ' + normalized.length + ' baris.')
+setProgressText('')
+} catch (err) {
+resetCsv()
+setError(err.message || 'Gagal membaca CSV.')
+setProgressText('')
+} finally {
+e.target.value = ''
+}
 }
 
 function handleAttachmentChange(e) {
@@ -145,9 +179,13 @@ setLoading(true)
 setUploadingAttachment(false)
 setMessage('')
 setError('')
-setProgressText('Mulai import...')
+setProgressText('Menyiapkan import...')
+
+await wait(100)
 
 try {
+const rows = rowsRef.current || []
+
 if (!databaseName.trim()) {
 throw new Error('Nama database wajib diisi.')
 }
@@ -156,16 +194,26 @@ if (!rows.length) {
 throw new Error('CSV belum dipilih atau kosong.')
 }
 
+if (rows.length > MAX_ROWS) {
+throw new Error('Maksimal import adalah ' + MAX_ROWS + ' baris.')
+}
+
 let uploadedAttachment = null
 
 if (selectedAttachmentFile) {
 setUploadingAttachment(true)
 setProgressText('Mengupload attachment...')
-uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
-setUploadingAttachment(false)
-}
+await wait(100)
 
+uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
+
+setUploadingAttachment(false)
+setProgressText('Attachment berhasil di-upload. Membuat database kontak...')
+await wait(100)
+} else {
 setProgressText('Membuat database kontak...')
+await wait(100)
+}
 
 const databaseResponse = await fetchWithTimeout(
 '/api/contacts/create-import-database',
@@ -193,14 +241,15 @@ const databaseId = databaseData.database.id
 let imported = 0
 let skipped = 0
 let withAttachment = 0
+const totalChunk = Math.ceil(rows.length / IMPORT_CHUNK_SIZE_SAFE)
 
-for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE) {
-const chunk = rows.slice(i, i + IMPORT_CHUNK_SIZE)
+for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE_SAFE) {
+const currentChunk = Math.floor(i / IMPORT_CHUNK_SIZE_SAFE) + 1
+const chunk = rows.slice(i, i + IMPORT_CHUNK_SIZE_SAFE)
 const finalChunk = applyAttachmentToChunk(chunk, uploadedAttachment)
-const currentChunk = Math.floor(i / IMPORT_CHUNK_SIZE) + 1
-const totalChunk = Math.ceil(rows.length / IMPORT_CHUNK_SIZE)
 
 setProgressText('Import chunk ' + currentChunk + ' dari ' + totalChunk + '...')
+await wait(80)
 
 const response = await fetchWithTimeout(
 '/api/contacts/import-chunk',
@@ -228,8 +277,8 @@ imported += Number(data.imported || 0)
 skipped += Number(data.skipped || 0)
 withAttachment += Number(data.with_attachment || 0)
 
-setProgressText('Progress: ' + Math.min(i + IMPORT_CHUNK_SIZE, rows.length) + ' / ' + rows.length + ' baris.')
-await wait(40)
+setProgressText('Progress: ' + Math.min(i + IMPORT_CHUNK_SIZE_SAFE, rows.length) + ' / ' + rows.length + ' baris.')
+await wait(120)
 }
 
 setMessage(
@@ -242,7 +291,9 @@ withAttachment +
 '.'
 )
 
-setRows([])
+rowsRef.current = []
+setRowCount(0)
+setCsvAttachmentCount(0)
 setFileName('')
 setSelectedAttachmentFile(null)
 setProgressText('')
@@ -258,7 +309,7 @@ setUploadingAttachment(false)
 }
 }
 
-const attachmentCount = rows.filter((row) => row.attachment_url || selectedAttachmentFile).length
+const attachmentCount = selectedAttachmentFile ? rowCount : csvAttachmentCount
 
 return (
 <div className="min-h-screen bg-slate-50 lg:flex">
@@ -380,13 +431,16 @@ Remove
 </div>
 </div>
 
-{rows.length > 0 ? (
+{rowCount > 0 ? (
 <div className="rounded-2xl border border-slate-200 bg-white p-4">
 <p className="text-sm font-semibold text-slate-700">
-Preview: {rows.length} baris
+Preview: {rowCount} baris
 </p>
 <p className="mt-1 text-xs text-slate-500">
 Dengan attachment: {attachmentCount} baris
+</p>
+<p className="mt-1 text-xs text-slate-400">
+Import berjalan per {IMPORT_CHUNK_SIZE_SAFE} baris agar browser tidak freeze.
 </p>
 </div>
 ) : null}
