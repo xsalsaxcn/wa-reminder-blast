@@ -166,6 +166,36 @@ function matchLabel(rowLabel, filterLabel) {
   return current === target
 }
 
+async function fetchAllAnalysisRows() {
+  const pageSize = 1000
+  let from = 0
+  let allRows = []
+
+  while (true) {
+    const to = from + pageSize - 1
+
+    const result = await supabaseAdmin
+      .from('wa_message_analysis')
+      .select('*')
+      .range(from, to)
+
+    if (result.error) {
+      throw new Error(result.error.message)
+    }
+
+    const batch = Array.isArray(result.data) ? result.data : []
+    allRows = allRows.concat(batch)
+
+    if (batch.length < pageSize) break
+
+    from += pageSize
+
+    if (from > 50000) break
+  }
+
+  return allRows
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -190,19 +220,9 @@ export default async function handler(req, res) {
       search = ''
     } = req.query || {}
 
-    const result = await supabaseAdmin
-      .from('wa_message_analysis')
-      .select('*')
-      .limit(5000)
+    const rawRows = await fetchAllAnalysisRows()
 
-    if (result.error) {
-      return res.status(500).json({
-        success: false,
-        message: result.error.message
-      })
-    }
-
-    let rows = Array.isArray(result.data) ? result.data.map(normalizeRow) : []
+    let rows = rawRows.map(normalizeRow)
 
     if (start) {
       const startTime = getDateValue(start)
@@ -265,7 +285,6 @@ export default async function handler(req, res) {
     )
 
     summary.avgScore = summary.total > 0 ? Math.round(summary.totalScore / summary.total) : 0
-
     delete summary.totalScore
 
     return res.status(200).json({
@@ -273,7 +292,11 @@ export default async function handler(req, res) {
       rows,
       items: rows,
       data: rows,
-      summary
+      summary,
+      debug: {
+        raw_rows_loaded: rawRows.length,
+        rows_after_filter: rows.length
+      }
     })
   } catch (error) {
     return res.status(500).json({
