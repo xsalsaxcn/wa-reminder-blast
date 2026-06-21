@@ -1,272 +1,255 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+﻿
+
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import { normalizeAttachment } from '../../../lib/whatsappSender'
+
+const DEFAULT_BATCH_LIMIT = 10
+const MAX_BATCH_LIMIT = 100
+const INSERT_CHUNK_SIZE = 300
 
 function cleanText(value) {
-  return String(value || '').trim()
+return String(value || '').trim()
 }
 
-function cleanPhone(phone) {
-  return String(phone || '')
-    .replace(/\D/g, '')
-    .replace(/^0/, '62')
+function cleanPhone(value) {
+let phone = String(value || '').trim()
+
+if (phone.startsWith('="')) {
+phone = phone.slice(2)
 }
 
-function getJobType(value) {
-  const type = String(value || '').trim().toLowerCase()
-
-  if (type === 'reminder') return 'reminder'
-  if (type === 'blast') return 'blast'
-
-  return 'blast'
+if (phone.endsWith('"')) {
+phone = phone.slice(0, -1)
 }
 
-function getContactName(contact) {
-  return cleanText(
-    contact.name ||
-    contact.nama ||
-    contact.profile_name ||
-    contact.customer_name ||
-    ''
-  )
+if (phone.startsWith("'")) {
+phone = phone.slice(1)
 }
 
-function getContactMessage(contact, fallbackMessage) {
-  const message = cleanText(
-    contact.message ||
-    contact.pesan ||
-    contact.body ||
-    contact.text ||
-    ''
-  )
+let result = ''
 
-  if (message) return message
-
-  return cleanText(fallbackMessage)
+for (const char of phone) {
+if ('0123456789'.includes(char)) {
+result += char
+}
 }
 
-function normalizeContactForJob(contact, fallbackMessage) {
-  const phone = cleanPhone(
-    contact.phone ||
-    contact.nomor ||
-    contact.no_hp ||
-    contact.whatsapp ||
-    contact.wa ||
-    ''
-  )
-
-  const message = getContactMessage(contact, fallbackMessage)
-
-  const attachment = normalizeAttachment({
-    message,
-    attachment_url: contact.attachment_url,
-    attachment_type: contact.attachment_type,
-    attachment_filename: contact.attachment_filename,
-    attachment_caption: contact.attachment_caption
-  })
-
-  return {
-    name: getContactName(contact),
-    phone,
-    message,
-    attachment_url: attachment.attachment_url || null,
-    attachment_type: attachment.attachment_type || null,
-    attachment_filename: attachment.attachment_filename || null,
-    attachment_caption: attachment.attachment_caption || null
-  }
+if (result.startsWith('0')) {
+result = '62' + result.slice(1)
 }
 
-async function insertJob(payload) {
-  const attempts = [
-    payload,
-    {
-      type: payload.type,
-      status: payload.status,
-      database_id: payload.database_id,
-      total_items: payload.total_items,
-      created_at: payload.created_at,
-      updated_at: payload.updated_at
-    },
-    {
-      type: payload.type,
-      status: payload.status,
-      database_id: payload.database_id,
-      created_at: payload.created_at,
-      updated_at: payload.updated_at
-    },
-    {
-      type: payload.type,
-      status: payload.status,
-      database_id: payload.database_id,
-      created_at: payload.created_at
-    }
-  ]
+return result
+}
 
-  let lastError = null
+function toNumber(value, fallback) {
+const number = Number(value)
 
-  for (const item of attempts) {
-    const { data, error } = await supabaseAdmin
-      .from('send_jobs')
-      .insert(item)
-      .select('*')
-      .single()
+if (!Number.isFinite(number)) return fallback
 
-    if (!error && data) return data
+return number
+}
 
-    lastError = error
-  }
+function normalizeBatchLimit(value) {
+const number = toNumber(value, DEFAULT_BATCH_LIMIT)
 
-  throw lastError || new Error('Gagal membuat send job')
+if (number < 1) return DEFAULT_BATCH_LIMIT
+if (number > MAX_BATCH_LIMIT) return MAX_BATCH_LIMIT
+
+return Math.floor(number)
+}
+
+function getContactAttachment(contact, database) {
+const contactAttachmentUrl = cleanText(contact.attachment_url)
+const defaultAttachmentUrl = cleanText(database?.default_attachment_url)
+
+if (contactAttachmentUrl) {
+return {
+attachment_url: contactAttachmentUrl,
+attachment_type: cleanText(contact.attachment_type) || cleanText(database?.default_attachment_type) || null,
+attachment_filename: cleanText(contact.attachment_filename) || cleanText(database?.default_attachment_filename) || null,
+attachment_caption: cleanText(contact.attachment_caption) || cleanText(contact.message) || cleanText(database?.default_attachment_caption) || null
+}
+}
+
+if (defaultAttachmentUrl) {
+return {
+attachment_url: defaultAttachmentUrl,
+attachment_type: cleanText(database?.default_attachment_type) || null,
+attachment_filename: cleanText(database?.default_attachment_filename) || null,
+attachment_caption: cleanText(database?.default_attachment_caption) || cleanText(contact.message) || null
+}
+}
+
+return {
+attachment_url: null,
+attachment_type: null,
+attachment_filename: null,
+attachment_caption: null
+}
+}
+
+function buildJobItem(contact, jobId, database) {
+const attachment = getContactAttachment(contact, database)
+
+return {
+job_id: jobId,
+name: cleanText(contact.name),
+phone: cleanPhone(contact.phone),
+message: cleanText(contact.message),
+status: 'pending',
+attachment_url: attachment.attachment_url,
+attachment_type: attachment.attachment_type,
+attachment_filename: attachment.attachment_filename,
+attachment_caption: attachment.attachment_caption
+}
+}
+
+async function insertItemsInChunks(items) {
+let inserted = 0
+
+for (let i = 0; i < items.length; i += INSERT_CHUNK_SIZE) {
+const chunk = items.slice(i, i + INSERT_CHUNK_SIZE)
+
+const { error } = await supabaseAdmin
+.from('send_job_items')
+.insert(chunk)
+
+if (error) {
+throw new Error(error.message)
+}
+
+inserted += chunk.length
+}
+
+return inserted
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  res.setHeader('Pragma', 'no-cache')
-  res.setHeader('Expires', '0')
+res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+res.setHeader('Pragma', 'no-cache')
+res.setHeader('Expires', '0')
 
-  try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+try {
+const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+if (!authUser) return
 
-    if (req.method !== 'POST') {
-      return res.status(405).json({
-        success: false,
-        message: 'Method not allowed'
-      })
-    }
+if (req.method !== 'POST') {
+return res.status(405).json({
+success: false,
+message: 'Method not allowed'
+})
+}
 
-    const {
-      type,
-      job_type,
-      database_id,
-      databaseId,
-      contact_database_id,
-      message,
-      default_message,
-      name,
-      title,
-      batch_limit
-    } = req.body || {}
+const body = req.body || {}
 
-    const selectedDatabaseId = database_id || databaseId || contact_database_id
+const selectedDatabaseId = cleanText(
+body.database_id ||
+body.databaseId ||
+body.contact_database_id ||
+body.contactDatabaseId
+)
 
-    if (!selectedDatabaseId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Database wajib dipilih'
-      })
-    }
+const type = cleanText(body.type || 'blast').toLowerCase()
+const batchLimit = normalizeBatchLimit(body.batch_limit || body.batchLimit)
 
-    const jobType = getJobType(type || job_type)
-    const fallbackMessage = cleanText(message || default_message)
+if (!selectedDatabaseId) {
+return res.status(400).json({
+success: false,
+message: 'database_id wajib diisi.'
+})
+}
 
-    const { data: database, error: databaseError } = await supabaseAdmin
-      .from('contact_databases')
-      .select('*')
-      .eq('id', selectedDatabaseId)
-      .maybeSingle()
+if (type !== 'blast' && type !== 'reminder') {
+return res.status(400).json({
+success: false,
+message: 'Type harus blast atau reminder.'
+})
+}
 
-    if (databaseError) {
-      return res.status(500).json({
-        success: false,
-        message: databaseError.message
-      })
-    }
+const { data: database, error: databaseError } = await supabaseAdmin
+.from('contact_databases')
+.select(
+'id, name, type, default_attachment_url, default_attachment_type, default_attachment_filename, default_attachment_caption'
+)
+.eq('id', selectedDatabaseId)
+.single()
 
-    if (!database) {
-      return res.status(404).json({
-        success: false,
-        message: 'Database tidak ditemukan'
-      })
-    }
+if (databaseError || !database) {
+return res.status(404).json({
+success: false,
+message: databaseError?.message || 'Database kontak tidak ditemukan.'
+})
+}
 
-    const { data: contacts, error: contactsError } = await supabaseAdmin
-      .from('contacts')
-      .select('*')
-      .eq('database_id', selectedDatabaseId)
-      .limit(50000)
+const { data: contacts, error: contactsError } = await supabaseAdmin
+.from('contacts')
+.select(
+'id, name, phone, message, reminder_date, attachment_url, attachment_type, attachment_filename, attachment_caption'
+)
+.eq('database_id', selectedDatabaseId)
+.order('created_at', { ascending: true })
 
-    if (contactsError) {
-      return res.status(500).json({
-        success: false,
-        message: contactsError.message
-      })
-    }
+if (contactsError) {
+return res.status(500).json({
+success: false,
+message: contactsError.message
+})
+}
 
-    const validContacts = (contacts || [])
-      .map((contact) => normalizeContactForJob(contact, fallbackMessage))
-      .filter((contact) => contact.phone && contact.message)
+const validContacts = Array.isArray(contacts)
+? contacts.filter((contact) => cleanPhone(contact.phone) && cleanText(contact.message))
+: []
 
-    if (validContacts.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tidak ada kontak valid untuk dibuat job'
-      })
-    }
+if (!validContacts.length) {
+return res.status(400).json({
+success: false,
+message: 'Tidak ada kontak valid untuk dibuat job.'
+})
+}
 
-    const jobName =
-      cleanText(name || title) ||
-      cleanText(database.name || database.database_name || database.title) ||
-      `${jobType} ${new Date().toLocaleString('id-ID')}`
+const jobName = cleanText(body.name || body.title) || database.name || 'WhatsApp Job'
 
-    const now = new Date().toISOString()
+const { data: job, error: jobError } = await supabaseAdmin
+.from('send_jobs')
+.insert({
+name: jobName,
+title: jobName,
+type,
+database_id: selectedDatabaseId,
+status: 'pending',
+total_items: validContacts.length,
+batch_limit: batchLimit
+})
+.select('*')
+.single()
 
-    const job = await insertJob({
-      type: jobType,
-      status: 'pending',
-      database_id: selectedDatabaseId,
-      name: jobName,
-      title: jobName,
-      total_items: validContacts.length,
-      batch_limit: Number(batch_limit || process.env.JOB_BATCH_LIMIT || 10),
-      created_at: now,
-      updated_at: now
-    })
+if (jobError || !job) {
+return res.status(500).json({
+success: false,
+message: jobError?.message || 'Gagal membuat job.'
+})
+}
 
-    const jobItems = validContacts.map((contact) => ({
-      job_id: job.id,
-      name: contact.name || null,
-      phone: contact.phone,
-      message: contact.message,
-      status: 'pending',
-      attachment_url: contact.attachment_url || null,
-      attachment_type: contact.attachment_type || null,
-      attachment_filename: contact.attachment_filename || null,
-      attachment_caption: contact.attachment_caption || null,
-      created_at: now,
-      updated_at: now
-    }))
+const items = validContacts.map((contact) => buildJobItem(contact, job.id, database))
+const inserted = await insertItemsInChunks(items)
 
-    const { error: itemsError } = await supabaseAdmin
-      .from('send_job_items')
-      .insert(jobItems)
+const withAttachment = items.filter((item) => item.attachment_url).length
 
-    if (itemsError) {
-      await supabaseAdmin
-        .from('send_jobs')
-        .update({
-          status: 'failed',
-          error_message: itemsError.message,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', job.id)
-
-      return res.status(500).json({
-        success: false,
-        message: itemsError.message
-      })
-    }
-
-    return res.status(200).json({
-      success: true,
-      job,
-      total_items: jobItems.length,
-      with_attachment: jobItems.filter((item) => item.attachment_url).length,
-      message: `Job berhasil dibuat. Total: ${jobItems.length}. Attachment: ${jobItems.filter((item) => item.attachment_url).length}.`
-    })
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to create job'
-    })
-  }
+return res.status(200).json({
+success: true,
+message: 'Job berhasil dibuat.',
+job,
+job_id: job.id,
+database,
+total_contacts: validContacts.length,
+total_items: inserted,
+with_attachment: withAttachment,
+batch_limit: batchLimit
+})
+} catch (error) {
+return res.status(500).json({
+success: false,
+message: error.message || 'Gagal membuat job.'
+})
+}
 }

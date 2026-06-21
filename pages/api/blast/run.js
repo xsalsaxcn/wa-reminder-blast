@@ -1,147 +1,214 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
-import { sendWhatsAppText, sendWhatsAppTemplate } from '../../../lib/metaWhatsapp'
+
+
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import { sleep, getSendDelayMs } from '../../../lib/rateLimit'
 
-function getValue(contact, field) {
-  const value = contact?.[field]
-  if (value === null || value === undefined) return ''
-  return String(value)
+const DEFAULT_BATCH_LIMIT = 10
+const INSERT_CHUNK_SIZE = 300
+
+function cleanText(value) {
+return String(value || '').trim()
 }
 
-function interpolateMessage(template, contact) {
-  if (!template) return ''
+function cleanPhone(value) {
+let phone = String(value || '').trim()
 
-  return template
-    .replaceAll('{name}', getValue(contact, 'name'))
-    .replaceAll('{phone}', getValue(contact, 'phone'))
-    .replaceAll('{message}', getValue(contact, 'message'))
-    .replaceAll('{reminder_date}', getValue(contact, 'reminder_date'))
-    .replaceAll('{reminder_time}', getValue(contact, 'reminder_time'))
+if (phone.startsWith('="')) {
+phone = phone.slice(2)
 }
 
-async function getSetting() {
-  const { data, error } = await supabaseAdmin
-    .from('whatsapp_settings')
-    .select('*')
-    .eq('type', 'blast')
-    .maybeSingle()
+if (phone.endsWith('"')) {
+phone = phone.slice(0, -1)
+}
 
-  if (error) throw error
+if (phone.startsWith("'")) {
+phone = phone.slice(1)
+}
 
-  return data || {
-    message_mode: 'text',
-    template_variables: [],
-    default_message: 'Halo {name}, ini informasi terbaru dari layanan kami.'
-  }
+let result = ''
+
+for (const char of phone) {
+if ('0123456789'.includes(char)) {
+result += char
+}
+}
+
+if (result.startsWith('0')) {
+result = '62' + result.slice(1)
+}
+
+return result
+}
+
+function getContactAttachment(contact, database) {
+const contactAttachmentUrl = cleanText(contact.attachment_url)
+const defaultAttachmentUrl = cleanText(database?.default_attachment_url)
+
+if (contactAttachmentUrl) {
+return {
+attachment_url: contactAttachmentUrl,
+attachment_type: cleanText(contact.attachment_type) || cleanText(database?.default_attachment_type) || null,
+attachment_filename: cleanText(contact.attachment_filename) || cleanText(database?.default_attachment_filename) || null,
+attachment_caption: cleanText(contact.attachment_caption) || cleanText(contact.message) || null
+}
+}
+
+if (defaultAttachmentUrl) {
+return {
+attachment_url: defaultAttachmentUrl,
+attachment_type: cleanText(database?.default_attachment_type) || null,
+attachment_filename: cleanText(database?.default_attachment_filename) || null,
+attachment_caption: cleanText(database?.default_attachment_caption) || cleanText(contact.message) || null
+}
+}
+
+return {
+attachment_url: null,
+attachment_type: null,
+attachment_filename: null,
+attachment_caption: null
+}
+}
+
+async function insertItemsInChunks(items) {
+let inserted = 0
+
+for (let i = 0; i < items.length; i += INSERT_CHUNK_SIZE) {
+const chunk = items.slice(i, i + INSERT_CHUNK_SIZE)
+
+const { error } = await supabaseAdmin
+.from('send_job_items')
+.insert(chunk)
+
+if (error) {
+throw new Error(error.message)
+}
+
+inserted += chunk.length
+}
+
+return inserted
 }
 
 export default async function handler(req, res) {
-  const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
-  if (!authUser) return
+res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+res.setHeader('Pragma', 'no-cache')
+res.setHeader('Expires', '0')
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({
-      success: false,
-      message: 'Method not allowed'
-    })
-  }
+try {
+const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+if (!authUser) return
 
-  try {
-    const { databaseId } = req.body
+if (req.method !== 'POST') {
+return res.status(405).json({
+success: false,
+message: 'Method not allowed'
+})
+}
 
-    if (!databaseId) {
-      return res.status(400).json({
-        success: false,
-        message: 'databaseId wajib diisi'
-      })
-    }
+const body = req.body || {}
+const databaseId = cleanText(body.databaseId || body.database_id || body.contact_database_id)
 
-    const setting = await getSetting()
-    const delayMs = getSendDelayMs()
-    const startedAt = Date.now()
+if (!databaseId) {
+return res.status(400).json({
+success: false,
+message: 'databaseId wajib diisi.'
+})
+}
 
-    const { data: contacts, error: contactsError } = await supabaseAdmin
-      .from('contacts')
-      .select('*')
-      .eq('database_id', databaseId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: true })
+const { data: database, error: databaseError } = await supabaseAdmin
+.from('contact_databases')
+.select(
+'id, name, type, default_attachment_url, default_attachment_type, default_attachment_filename, default_attachment_caption'
+)
+.eq('id', databaseId)
+.single()
 
-    if (contactsError) throw contactsError
+if (databaseError || !database) {
+return res.status(404).json({
+success: false,
+message: databaseError?.message || 'Database tidak ditemukan.'
+})
+}
 
-    if (!contacts || contacts.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Kontak broadcast kosong'
-      })
-    }
+const { data: contacts, error: contactsError } = await supabaseAdmin
+.from('contacts')
+.select('id, name, phone, message, attachment_url, attachment_type, attachment_filename, attachment_caption')
+.eq('database_id', databaseId)
+.order('created_at', { ascending: true })
 
-    let sent = 0
-    let failed = 0
+if (contactsError) {
+return res.status(500).json({
+success: false,
+message: contactsError.message
+})
+}
 
-    for (let i = 0; i < contacts.length; i++) {
-      const contact = contacts[i]
+const validContacts = Array.isArray(contacts)
+? contacts.filter((contact) => cleanPhone(contact.phone) && cleanText(contact.message))
+: []
 
-      let result
-      let message = contact.message || interpolateMessage(setting.default_message, contact)
+if (!validContacts.length) {
+return res.status(400).json({
+success: false,
+message: 'Tidak ada kontak valid.'
+})
+}
 
-      if (setting.message_mode === 'template') {
-        const variables = Array.isArray(setting.template_variables)
-          ? setting.template_variables.map((field) => getValue(contact, field))
-          : []
+const jobName = cleanText(body.name || body.title) || database.name || 'WhatsApp Blast'
 
-        result = await sendWhatsAppTemplate({
-          phone: contact.phone,
-          templateName: setting.template_name,
-          languageCode: setting.language_code || 'id',
-          variables
-        })
+const { data: job, error: jobError } = await supabaseAdmin
+.from('send_jobs')
+.insert({
+name: jobName,
+title: jobName,
+type: 'blast',
+database_id: databaseId,
+status: 'pending',
+total_items: validContacts.length,
+batch_limit: DEFAULT_BATCH_LIMIT
+})
+.select('*')
+.single()
 
-        message = `TEMPLATE: ${setting.template_name} | VARS: ${variables.join(', ')}`
-      } else {
-        result = await sendWhatsAppText({
-          phone: contact.phone,
-          message
-        })
-      }
+if (jobError || !job) {
+return res.status(500).json({
+success: false,
+message: jobError?.message || 'Gagal membuat job.'
+})
+}
 
-      if (result.ok) {
-        sent += 1
-      } else {
-        failed += 1
-      }
+const items = validContacts.map((contact) => {
+const attachment = getContactAttachment(contact, database)
 
-      await supabaseAdmin.from('blast_logs').insert({
-        database_id: databaseId,
-        contact_id: contact.id,
-        phone: contact.phone,
-        message,
-        status: result.ok ? 'sent' : 'failed',
-        meta_message_id: result.messageId || null,
-        error_message: result.error || null
-      })
+return {
+job_id: job.id,
+name: cleanText(contact.name),
+phone: cleanPhone(contact.phone),
+message: cleanText(contact.message),
+status: 'pending',
+attachment_url: attachment.attachment_url,
+attachment_type: attachment.attachment_type,
+attachment_filename: attachment.attachment_filename,
+attachment_caption: attachment.attachment_caption
+}
+})
 
-      // Delay antar nomor, kecuali setelah kontak terakhir
-      if (i < contacts.length - 1) {
-        await sleep(delayMs)
-      }
-    }
+const inserted = await insertItemsInChunks(items)
+const withAttachment = items.filter((item) => item.attachment_url).length
 
-    const durationSeconds = Math.round((Date.now() - startedAt) / 1000)
-
-    return res.status(200).json({
-      success: true,
-      message: `Broadcast selesai. Terkirim: ${sent}, Gagal: ${failed}, Delay: ${delayMs}ms, Durasi: ${durationSeconds}s`,
-      sent,
-      failed,
-      delayMs,
-      durationSeconds
-    })
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Run broadcast gagal'
-    })
-  }
+return res.status(200).json({
+success: true,
+message: 'Job blast berhasil dibuat.',
+job,
+job_id: job.id,
+total_items: inserted,
+with_attachment: withAttachment
+})
+} catch (error) {
+return res.status(500).json({
+success: false,
+message: error.message || 'Gagal menjalankan blast.'
+})
+}
 }
