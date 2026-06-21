@@ -105,6 +105,20 @@ text ||
 }
 }
 
+async function fetchWithTimeout(url, options, timeoutMs) {
+const controller = new AbortController()
+const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+try {
+return await fetch(url, {
+...options,
+signal: controller.signal
+})
+} finally {
+clearTimeout(timer)
+}
+}
+
 function normalizeParsedRows(parsed) {
 return parsed.map((row) => ({
 name: row.name || row.nama || row.customer_name || '',
@@ -148,12 +162,12 @@ const rows = [
 {
 name: 'Indira',
 phone: '="6285137908391"',
-message: 'Halo Kak Indira, ini informasi dari inHarmony Clinic.'
+message: 'Halo Kak Indira, ini informasi dari Notiva.'
 },
 {
 name: 'Andin',
 phone: '="6281234567890"',
-message: 'Halo Kak Andin, ini informasi dari inHarmony Clinic.'
+message: 'Halo Kak Andin, ini informasi dari Notiva.'
 }
 ]
 
@@ -175,7 +189,7 @@ const rows = [
 {
 name: 'Indira',
 phone: '="6285137908391"',
-message: 'Halo Kak Indira, berikut kami kirimkan file PDF dari inHarmony Clinic.',
+message: 'Halo Kak Indira, berikut kami kirimkan file PDF.',
 attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
 attachment_type: 'document',
 attachment_filename: 'file_indira.pdf',
@@ -184,7 +198,7 @@ attachment_caption: 'Berikut file PDF untuk Kak Indira.'
 {
 name: 'Andin',
 phone: '="6281234567890"',
-message: 'Halo Kak Andin, berikut kami kirimkan gambar dari inHarmony Clinic.',
+message: 'Halo Kak Andin, berikut kami kirimkan gambar.',
 attachment_url: 'https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg',
 attachment_type: 'image',
 attachment_filename: 'gambar_andin.jpg',
@@ -255,7 +269,9 @@ setUploadingAttachment(true)
 try {
 const base64 = await fileToBase64(file)
 
-const response = await fetch('/api/attachments/upload', {
+const response = await fetchWithTimeout(
+'/api/attachments/upload',
+{
 method: 'POST',
 headers: {
 'Content-Type': 'application/json'
@@ -265,7 +281,9 @@ fileName: file.name,
 mimeType: file.type,
 base64
 })
-})
+},
+20000
+)
 
 const data = await readApiResponse(response)
 
@@ -282,7 +300,12 @@ attachment_filename: data.attachment_filename
 setMessage('Attachment berhasil di-upload: ' + data.attachment_filename)
 } catch (err) {
 setGlobalAttachment(null)
+
+if (err.name === 'AbortError') {
+setError('Upload terlalu lama. Coba ulangi. Kalau masih gagal, cek bucket wa-attachments di Supabase.')
+} else {
 setError(err.message || 'Upload attachment gagal')
+}
 } finally {
 setUploadingAttachment(false)
 e.target.value = ''
@@ -435,11 +458,13 @@ Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_t
 </div>
 
 <div className="flex gap-2">
-<label className={
+<label
+className={
 uploadingAttachment
 ? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
 : 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
-}>
+}
+>
 {uploadingAttachment ? 'Uploading...' : 'Attach File'}
 <input
 type="file"
@@ -471,6 +496,9 @@ name, phone, message, attachment_url, attachment_type, attachment_filename, atta
 </code>
 <p className="mt-2 text-xs">
 Kolom attachment boleh kosong kalau memakai tombol Attach File.
+</p>
+<p className="mt-1 text-xs">
+Kalau setiap kontak punya file berbeda, gunakan template dengan attachment dan isi attachment_url per baris.
 </p>
 </div>
 

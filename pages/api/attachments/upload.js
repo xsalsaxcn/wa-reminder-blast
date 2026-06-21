@@ -75,30 +75,20 @@ const allowed = [
 return allowed.includes(String(mimeType || '').toLowerCase())
 }
 
-async function ensureBucket() {
-try {
-const { data } = await supabaseAdmin.storage.listBuckets()
-const exists = (data || []).some((bucket) => bucket.name === BUCKET_NAME)
-
-if (exists) return
-
-await supabaseAdmin.storage.createBucket(BUCKET_NAME, {
-public: true,
-fileSizeLimit: MAX_FILE_SIZE,
-allowedMimeTypes: [
-'image/jpeg',
-'image/png',
-'image/webp',
-'application/pdf',
-'application/msword',
-'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-'application/vnd.ms-excel',
-'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-]
-})
-} catch (err) {
-console.error('ensureBucket failed:', err)
+function withTimeout(promise, ms) {
+return Promise.race([
+promise,
+new Promise((resolve) => {
+setTimeout(() => {
+resolve({
+timeout: true,
+error: {
+message: 'Upload timeout. Server terlalu lama merespons.'
 }
+})
+}, ms)
+})
+])
 }
 
 export default async function handler(req, res) {
@@ -140,11 +130,9 @@ message: 'File kosong.'
 if (buffer.length > MAX_FILE_SIZE) {
 return res.status(400).json({
 success: false,
-message: 'Ukuran file terlalu besar. Maksimal attachment adalah 1 MB. Kompres file terlebih dahulu atau gunakan attachment_url di CSV.'
+message: 'Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.'
 })
 }
-
-await ensureBucket()
 
 const date = new Date()
 const folder =
@@ -156,17 +144,27 @@ String(date.getDate()).padStart(2, '0')
 
 const path = folder + '/' + randomUUID() + '-' + cleanName
 
-const { error: uploadError } = await supabaseAdmin.storage
+const uploadResult = await withTimeout(
+supabaseAdmin.storage
 .from(BUCKET_NAME)
 .upload(path, buffer, {
 contentType: cleanMimeType,
 upsert: false
-})
+}),
+15000
+)
 
-if (uploadError) {
+if (uploadResult.timeout) {
+return res.status(504).json({
+success: false,
+message: 'Upload terlalu lama. Coba ulangi. Jika masih gagal, pastikan bucket wa-attachments sudah dibuat di Supabase Storage.'
+})
+}
+
+if (uploadResult.error) {
 return res.status(500).json({
 success: false,
-message: uploadError.message
+message: uploadResult.error.message || 'Upload ke storage gagal.'
 })
 }
 

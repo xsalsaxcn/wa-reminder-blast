@@ -105,6 +105,20 @@ text ||
 }
 }
 
+async function fetchWithTimeout(url, options, timeoutMs) {
+const controller = new AbortController()
+const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+try {
+return await fetch(url, {
+...options,
+signal: controller.signal
+})
+} finally {
+clearTimeout(timer)
+}
+}
+
 function normalizeParsedRows(parsed) {
 return parsed.map((row) => ({
 name: row.name || row.nama || row.customer_name || '',
@@ -168,13 +182,13 @@ const rows = [
 {
 name: 'Budi',
 phone: '="6285137908391"',
-message: 'Halo Kak Budi, ini reminder jadwal layanan dari inHarmony Clinic.',
+message: 'Halo Kak Budi, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22 09:00'
 },
 {
 name: 'Sari',
 phone: '="6281234567890"',
-message: 'Halo Kak Sari, ini reminder jadwal layanan dari inHarmony Clinic.',
+message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22 10:00'
 }
 ]
@@ -198,7 +212,7 @@ const rows = [
 {
 name: 'Budi',
 phone: '="6285137908391"',
-message: 'Halo Kak Budi, ini reminder jadwal layanan dari inHarmony Clinic.',
+message: 'Halo Kak Budi, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22 09:00',
 attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
 attachment_type: 'document',
@@ -208,7 +222,7 @@ attachment_caption: 'Berikut file reminder untuk Kak Budi.'
 {
 name: 'Sari',
 phone: '="6281234567890"',
-message: 'Halo Kak Sari, ini reminder jadwal layanan dari inHarmony Clinic.',
+message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22 10:00',
 attachment_url: 'https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg',
 attachment_type: 'image',
@@ -237,7 +251,7 @@ const rows = [
 {
 name: 'Budi',
 phone: '="6285137908391"',
-message: 'Halo Kak Budi, ini reminder jadwal layanan dari inHarmony Clinic.',
+message: 'Halo Kak Budi, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22',
 reminder_time: '09:00',
 attachment_url: '',
@@ -248,7 +262,7 @@ attachment_caption: ''
 {
 name: 'Sari',
 phone: '="6281234567890"',
-message: 'Halo Kak Sari, ini reminder jadwal layanan dari inHarmony Clinic.',
+message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
 reminder_date: '2026-06-22',
 reminder_time: '10:00',
 attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
@@ -329,7 +343,9 @@ setUploadingAttachment(true)
 try {
 const base64 = await fileToBase64(file)
 
-const response = await fetch('/api/attachments/upload', {
+const response = await fetchWithTimeout(
+'/api/attachments/upload',
+{
 method: 'POST',
 headers: {
 'Content-Type': 'application/json'
@@ -339,7 +355,9 @@ fileName: file.name,
 mimeType: file.type,
 base64
 })
-})
+},
+20000
+)
 
 const data = await readApiResponse(response)
 
@@ -356,7 +374,12 @@ attachment_filename: data.attachment_filename
 setMessage('Attachment berhasil di-upload: ' + data.attachment_filename)
 } catch (err) {
 setGlobalAttachment(null)
+
+if (err.name === 'AbortError') {
+setError('Upload terlalu lama. Coba ulangi. Kalau masih gagal, cek bucket wa-attachments di Supabase.')
+} else {
 setError(err.message || 'Upload attachment gagal')
+}
 } finally {
 setUploadingAttachment(false)
 e.target.value = ''
@@ -517,11 +540,13 @@ Attached: {globalAttachment.attachment_filename} ({globalAttachment.attachment_t
 </div>
 
 <div className="flex gap-2">
-<label className={
+<label
+className={
 uploadingAttachment
 ? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
 : 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
-}>
+}
+>
 {uploadingAttachment ? 'Uploading...' : 'Attach File'}
 <input
 type="file"
