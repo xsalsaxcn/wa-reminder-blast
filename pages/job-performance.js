@@ -1,5 +1,223 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Sidebar from '../components/Sidebar'
+
+function cleanText(value) {
+  return String(value || '').trim()
+}
+
+function toNumber(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  return number
+}
+
+function formatDate(value) {
+  if (!value) return '-'
+
+  try {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return String(value)
+
+    return date.toLocaleString('id-ID', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch (err) {
+    return String(value)
+  }
+}
+
+function formatRupiah(value) {
+  return 'Rp ' + toNumber(value).toLocaleString('id-ID')
+}
+
+function getFirst(row, keys, fallback) {
+  for (const key of keys) {
+    if (row && row[key] !== undefined && row[key] !== null && row[key] !== '') {
+      return row[key]
+    }
+  }
+
+  return fallback
+}
+
+function normalizeRow(row) {
+  const target = toNumber(getFirst(row, ['target', 'total', 'total_items', 'total_contacts'], 0))
+  const sent = toNumber(getFirst(row, ['sent', 'sent_items', 'sent_count'], 0))
+  const failed = toNumber(getFirst(row, ['failed', 'failed_items', 'failed_count'], 0))
+  const replies = toNumber(getFirst(row, ['replies', 'reply_count', 'total_replies'], 0))
+
+  const interested = toNumber(
+    getFirst(row, ['interested', 'interested_count', 'positive', 'positive_count'], 0)
+  )
+
+  const followUp = toNumber(
+    getFirst(row, ['follow_up', 'followup', 'follow_up_count'], 0)
+  )
+
+  const notInterested = toNumber(
+    getFirst(row, ['not_interested', 'notInterested', 'not_interested_count', 'negative', 'negative_count'], 0)
+  )
+
+  const optOut = toNumber(
+    getFirst(row, ['opt_out', 'optout', 'opt_out_count'], 0)
+  )
+
+  const hotLead = toNumber(
+    getFirst(row, ['hot_lead', 'hotLead', 'hot_lead_count'], interested)
+  )
+
+  const score = toNumber(getFirst(row, ['score', 'lead_score'], 0))
+  const cost = toNumber(getFirst(row, ['cost', 'estimated_cost', 'est_cost'], 0))
+
+  return {
+    raw: row,
+    id: getFirst(row, ['job_id', 'id', 'jobId'], ''),
+    jobName: getFirst(row, ['job_name', 'name', 'title', 'database_name', 'campaign_name'], 'Campaign'),
+    databaseName: getFirst(row, ['database_name', 'databaseName'], ''),
+    type: getFirst(row, ['type', 'job_type'], '-'),
+    status: getFirst(row, ['status', 'job_status'], '-'),
+    createdAt: getFirst(row, ['created_at', 'createdAt', 'started_at'], ''),
+    target,
+    sent,
+    failed,
+    replies,
+    interested,
+    followUp,
+    notInterested,
+    optOut,
+    hotLead,
+    score,
+    cost,
+    rate: sent > 0 ? Math.round((replies / sent) * 100) : 0
+  }
+}
+
+function statusClass(status) {
+  const text = cleanText(status).toLowerCase()
+
+  if (text.includes('done') || text.includes('complete') || text.includes('sent')) {
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+  }
+
+  if (text.includes('fail') || text.includes('error')) {
+    return 'bg-red-50 text-red-700 ring-red-200'
+  }
+
+  if (text.includes('process') || text.includes('running')) {
+    return 'bg-blue-50 text-blue-700 ring-blue-200'
+  }
+
+  return 'bg-slate-50 text-slate-700 ring-slate-200'
+}
+
+function typeClass(type) {
+  const text = cleanText(type).toLowerCase()
+
+  if (text.includes('reminder')) {
+    return 'bg-violet-50 text-violet-700 ring-violet-200'
+  }
+
+  if (text.includes('blast')) {
+    return 'bg-cyan-50 text-cyan-700 ring-cyan-200'
+  }
+
+  return 'bg-slate-50 text-slate-700 ring-slate-200'
+}
+
+function MetricCard({ label, value, hint }) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <p className="text-xs font-bold text-slate-500">{label}</p>
+      <p className="mt-2 text-2xl font-black text-slate-900">{value}</p>
+      {hint ? (
+        <p className="mt-1 text-[11px] text-slate-400">{hint}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function MiniStat({ label, value, className }) {
+  return (
+    <div className="rounded-2xl bg-slate-50 p-3">
+      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className={'mt-1 text-lg font-black ' + (className || 'text-slate-900')}>
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function JobCard({ item }) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="max-w-full truncate text-lg font-black text-slate-900">
+              {item.jobName}
+            </h3>
+
+            <span className={'rounded-full px-3 py-1 text-xs font-black ring-1 ' + typeClass(item.type)}>
+              {item.type}
+            </span>
+
+            <span className={'rounded-full px-3 py-1 text-xs font-black ring-1 ' + statusClass(item.status)}>
+              {item.status}
+            </span>
+          </div>
+
+          <p className="mt-2 text-xs text-slate-400">
+            {formatDate(item.createdAt)}
+          </p>
+
+          {item.id ? (
+            <p className="mt-1 break-all text-xs text-slate-400">
+              {item.id}
+            </p>
+          ) : null}
+
+          {item.databaseName ? (
+            <p className="mt-1 text-xs text-slate-400">
+              Database: {item.databaseName}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[520px]">
+          <MiniStat label="Target" value={item.target} />
+          <MiniStat label="Sent" value={item.sent} className="text-emerald-700" />
+          <MiniStat label="Failed" value={item.failed} className="text-red-700" />
+          <MiniStat label="Rate" value={String(item.rate) + '%'} className="text-blue-700" />
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+        <MiniStat label="Replies" value={item.replies} className="text-blue-700" />
+        <MiniStat label="Interested" value={item.interested} className="text-emerald-700" />
+        <MiniStat label="Follow-up" value={item.followUp} className="text-amber-700" />
+        <MiniStat label="Not Int." value={item.notInterested} className="text-red-700" />
+        <MiniStat label="Opt-out" value={item.optOut} className="text-slate-700" />
+        <MiniStat label="Hot Lead" value={item.hotLead} className="text-emerald-700" />
+        <MiniStat label="Score" value={item.score} className="text-slate-900" />
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+        <p className="text-xs text-slate-500">
+          Cost estimate
+        </p>
+        <p className="text-sm font-black text-slate-900">
+          {formatRupiah(item.cost)}
+        </p>
+      </div>
+    </div>
+  )
+}
 
 export default function JobPerformancePage() {
   const [rows, setRows] = useState([])
@@ -10,18 +228,10 @@ export default function JobPerformancePage() {
   const [filters, setFilters] = useState({
     start: '',
     end: '',
-    type: 'all',
-    status: 'all',
-    q: ''
+    type: '',
+    status: '',
+    search: ''
   })
-
-  function formatRupiah(value) {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      maximumFractionDigits: 0
-    }).format(Number(value || 0))
-  }
 
   function buildQuery() {
     const params = new URLSearchParams()
@@ -30,31 +240,48 @@ export default function JobPerformancePage() {
     if (filters.end) params.set('end', filters.end)
     if (filters.type) params.set('type', filters.type)
     if (filters.status) params.set('status', filters.status)
-    if (filters.q) params.set('q', filters.q)
+    if (filters.search) params.set('search', filters.search)
 
-    params.set('t', Date.now())
+    params.set('t', String(Date.now()))
+
     return params.toString()
   }
 
-  async function loadPerformance() {
+  async function loadData() {
     setLoading(true)
     setError('')
 
     try {
       const response = await fetch('/api/job-performance/list?' + buildQuery(), {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json'
+        },
         cache: 'no-store'
       })
 
-      const data = await response.json()
+      const data = await response.json().catch(function () {
+        return {}
+      })
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Gagal memuat job performance')
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || 'Gagal load job performance.')
       }
 
-      setRows(data.rows || [])
+      const items = Array.isArray(data.items)
+        ? data.items
+        : Array.isArray(data.rows)
+          ? data.rows
+          : Array.isArray(data.data)
+            ? data.data
+            : []
+
+      setRows(items)
       setSummary(data.summary || null)
     } catch (err) {
-      setError(err.message)
+      setRows([])
+      setSummary(null)
+      setError(err.message || 'Gagal load job performance.')
     } finally {
       setLoading(false)
     }
@@ -64,341 +291,228 @@ export default function JobPerformancePage() {
     window.open('/api/job-performance/export?' + buildQuery(), '_blank')
   }
 
-  useEffect(() => {
-    loadPerformance()
+  useEffect(function () {
+    loadData()
   }, [])
 
+  const items = useMemo(function () {
+    return rows.map(normalizeRow)
+  }, [rows])
+
+  const safeSummary = useMemo(function () {
+    if (summary) {
+      return {
+        jobs: summary.jobs || summary.total_jobs || items.length || 0,
+        target: summary.target || summary.total || 0,
+        sent: summary.sent || 0,
+        failed: summary.failed || 0,
+        replies: summary.replies || 0,
+        hotLead: summary.hot_lead || summary.hotLead || 0,
+        cost: summary.cost || 0
+      }
+    }
+
+    return items.reduce(
+      function (acc, item) {
+        acc.jobs += 1
+        acc.target += item.target
+        acc.sent += item.sent
+        acc.failed += item.failed
+        acc.replies += item.replies
+        acc.hotLead += item.hotLead
+        acc.cost += item.cost
+        return acc
+      },
+      {
+        jobs: 0,
+        target: 0,
+        sent: 0,
+        failed: 0,
+        replies: 0,
+        hotLead: 0,
+        cost: 0
+      }
+    )
+  }, [items, summary])
+
   return (
-    <div className="min-h-screen bg-slate-100 md:flex">
+    <div className="min-h-screen bg-slate-100 lg:flex">
       <Sidebar />
 
-      <main className="flex-1 p-4 md:p-6">
-        <div className="mx-auto max-w-[1500px]">
-          <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <main className="flex-1 p-4 lg:p-8">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Job Performance</h1>
-              <p className="text-sm text-slate-500">
+              <h1 className="text-2xl font-black text-slate-900 lg:text-3xl">
+                Job Performance
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
                 Lihat performa setiap blast/reminder job berdasarkan status kirim dan reply customer.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Jalankan Reply Analysis lebih dulu supaya data reply, minat, dan hot lead terbaca.
+                Tampilan ini hanya mengubah UI, data tetap dari API Job Performance yang sudah berjalan.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <button
+                type="button"
                 onClick={exportCsv}
-                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
               >
                 Export CSV
               </button>
 
               <button
-                onClick={loadPerformance}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+                type="button"
+                onClick={loadData}
+                disabled={loading}
+                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300"
               >
-                Refresh
+                {loading ? 'Loading...' : 'Refresh'}
               </button>
             </div>
           </div>
 
-          {error ? (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-              {error}
-            </div>
-          ) : null}
-
-          <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-5">
+          <section className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-500">
+              <label className="mb-1 block text-xs font-bold text-slate-500">
                 Start
               </label>
               <input
                 type="date"
                 value={filters.start}
-                onChange={(e) => setFilters({ ...filters, start: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                onChange={function (e) {
+                  setFilters({
+                    ...filters,
+                    start: e.target.value
+                  })
+                }}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
               />
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-500">
+              <label className="mb-1 block text-xs font-bold text-slate-500">
                 End
               </label>
               <input
                 type="date"
                 value={filters.end}
-                onChange={(e) => setFilters({ ...filters, end: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                onChange={function (e) {
+                  setFilters({
+                    ...filters,
+                    end: e.target.value
+                  })
+                }}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
               />
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-500">
+              <label className="mb-1 block text-xs font-bold text-slate-500">
                 Type
               </label>
               <select
                 value={filters.type}
-                onChange={(e) => setFilters({ ...filters, type: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                onChange={function (e) {
+                  setFilters({
+                    ...filters,
+                    type: e.target.value
+                  })
+                }}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
               >
-                <option value="all">Semua</option>
+                <option value="">Semua</option>
                 <option value="blast">Blast</option>
                 <option value="reminder">Reminder</option>
               </select>
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-500">
+              <label className="mb-1 block text-xs font-bold text-slate-500">
                 Status
               </label>
               <select
                 value={filters.status}
-                onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                onChange={function (e) {
+                  setFilters({
+                    ...filters,
+                    status: e.target.value
+                  })
+                }}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
               >
-                <option value="all">Semua</option>
+                <option value="">Semua</option>
                 <option value="pending">Pending</option>
                 <option value="processing">Processing</option>
-                <option value="completed">Completed</option>
                 <option value="done">Done</option>
+                <option value="completed">Completed</option>
                 <option value="failed">Failed</option>
               </select>
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-500">
+              <label className="mb-1 block text-xs font-bold text-slate-500">
                 Search
               </label>
               <input
                 type="text"
-                value={filters.q}
-                onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+                value={filters.search}
+                onChange={function (e) {
+                  setFilters({
+                    ...filters,
+                    search: e.target.value
+                  })
+                }}
+                onKeyDown={function (e) {
+                  if (e.key === 'Enter') loadData()
+                }}
                 placeholder="Cari job..."
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
               />
             </div>
-          </div>
+          </section>
 
-          {summary ? (
-            <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-7">
-              <SummaryCard label="Jobs" value={summary.totalJobs} />
-              <SummaryCard label="Target" value={summary.totalTarget} />
-              <SummaryCard label="Sent" value={summary.totalSent} />
-              <SummaryCard label="Failed" value={summary.totalFailed} />
-              <SummaryCard label="Replies" value={summary.totalReplies} />
-              <SummaryCard label="Hot Lead" value={summary.totalHotLead} />
-              <SummaryCard label="Est. Cost" value={formatRupiah(summary.estimatedCostIdr)} small />
+          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+            <MetricCard label="Jobs" value={safeSummary.jobs} />
+            <MetricCard label="Target" value={safeSummary.target} />
+            <MetricCard label="Sent" value={safeSummary.sent} />
+            <MetricCard label="Failed" value={safeSummary.failed} />
+            <MetricCard label="Replies" value={safeSummary.replies} />
+            <MetricCard label="Hot Lead" value={safeSummary.hotLead} />
+            <MetricCard label="Est. Cost" value={formatRupiah(safeSummary.cost)} />
+          </section>
+
+          {error ? (
+            <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {error}
             </div>
           ) : null}
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 p-4">
-              <h2 className="font-semibold text-slate-900">Campaign / Job Result</h2>
-              <p className="text-xs text-slate-500">
-                Data gabungan dari Job Queue, Usage Log, dan Reply Analysis.
-              </p>
+          {loading ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
+              Loading job performance...
             </div>
+          ) : null}
 
-            <div className="max-h-[620px] overflow-y-auto">
-              <table className="w-full table-fixed border-collapse">
-                <colgroup>
-                  <col style={{ width: '29%' }} />
-                  <col style={{ width: '5.5%' }} />
-                  <col style={{ width: '7.5%' }} />
-                  <col style={{ width: '4.25%' }} />
-                  <col style={{ width: '4.25%' }} />
-                  <col style={{ width: '4.25%' }} />
-                  <col style={{ width: '5%' }} />
-                  <col style={{ width: '5%' }} />
-                  <col style={{ width: '5.5%' }} />
-                  <col style={{ width: '5.5%' }} />
-                  <col style={{ width: '5%' }} />
-                  <col style={{ width: '4.5%' }} />
-                  <col style={{ width: '4.75%' }} />
-                  <col style={{ width: '4%' }} />
-                  <col style={{ width: '6%' }} />
-                </colgroup>
-
-                <thead className="sticky top-0 z-10">
-                  <tr className="border-b border-slate-200 bg-slate-50">
-                    <SoftTh left>Job</SoftTh>
-                    <SoftTh>Type</SoftTh>
-                    <SoftTh>Status</SoftTh>
-                    <SoftTh>Target</SoftTh>
-                    <SoftTh>Sent</SoftTh>
-                    <SoftTh>Failed</SoftTh>
-                    <SoftTh>Replies</SoftTh>
-                    <SoftTh>Rate</SoftTh>
-                    <SoftTh>Interested</SoftTh>
-                    <SoftTh>Follow-up</SoftTh>
-                    <SoftTh>Not Int.</SoftTh>
-                    <SoftTh>Opt-out</SoftTh>
-                    <SoftTh>Hot Lead</SoftTh>
-                    <SoftTh>Score</SoftTh>
-                    <SoftTh right>Cost</SoftTh>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {loading ? (
-                    <tr>
-                      <td colSpan="15" className="p-4 text-sm text-slate-500">
-                        Loading...
-                      </td>
-                    </tr>
-                  ) : rows.length === 0 ? (
-                    <tr>
-                      <td colSpan="15" className="p-4 text-sm text-slate-500">
-                        Belum ada data job performance.
-                      </td>
-                    </tr>
-                  ) : (
-                    rows.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50/70">
-                        <td className="px-4 py-4 align-top">
-                          <div className="min-w-0">
-                            <div
-                              className="truncate text-sm font-semibold text-slate-900"
-                              title={row.job_name || '-'}
-                            >
-                              {row.job_name || '-'}
-                            </div>
-
-                            <div className="mt-1 truncate text-xs text-slate-400">
-                              {row.created_at
-                                ? new Date(row.created_at).toLocaleString('id-ID')
-                                : ''}
-                            </div>
-
-                            {row.id ? (
-                              <div
-                                className="mt-1 truncate text-[11px] text-slate-400"
-                                title={row.id}
-                              >
-                                {row.id}
-                              </div>
-                            ) : null}
-                          </div>
-                        </td>
-
-                        <BodyTd>
-                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
-                            {row.type}
-                          </span>
-                        </BodyTd>
-
-                        <BodyTd>
-                          <StatusBadge status={row.status} />
-                        </BodyTd>
-
-                        <BodyTd>{row.total_target}</BodyTd>
-                        <BodyTd>{row.sent}</BodyTd>
-                        <BodyTd>{row.failed}</BodyTd>
-
-                        <BodyTd>
-                          <div className="text-sm font-semibold text-slate-900">
-                            {row.replies}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {row.unique_repliers} nomor
-                          </div>
-                        </BodyTd>
-
-                        <BodyTd>
-                          <span className="rounded-full bg-blue-50 px-2 py-1 text-[11px] font-bold text-blue-700 ring-1 ring-blue-200">
-                            {row.reply_rate}%
-                          </span>
-                        </BodyTd>
-
-                        <BodyTd>{row.interested}</BodyTd>
-                        <BodyTd>{row.follow_up}</BodyTd>
-                        <BodyTd>{row.not_interested}</BodyTd>
-                        <BodyTd>{row.opt_out}</BodyTd>
-
-                        <BodyTd>
-                          <span
-                            className={
-                              row.hot_lead > 0
-                                ? 'rounded-full bg-green-50 px-2 py-1 text-[11px] font-bold text-green-700 ring-1 ring-green-200'
-                                : 'text-sm text-slate-700'
-                            }
-                          >
-                            {row.hot_lead}
-                          </span>
-                        </BodyTd>
-
-                        <BodyTd>{row.avg_score}</BodyTd>
-
-                        <td className="px-2 py-4 text-right align-middle text-sm text-slate-700">
-                          {formatRupiah(row.estimated_cost_idr)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+          {!loading && !items.length ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
+              Belum ada data job performance.
             </div>
-          </div>
+          ) : null}
 
-          <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
-            <b>Tips:</b> setelah blast berjalan, buka Reply Analysis dan klik Analyze Inbox.
-            Setelah itu refresh halaman ini supaya metrik Berminat, Hot Lead, dan Reply Rate terbaru.
-          </div>
+          {!loading && items.length ? (
+            <section className="space-y-4">
+              {items.map(function (item, index) {
+                return (
+                  <JobCard key={item.id || index} item={item} />
+                )
+              })}
+            </section>
+          ) : null}
         </div>
       </main>
     </div>
-  )
-}
-
-function SummaryCard({ label, value, small }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-semibold text-slate-500">{label}</div>
-      <div className={`mt-1 font-bold text-slate-900 ${small ? 'text-lg' : 'text-2xl'}`}>
-        {value}
-      </div>
-    </div>
-  )
-}
-
-function SoftTh({ children, left = false, right = false }) {
-  return (
-    <th
-      className={`px-2 py-3 text-[11px] font-bold uppercase tracking-[0.08em] text-slate-600 ${
-        left ? 'text-left pl-4' : right ? 'text-right pr-4' : 'text-center'
-      }`}
-    >
-      {children}
-    </th>
-  )
-}
-
-function BodyTd({ children }) {
-  return (
-    <td className="px-2 py-4 text-center align-middle text-sm text-slate-700">
-      {children}
-    </td>
-  )
-}
-
-function StatusBadge({ status }) {
-  const value = String(status || '-').toLowerCase()
-
-  const styleMap = {
-    completed: 'bg-green-50 text-green-700 ring-green-200',
-    done: 'bg-green-50 text-green-700 ring-green-200',
-    sent: 'bg-green-50 text-green-700 ring-green-200',
-    failed: 'bg-red-50 text-red-700 ring-red-200',
-    pending: 'bg-yellow-50 text-yellow-700 ring-yellow-200',
-    processing: 'bg-blue-50 text-blue-700 ring-blue-200'
-  }
-
-  const className = styleMap[value] || 'bg-slate-50 text-slate-700 ring-slate-200'
-
-  return (
-    <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ring-1 ${className}`}>
-      {status || '-'}
-    </span>
   )
 }
