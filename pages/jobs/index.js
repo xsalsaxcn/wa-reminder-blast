@@ -132,6 +132,7 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState([])
   const [selectedDatabaseId, setSelectedDatabaseId] = useState('')
   const [selectedType, setSelectedType] = useState('reminder')
+  const [batchMode, setBatchMode] = useState('scheduled')
   const [creating, setCreating] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -208,39 +209,69 @@ export default function JobsPage() {
     }
   }
 
-  async function processBatch(jobId) {
+  function buildProcessUrl(path, jobId, mode) {
+    const params = new URLSearchParams()
+
+    params.set('limit', '10')
+
+    if (jobId) params.set('job_id', jobId)
+
+    if (mode === 'now') {
+      params.set('force', '1')
+    }
+
+    return `${path}?${params.toString()}`
+  }
+
+  async function processBatch(jobId, modeOverride) {
     setProcessing(true)
     setError('')
 
+    const mode = modeOverride || batchMode
+
     try {
-      const suffix = jobId ? `&job_id=${encodeURIComponent(jobId)}` : ''
+      const attachmentResult = await fetchJson(
+        buildProcessUrl('/api/jobs/process-attachment-next', jobId, mode),
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json'
+          },
+          cache: 'no-store'
+        }
+      )
 
-      const attachmentResult = await fetchJson(`/api/jobs/process-attachment-next?limit=10${suffix}`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json'
-        },
-        cache: 'no-store'
-      })
-
-      const textResult = await fetchJson(`/api/jobs/process-next?limit=10${suffix}`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json'
-        },
-        cache: 'no-store'
-      })
+      const textResult = await fetchJson(
+        buildProcessUrl('/api/jobs/process-next', jobId, mode),
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json'
+          },
+          cache: 'no-store'
+        }
+      )
 
       const sent = toNumber(attachmentResult.sent) + toNumber(textResult.sent)
       const failed = toNumber(attachmentResult.failed) + toNumber(textResult.failed)
       const processed = toNumber(attachmentResult.processed) + toNumber(textResult.processed)
+      const futureItems = toNumber(attachmentResult.future_items) + toNumber(textResult.future_items)
 
       setDetail({
+        process_mode: mode,
         process_attachment: attachmentResult,
         process_text: textResult
       })
 
-      setSuccess(`Process Batch selesai. Processed: ${processed}. Sent: ${sent}. Failed: ${failed}.`)
+      if (mode === 'scheduled' && processed === 0 && futureItems > 0) {
+        setSuccess(
+          `Job sudah dibuat. Belum ada pesan yang dikirim karena belum masuk jadwal CSV. Future items: ${futureItems}.`
+        )
+      } else {
+        setSuccess(
+          `Process Batch selesai. Mode: ${mode === 'now' ? 'Now' : 'Sesuai Jadwal CSV'}. Processed: ${processed}. Sent: ${sent}. Failed: ${failed}.`
+        )
+      }
 
       await loadJobs()
 
@@ -249,7 +280,8 @@ export default function JobsPage() {
         textResult,
         sent,
         failed,
-        processed
+        processed,
+        futureItems
       }
     } catch (err) {
       setError(err.message || 'Process batch gagal.')
@@ -313,7 +345,8 @@ export default function JobsPage() {
       const createdJobs = extractCreatedJobs(createResult)
 
       setDetail({
-        create_job: createResult
+        create_job: createResult,
+        process_mode: batchMode
       })
 
       if (!createdJobs.length) {
@@ -322,7 +355,11 @@ export default function JobsPage() {
         return
       }
 
-      setSuccess(`Job berhasil dibuat: ${createdJobs.length}. Process Batch otomatis berjalan...`)
+      setSuccess(
+        `Job berhasil dibuat: ${createdJobs.length}. Process Batch mode: ${
+          batchMode === 'now' ? 'Now' : 'Sesuai Jadwal CSV'
+        }.`
+      )
 
       const processResults = []
 
@@ -330,7 +367,7 @@ export default function JobsPage() {
         const jobId = job.id || job.job_id
 
         if (jobId) {
-          const result = await processBatch(jobId)
+          const result = await processBatch(jobId, batchMode)
           processResults.push({
             job_id: jobId,
             result
@@ -340,6 +377,7 @@ export default function JobsPage() {
 
       setDetail({
         create_job: createResult,
+        process_mode: batchMode,
         process_results: processResults
       })
 
@@ -367,7 +405,7 @@ export default function JobsPage() {
                 Job Queue
               </h1>
               <p className="mt-2 text-sm text-slate-500">
-                Buat job manual dari database. Setelah Create Job, Process Batch otomatis berjalan.
+                Buat job manual dari database. Pilih Process Batch: Now atau Sesuai Jadwal CSV.
               </p>
             </div>
 
@@ -399,7 +437,7 @@ export default function JobsPage() {
                 Create Job from Database
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Untuk reminder, job dibuat dari reminder_schedules. Setelah job berhasil dibuat, batch otomatis diproses.
+                Untuk reminder, job dibuat dari reminder_schedules. Mode scheduled akan membaca reminder_date dan reminder_time dari CSV.
               </p>
             </div>
 
@@ -445,6 +483,55 @@ export default function JobsPage() {
               </div>
             </div>
 
+            <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-black text-slate-900">
+                Process Batch Mode
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Pilih apakah pesan dikirim sekarang atau mengikuti reminder_date + reminder_time di CSV.
+              </p>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+                  <input
+                    type="radio"
+                    name="batchMode"
+                    value="now"
+                    checked={batchMode === 'now'}
+                    onChange={() => setBatchMode('now')}
+                    className="mt-1"
+                  />
+                  <div>
+                    <p className="font-black text-slate-900">
+                      Now
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Setelah Create Job, pesan langsung dikirim walaupun jadwal CSV masih nanti.
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+                  <input
+                    type="radio"
+                    name="batchMode"
+                    value="scheduled"
+                    checked={batchMode === 'scheduled'}
+                    onChange={() => setBatchMode('scheduled')}
+                    className="mt-1"
+                  />
+                  <div>
+                    <p className="font-black text-slate-900">
+                      Sesuai Jadwal CSV
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Pesan hanya dikirim kalau waktu CSV sudah due. Sistem cek reminder_date + reminder_time.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </div>
+
             <div className="mt-5 flex flex-wrap gap-3">
               <button
                 type="button"
@@ -457,7 +544,7 @@ export default function JobsPage() {
 
               <button
                 type="button"
-                onClick={() => processBatch()}
+                onClick={() => processBatch(null, batchMode)}
                 disabled={processing}
                 className="rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-black text-white shadow-sm hover:bg-indigo-700 disabled:bg-slate-300"
               >
@@ -545,7 +632,7 @@ export default function JobsPage() {
                         <td className="px-5 py-4">
                           <button
                             type="button"
-                            onClick={() => processBatch(job.id)}
+                            onClick={() => processBatch(job.id, batchMode)}
                             disabled={processing}
                             className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300"
                           >
