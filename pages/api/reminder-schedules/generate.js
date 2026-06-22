@@ -62,6 +62,12 @@ function getScheduleConfig(value) {
   return null
 }
 
+function normalizeDate(value) {
+  const text = cleanText(value)
+  if (!text) return ''
+  return text.slice(0, 10)
+}
+
 function normalizeTime(value) {
   const text = cleanText(value)
 
@@ -74,9 +80,17 @@ function normalizeTime(value) {
   return `${hour}:${minute}`
 }
 
-function buildAppointmentAt(reminderDate, reminderTime) {
-  const dateText = cleanText(reminderDate).slice(0, 10)
-  const timeText = normalizeTime(reminderTime)
+function buildAppointmentAt(contact) {
+  if (contact.reminder_at) {
+    const fromReminderAt = new Date(contact.reminder_at)
+
+    if (!Number.isNaN(fromReminderAt.getTime())) {
+      return fromReminderAt
+    }
+  }
+
+  const dateText = normalizeDate(contact.reminder_date)
+  const timeText = normalizeTime(contact.reminder_time)
 
   if (!dateText) return null
 
@@ -159,39 +173,43 @@ export default async function handler(req, res) {
 
     for (const contact of contacts) {
       const phone = cleanPhone(contact.phone)
-      const reminderDate = cleanText(contact.reminder_date)
-      const reminderTime = cleanText(contact.reminder_time)
 
-      if (!contact.id || !phone || !reminderDate) {
+      if (!contact.id || !phone) {
         skipped.push({
           contact_id: contact.id || null,
           phone,
-          reason: 'Kontak tidak punya phone/reminder_date.'
+          reason: 'Kontak tidak punya phone.'
         })
         continue
       }
 
-      const appointmentAt = buildAppointmentAt(reminderDate, reminderTime)
+      const appointmentAt = buildAppointmentAt(contact)
 
       if (!appointmentAt) {
         skipped.push({
           contact_id: contact.id,
           phone,
-          reason: 'Tanggal/jam tidak valid.'
+          reason: 'reminder_date/reminder_time/reminder_at tidak valid.'
         })
         continue
       }
 
       for (const config of configs) {
-        const scheduledAt = subtractMinutes(appointmentAt, config.offset_minutes)
+        const offsetScheduledAt = subtractMinutes(appointmentAt, config.offset_minutes)
 
         rows.push({
           database_id: databaseId,
           contact_id: contact.id,
           schedule_type: config.schedule_type,
           schedule_label: config.schedule_label,
+
+          // Ini jam appointment asli dari CSV.
           appointment_at: appointmentAt.toISOString(),
-          scheduled_at: scheduledAt.toISOString(),
+
+          // Ini jam reminder offset H-3/H-1/H-7.
+          // Tetap disimpan sebagai info schedule.
+          scheduled_at: offsetScheduledAt.toISOString(),
+
           status: 'scheduled',
           phone,
           name: cleanText(contact.name),

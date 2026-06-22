@@ -1,174 +1,210 @@
-
-
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
 
 const MAX_CHUNK_SIZE = 150
 
 function cleanText(value) {
-return String(value || '').trim()
+  return String(value || '').trim()
 }
 
 function cleanPhone(value) {
-let phone = String(value || '').trim()
+  let phone = String(value || '').trim()
+  let result = ''
 
-if (phone.startsWith('="')) {
-phone = phone.slice(2)
+  if (phone.startsWith('="')) phone = phone.slice(2)
+  if (phone.endsWith('"')) phone = phone.slice(0, -1)
+  if (phone.startsWith("'")) phone = phone.slice(1)
+
+  for (const char of phone) {
+    if ('0123456789'.includes(char)) result += char
+  }
+
+  if (result.startsWith('0')) result = '62' + result.slice(1)
+
+  return result
 }
 
-if (phone.endsWith('"')) {
-phone = phone.slice(0, -1)
+function normalizeDate(value) {
+  const text = cleanText(value)
+
+  if (!text) return null
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+
+  return text
 }
 
-if (phone.startsWith("'")) {
-phone = phone.slice(1)
+function normalizeTime(value) {
+  const text = cleanText(value)
+
+  if (!text) return '09:00'
+
+  const parts = text.split(':')
+  const hour = String(parts[0] || '09').padStart(2, '0')
+  const minute = String(parts[1] || '00').padStart(2, '0')
+
+  return `${hour}:${minute}`
 }
 
-let result = ''
+function buildReminderAt(reminderDate, reminderTime) {
+  const dateText = normalizeDate(reminderDate)
+  const timeText = normalizeTime(reminderTime)
 
-for (const char of phone) {
-if ('0123456789'.includes(char)) {
-result += char
-}
-}
+  if (!dateText) return null
 
-if (result.startsWith('0')) {
-result = '62' + result.slice(1)
-}
+  const date = new Date(`${dateText}T${timeText}:00+07:00`)
 
-return result
+  if (Number.isNaN(date.getTime())) return null
+
+  return date.toISOString()
 }
 
-function getValue(row, keys) {
-for (const key of keys) {
-if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
-return row[key]
+function getRows(body) {
+  if (Array.isArray(body.rows)) return body.rows
+  if (Array.isArray(body.contacts)) return body.contacts
+  if (Array.isArray(body.items)) return body.items
+  return []
 }
 
-const foundKey = Object.keys(row || {}).find(
-(item) => String(item || '').trim().toLowerCase() === String(key).trim().toLowerCase()
-)
+function normalizeRow(row, databaseId, type) {
+  const name = cleanText(row.name || row.nama || row.customer_name || row.patient_name)
+  const phone = cleanPhone(row.phone || row.no_hp || row.nomor || row.whatsapp || row.wa)
+  const message = cleanText(row.message || row.pesan || row.template || row.text)
 
-if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null && String(row[foundKey]).trim() !== '') {
-return row[foundKey]
-}
-}
+  const reminderDate = normalizeDate(
+    row.reminder_date ||
+    row.tanggal ||
+    row.date ||
+    row.jadwal_tanggal
+  )
 
-return ''
-}
+  const reminderTime = normalizeTime(
+    row.reminder_time ||
+    row.jam ||
+    row.time ||
+    row.jadwal_jam
+  )
 
-function normalizeContact(row, type, databaseId) {
-const name = cleanText(getValue(row, ['name', 'nama', 'customer_name', 'profile_name']))
-const phone = cleanPhone(getValue(row, ['phone', 'nomor', 'no_hp', 'whatsapp', 'wa', 'number']))
-const message = cleanText(getValue(row, ['message', 'pesan', 'text', 'body']))
-const reminderDate = cleanText(getValue(row, ['reminder_date', 'tanggal', 'date', 'scheduled_at', 'send_at']))
+  const reminderAt = buildReminderAt(reminderDate, reminderTime)
 
-const attachmentUrl = cleanText(getValue(row, ['attachment_url', 'file_url', 'document_url', 'image_url', 'media_url', 'link_file']))
-const attachmentType = cleanText(getValue(row, ['attachment_type', 'file_type', 'media_type'])).toLowerCase()
-const attachmentFilename = cleanText(getValue(row, ['attachment_filename', 'filename', 'file_name', 'nama_file']))
-const attachmentCaption = cleanText(getValue(row, ['attachment_caption', 'caption', 'file_caption']))
-
-return {
-database_id: databaseId,
-type,
-name,
-phone,
-message,
-reminder_date: reminderDate || null,
-
-attachment_url: attachmentUrl || null,
-attachment_type: attachmentType || null,
-attachment_filename: attachmentFilename || null,
-attachment_caption: attachmentCaption || null
-}
+  return {
+    database_id: databaseId,
+    type,
+    name,
+    phone,
+    message,
+    reminder_date: reminderDate,
+    reminder_time: reminderTime,
+    reminder_at: reminderAt,
+    attachment_url: cleanText(row.attachment_url || row.file_url || row.url) || null,
+    attachment_type: cleanText(row.attachment_type) || null,
+    attachment_filename: cleanText(row.attachment_filename) || null,
+    attachment_caption: cleanText(row.attachment_caption) || null,
+    updated_at: new Date().toISOString()
+  }
 }
 
 export default async function handler(req, res) {
-res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-res.setHeader('Pragma', 'no-cache')
-res.setHeader('Expires', '0')
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
 
-try {
-const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
-if (!authUser) return
+  try {
+    const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    if (!authUser) return
 
-if (req.method !== 'POST') {
-return res.status(405).json({
-success: false,
-message: 'Method not allowed'
-})
-}
+    if (req.method !== 'POST') {
+      return res.status(405).json({
+        success: false,
+        message: 'Method not allowed'
+      })
+    }
 
-const databaseId = cleanText(req.body?.databaseId || req.body?.database_id)
-const type = cleanText(req.body?.type || 'blast').toLowerCase()
-const contacts = Array.isArray(req.body?.contacts) ? req.body.contacts : []
+    const body = req.body || {}
+    const databaseId = cleanText(body.database_id || body.databaseId)
+    const type = cleanText(body.type || 'blast').toLowerCase()
+    const rows = getRows(body)
 
-if (!databaseId) {
-return res.status(400).json({
-success: false,
-message: 'databaseId wajib diisi.'
-})
-}
+    if (!databaseId) {
+      return res.status(400).json({
+        success: false,
+        message: 'database_id wajib diisi.'
+      })
+    }
 
-if (type !== 'blast' && type !== 'reminder') {
-return res.status(400).json({
-success: false,
-message: 'Type harus blast atau reminder.'
-})
-}
+    if (!rows.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tidak ada data kontak untuk diimport.'
+      })
+    }
 
-if (!contacts.length) {
-return res.status(400).json({
-success: false,
-message: 'Chunk kontak kosong.'
-})
-}
+    if (rows.length > MAX_CHUNK_SIZE) {
+      return res.status(400).json({
+        success: false,
+        message: `Maksimal ${MAX_CHUNK_SIZE} kontak per chunk.`
+      })
+    }
 
-if (contacts.length > MAX_CHUNK_SIZE) {
-return res.status(400).json({
-success: false,
-message: 'Maksimal chunk adalah ' + MAX_CHUNK_SIZE + ' kontak.'
-})
-}
+    const insertRows = []
+    const skipped = []
 
-const normalizedContacts = contacts
-.map((row) => normalizeContact(row, type, databaseId))
-.filter((row) => row.phone && row.message)
+    rows.forEach((row, index) => {
+      const normalized = normalizeRow(row, databaseId, type)
 
-const skipped = contacts.length - normalizedContacts.length
+      if (!normalized.name || !normalized.phone || !normalized.message) {
+        skipped.push({
+          index,
+          name: normalized.name,
+          phone: normalized.phone,
+          reason: 'name/phone/message kosong'
+        })
+        return
+      }
 
-if (!normalizedContacts.length) {
-return res.status(200).json({
-success: true,
-imported: 0,
-skipped,
-with_attachment: 0
-})
-}
+      if (type === 'reminder' && !normalized.reminder_date) {
+        skipped.push({
+          index,
+          name: normalized.name,
+          phone: normalized.phone,
+          reason: 'reminder_date kosong'
+        })
+        return
+      }
 
-const { error } = await supabaseAdmin
-.from('contacts')
-.insert(normalizedContacts)
+      insertRows.push(normalized)
+    })
 
-if (error) {
-return res.status(500).json({
-success: false,
-message: error.message
-})
-}
+    if (!insertRows.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tidak ada kontak valid untuk diimport.',
+        skipped
+      })
+    }
 
-const withAttachment = normalizedContacts.filter((row) => row.attachment_url).length
+    const result = await supabaseAdmin
+      .from('contacts')
+      .insert(insertRows)
+      .select('id, database_id, type, name, phone, message, reminder_date, reminder_time, reminder_at')
 
-return res.status(200).json({
-success: true,
-imported: normalizedContacts.length,
-skipped,
-with_attachment: withAttachment
-})
-} catch (error) {
-return res.status(500).json({
-success: false,
-message: error.message || 'Import chunk gagal.'
-})
-}
+    if (result.error) {
+      return res.status(500).json({
+        success: false,
+        message: result.error.message
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      inserted: result.data?.length || 0,
+      skipped,
+      rows: result.data || []
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Gagal import contacts chunk.'
+    })
+  }
 }
