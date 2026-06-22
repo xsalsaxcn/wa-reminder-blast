@@ -35,22 +35,27 @@ function isForce(req) {
 
 function isDue(item, force) {
   if (force) return true
-  if (!item.scheduled_at) return true
+
+  // Mode Sesuai Jadwal CSV:
+  // scheduled_at wajib ada. Kalau kosong, tidak boleh kirim.
+  if (!item.scheduled_at) return false
 
   const scheduledAt = new Date(item.scheduled_at)
 
-  if (Number.isNaN(scheduledAt.getTime())) return true
+  if (Number.isNaN(scheduledAt.getTime())) return false
 
   return scheduledAt <= new Date()
 }
 
 function isFuture(item, force) {
   if (force) return false
-  if (!item.scheduled_at) return false
+
+  // Kalau scheduled_at kosong, anggap belum boleh dikirim.
+  if (!item.scheduled_at) return true
 
   const scheduledAt = new Date(item.scheduled_at)
 
-  if (Number.isNaN(scheduledAt.getTime())) return false
+  if (Number.isNaN(scheduledAt.getTime())) return true
 
   return scheduledAt > new Date()
 }
@@ -190,7 +195,6 @@ export default async function handler(req, res) {
     }
 
     const allPendingItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
-
     const textCandidates = allPendingItems.filter((item) => !hasAttachment(item))
     const futureItems = textCandidates.filter((item) => isFuture(item, force))
     const textItems = textCandidates.filter((item) => isDue(item, force)).slice(0, safeLimit)

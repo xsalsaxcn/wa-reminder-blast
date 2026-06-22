@@ -48,7 +48,9 @@ function groupByScheduleType(rows) {
   for (const row of rows) {
     const key = normalizeScheduleType(row.schedule_type)
 
-    if (!map.has(key)) map.set(key, [])
+    if (!map.has(key)) {
+      map.set(key, [])
+    }
 
     map.get(key).push(row)
   }
@@ -65,6 +67,18 @@ function buildMessage(schedule) {
   if (message) return message
 
   return `${getScheduleLabel(schedule.schedule_type)}: Halo ${cleanText(schedule.name || 'Customer')}, ini pengingat jadwal Anda.`
+}
+
+function getCsvScheduledAt(schedule) {
+  const appointmentAt = cleanText(schedule.appointment_at)
+
+  if (!appointmentAt) return null
+
+  const date = new Date(appointmentAt)
+
+  if (Number.isNaN(date.getTime())) return null
+
+  return date.toISOString()
 }
 
 export default async function handler(req, res) {
@@ -135,10 +149,31 @@ export default async function handler(req, res) {
     const groups = groupByScheduleType(schedules)
     const createdJobs = []
     let itemsCreated = 0
+    const skipped = []
 
     for (const group of groups) {
       const label = getScheduleLabel(group.scheduleType)
       const jobName = `${label} - ${new Date().toLocaleString('id-ID')}`
+
+      const validSchedules = group.items.filter((schedule) => {
+        const csvScheduledAt = getCsvScheduledAt(schedule)
+
+        if (!csvScheduledAt) {
+          skipped.push({
+            schedule_id: schedule.id,
+            phone: schedule.phone,
+            reason: 'appointment_at kosong/tidak valid. Job item tidak dibuat.'
+          })
+
+          return false
+        }
+
+        return true
+      })
+
+      if (!validSchedules.length) {
+        continue
+      }
 
       const jobResult = await supabaseAdmin
         .from('send_jobs')
@@ -148,7 +183,7 @@ export default async function handler(req, res) {
           type: 'reminder',
           status: 'pending',
           database_id: databaseId,
-          total_items: group.items.length
+          total_items: validSchedules.length
         })
         .select('*')
         .single()
@@ -162,18 +197,24 @@ export default async function handler(req, res) {
 
       const job = jobResult.data
 
-      const jobItems = group.items
+      const jobItems = validSchedules
         .map((schedule) => {
           const phone = cleanPhone(schedule.phone)
           const message = buildMessage(schedule)
+          const csvScheduledAt = getCsvScheduledAt(schedule)
 
-          if (!phone || !message) return null
+          if (!phone || !message || !csvScheduledAt) return null
 
           return {
             job_id: job.id,
             phone,
             message,
             status: 'pending',
+
+            // WAJIB: mode "Sesuai Jadwal CSV" baca dari field ini.
+            // Ini appointment_at dari CSV asli: reminder_date + reminder_time.
+            scheduled_at: csvScheduledAt,
+
             attachment_url: cleanText(schedule.attachment_url) || null,
             attachment_type: cleanText(schedule.attachment_type) || null,
             attachment_filename: cleanText(schedule.attachment_filename) || null,
@@ -195,7 +236,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const scheduleIds = group.items.map((item) => item.id)
+      const scheduleIds = validSchedules.map((item) => item.id)
 
       const updateResult = await supabaseAdmin
         .from('reminder_schedules')
@@ -223,6 +264,7 @@ export default async function handler(req, res) {
       database_id: databaseId,
       jobs_created: createdJobs.length,
       items_created: itemsCreated,
+      skipped,
       jobs: createdJobs.map((job) => ({
         id: job.id,
         name: job.name || job.title,
