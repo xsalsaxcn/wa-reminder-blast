@@ -1,715 +1,793 @@
-﻿
-
-import { useState } from 'react'
-import { createClient } from '@supabase/supabase-js'
+﻿import { useMemo, useRef, useState } from 'react'
 import Sidebar from '../../components/Sidebar'
 
-const BUCKET_NAME = 'wa-attachments'
-const MAX_FILE_SIZE = 1 * 1024 * 1024
+const IMPORT_CHUNK_SIZE = 25
 
-function getSupabaseStorageClient() {
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-if (!url || !key) {
-throw new Error('Supabase public environment belum lengkap.')
+function cleanText(value) {
+  return String(value || '').trim()
 }
 
-return createClient(url, key)
+function cleanPhone(value) {
+  let phone = String(value || '').trim()
+
+  if (phone.startsWith('="')) phone = phone.slice(2)
+  if (phone.endsWith('"')) phone = phone.slice(0, -1)
+  if (phone.startsWith("'")) phone = phone.slice(1)
+
+  let result = ''
+
+  for (const char of phone) {
+    if ('0123456789'.includes(char)) result += char
+  }
+
+  if (result.startsWith('0')) result = '62' + result.slice(1)
+
+  return result
+}
+
+function normalizeHeader(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_')
+}
+
+function parseCsvLine(line) {
+  const result = []
+  let current = ''
+  let insideQuote = false
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+    const nextChar = line[i + 1]
+
+    if (char === '"' && insideQuote && nextChar === '"') {
+      current += '"'
+      i += 1
+      continue
+    }
+
+    if (char === '"') {
+      insideQuote = !insideQuote
+      continue
+    }
+
+    if (char === ',' && !insideQuote) {
+      result.push(current)
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  result.push(current)
+
+  return result
 }
 
 function parseCsv(text) {
-const rows = []
-let current = []
-let value = ''
-let inQuotes = false
+  const safeText = String(text || '').replace(/^\uFEFF/, '')
+  const lines = safeText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
 
-for (let i = 0; i < text.length; i++) {
-const char = text[i]
-const next = text[i + 1]
+  if (!lines.length) return []
 
-if (char === '"' && inQuotes && next === '"') {
-value += '"'
-i++
-continue
+  const headers = parseCsvLine(lines[0]).map(normalizeHeader)
+  const rows = []
+
+  for (let i = 1; i < lines.length; i += 1) {
+    const values = parseCsvLine(lines[i])
+    const row = {}
+
+    headers.forEach((header, index) => {
+      row[header] = cleanText(values[index])
+    })
+
+    rows.push(row)
+  }
+
+  return rows
 }
 
-if (char === '"') {
-inQuotes = !inQuotes
-continue
+function normalizeDate(value) {
+  const text = cleanText(value)
+
+  if (!text) return ''
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+
+  if (slashMatch) {
+    const day = slashMatch[1].padStart(2, '0')
+    const month = slashMatch[2].padStart(2, '0')
+    const year = slashMatch[3]
+
+    return `${year}-${month}-${day}`
+  }
+
+  const dashMatch = text.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/)
+
+  if (dashMatch) {
+    const day = dashMatch[1].padStart(2, '0')
+    const month = dashMatch[2].padStart(2, '0')
+    const year = dashMatch[3]
+
+    return `${year}-${month}-${day}`
+  }
+
+  return text
 }
 
-if (char === ',' && !inQuotes) {
-current.push(value)
-value = ''
-continue
+function normalizeTime(value) {
+  const text = cleanText(value)
+
+  if (!text) return '09:00'
+
+  const match = text.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
+
+  if (!match) return text
+
+  const hour = match[1].padStart(2, '0')
+  const minute = String(match[2] || '00').padStart(2, '0')
+
+  return `${hour}:${minute}`
 }
 
-if ((char === '\n' || char === '\r') && !inQuotes) {
-if (char === '\r' && next === '\n') i++
+function normalizeReminderRows(rows, defaultAttachment) {
+  return rows.map((row) => {
+    const name = cleanText(row.name || row.nama || row.customer_name || row.patient_name)
+    const phone = cleanPhone(row.phone || row.no_hp || row.nomor || row.whatsapp || row.wa)
+    const message = cleanText(row.message || row.pesan || row.template || row.text)
+    const reminderDate = normalizeDate(row.reminder_date || row.tanggal || row.date || row.jadwal_tanggal)
+    const reminderTime = normalizeTime(row.reminder_time || row.jam || row.time || row.jadwal_jam)
 
-current.push(value)
+    const rowAttachmentUrl = cleanText(row.attachment_url || row.file_url || row.url)
+    const attachmentUrl = rowAttachmentUrl || cleanText(defaultAttachment.attachment_url)
 
-if (current.some((item) => String(item || '').trim() !== '')) {
-rows.push(current)
+    const attachmentType =
+      cleanText(row.attachment_type) ||
+      cleanText(defaultAttachment.attachment_type) ||
+      ''
+
+    const attachmentFilename =
+      cleanText(row.attachment_filename) ||
+      cleanText(defaultAttachment.attachment_filename) ||
+      ''
+
+    const attachmentCaption =
+      cleanText(row.attachment_caption) ||
+      cleanText(defaultAttachment.attachment_caption) ||
+      ''
+
+    return {
+      type: 'reminder',
+      name,
+      phone,
+      message,
+      reminder_date: reminderDate,
+      reminder_time: reminderTime,
+      attachment_url: attachmentUrl,
+      attachment_type: attachmentType,
+      attachment_filename: attachmentFilename,
+      attachment_caption: attachmentCaption
+    }
+  })
 }
 
-current = []
-value = ''
-continue
+function validateRows(rows) {
+  const errors = []
+
+  rows.forEach((row, index) => {
+    const rowNumber = index + 2
+
+    if (!row.name) {
+      errors.push(`Baris ${rowNumber}: name kosong.`)
+    }
+
+    if (!row.phone) {
+      errors.push(`Baris ${rowNumber}: phone kosong / tidak valid.`)
+    }
+
+    if (!row.message) {
+      errors.push(`Baris ${rowNumber}: message kosong.`)
+    }
+
+    if (!row.reminder_date) {
+      errors.push(`Baris ${rowNumber}: reminder_date kosong.`)
+    }
+  })
+
+  return errors
 }
 
-value += char
+function downloadCsv(filename, rows) {
+  const content = rows.join('\n')
+  const blob = new Blob([content], {
+    type: 'text/csv;charset=utf-8;'
+  })
+
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  link.href = url
+  link.download = filename
+  link.click()
+
+  URL.revokeObjectURL(url)
 }
 
-current.push(value)
+function guessAttachmentType(url) {
+  const lower = cleanText(url).toLowerCase()
 
-if (current.some((item) => String(item || '').trim() !== '')) {
-rows.push(current)
+  if (!lower) return ''
+
+  if (lower.match(/\.(jpg|jpeg|png|webp|gif)(\?|$)/)) return 'image'
+  if (lower.match(/\.(pdf|doc|docx|xls|xlsx|csv|txt)(\?|$)/)) return 'document'
+
+  return 'document'
 }
 
-if (rows.length === 0) return []
+function guessFilename(url) {
+  try {
+    const parsed = new URL(url)
+    const parts = parsed.pathname.split('/')
+    const last = parts[parts.length - 1]
 
-const headers = rows[0].map((item) =>
-String(item || '')
-.replace(/^\uFEFF/, '')
-.trim()
-.toLowerCase()
-)
-
-return rows.slice(1).map((row) => {
-const obj = {}
-
-headers.forEach((header, index) => {
-obj[header] = String(row[index] || '').trim()
-})
-
-return obj
-})
+    return decodeURIComponent(last || 'attachment')
+  } catch (err) {
+    const parts = cleanText(url).split('/')
+    return parts[parts.length - 1] || 'attachment'
+  }
 }
 
-function cleanFormulaPhone(value) {
-return String(value || '')
-.trim()
-.replace(/^="/, '')
-.replace(/"$/, '')
-.replace(/^'/, '')
+async function readJsonResponse(response) {
+  const text = await response.text()
+
+  try {
+    return JSON.parse(text)
+  } catch (err) {
+    return {
+      success: false,
+      message: text || 'Invalid response'
+    }
+  }
 }
 
-function cleanFileName(fileName) {
-const raw = String(fileName || 'attachment').trim()
-const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.() '
-let result = ''
-
-for (const char of raw) {
-result += allowed.includes(char) ? char : '_'
+function extractDatabaseId(data) {
+  return (
+    data?.database?.id ||
+    data?.data?.id ||
+    data?.item?.id ||
+    data?.result?.id ||
+    data?.id ||
+    data?.database_id ||
+    data?.databaseId ||
+    ''
+  )
 }
 
-while (result.includes(' ')) result = result.split(' ').join(' ')
-while (result.includes('')) result = result.split('').join('_')
+function selectedTypesFromState(scheduleTypes) {
+  const selected = []
 
-result = result.trim().split(' ').join('_').slice(0, 120)
+  if (scheduleTypes.h3) selected.push('H-3')
+  if (scheduleTypes.h1) selected.push('H-1')
+  if (scheduleTypes.h7jam) selected.push('H-7JAM')
 
-return result || 'attachment'
-}
-
-function makeId() {
-if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
-return window.crypto.randomUUID()
-}
-
-return String(Date.now()) + '-' + String(Math.random()).slice(2)
-}
-
-function getFolderName() {
-const date = new Date()
-
-return (
-date.getFullYear() +
-'-' +
-String(date.getMonth() + 1).padStart(2, '0') +
-'-' +
-String(date.getDate()).padStart(2, '0')
-)
-}
-
-function getAttachmentType(mimeType) {
-if (String(mimeType || '').startsWith('image/')) return 'image'
-return 'document'
-}
-
-function validateMimeType(mimeType) {
-const allowed = [
-'image/jpeg',
-'image/png',
-'image/webp',
-'application/pdf',
-'application/msword',
-'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-'application/vnd.ms-excel',
-'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-]
-
-return allowed.includes(String(mimeType || '').toLowerCase())
-}
-
-function withPromiseTimeout(promise, ms, message) {
-return Promise.race([
-promise,
-new Promise((resolve) => {
-setTimeout(() => {
-resolve({
-timeout: true,
-message
-})
-}, ms)
-})
-])
-}
-
-async function uploadAttachmentDirect(file) {
-const mimeType = String(file.type || '').trim().toLowerCase()
-
-if (!validateMimeType(mimeType)) {
-throw new Error('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
-}
-
-if (file.size > MAX_FILE_SIZE) {
-throw new Error('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
-}
-
-const supabase = getSupabaseStorageClient()
-const cleanName = cleanFileName(file.name)
-const path = getFolderName() + '/' + makeId() + '-' + cleanName
-
-const uploadResult = await withPromiseTimeout(
-supabase.storage
-.from(BUCKET_NAME)
-.upload(path, file, {
-contentType: mimeType,
-upsert: false
-}),
-15000,
-'Upload attachment terlalu lama. Coba ulangi.'
-)
-
-if (uploadResult.timeout) {
-throw new Error(uploadResult.message)
-}
-
-if (uploadResult.error) {
-throw new Error(uploadResult.error.message || 'Upload ke Supabase Storage gagal.')
-}
-
-const { data } = supabase.storage
-.from(BUCKET_NAME)
-.getPublicUrl(path)
-
-if (!data || !data.publicUrl) {
-throw new Error('Public URL attachment gagal dibuat.')
-}
-
-return {
-attachment_url: data.publicUrl,
-attachment_type: getAttachmentType(mimeType),
-attachment_filename: cleanName
-}
-}
-
-async function readApiResponse(response) {
-const text = await response.text()
-
-try {
-return JSON.parse(text)
-} catch (err) {
-return {
-success: false,
-message: text || 'Server mengembalikan response non-JSON.'
-}
-}
-}
-
-async function fetchWithTimeout(url, options, timeoutMs) {
-const controller = new AbortController()
-const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-try {
-return await fetch(url, {
-...options,
-signal: controller.signal
-})
-} finally {
-clearTimeout(timer)
-}
-}
-
-function normalizeParsedRows(parsed) {
-return parsed.map((row) => ({
-name: row.name || row.nama || row.customer_name || '',
-phone: cleanFormulaPhone(row.phone || row.nomor || row.no_hp || row.whatsapp || row.wa || ''),
-message: row.message || row.pesan || row.text || row.body || '',
-reminder_date: row.reminder_date || row.tanggal || row.date || row.scheduled_at || row.send_at || '',
-reminder_time: row.reminder_time || row.jam || row.time || '',
-attachment_url: row.attachment_url || row.file_url || row.document_url || row.image_url || row.media_url || row.link_file || '',
-attachment_type: row.attachment_type || row.file_type || row.media_type || '',
-attachment_filename: row.attachment_filename || row.filename || row.file_name || row.nama_file || '',
-attachment_caption: row.attachment_caption || row.caption || row.file_caption || ''
-}))
-}
-
-function combineReminderDateTime(row) {
-const date = String(row.reminder_date || '').trim()
-const time = String(row.reminder_time || '').trim()
-
-if (!date) return ''
-if (date.includes(':')) return date
-if (time) return date + ' ' + time
-
-return date
-}
-
-function csvEscape(value) {
-const text = String(value ?? '')
-return '"' + text.split('"').join('""') + '"'
-}
-
-function downloadCsvFile(filename, headers, rows) {
-const lines = [
-headers.map(csvEscape).join(','),
-...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(','))
-]
-
-const csv = '\uFEFF' + lines.join('\n')
-const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-const url = URL.createObjectURL(blob)
-const link = document.createElement('a')
-
-link.href = url
-link.download = filename
-document.body.appendChild(link)
-link.click()
-document.body.removeChild(link)
-URL.revokeObjectURL(url)
-}
-
-function downloadReminderTemplateWithoutAttachment() {
-downloadCsvFile(
-'template_reminder_tanpa_attachment.csv',
-['name', 'phone', 'message', 'reminder_date'],
-[
-{
-name: 'Budi',
-phone: '="6285137908391"',
-message: 'Halo Kak Budi, ini reminder jadwal layanan dari Notiva.',
-reminder_date: '2026-06-22 09:00'
-},
-{
-name: 'Sari',
-phone: '="6281234567890"',
-message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
-reminder_date: '2026-06-22 10:00'
-}
-]
-)
-}
-
-function downloadReminderTemplateWithAttachment() {
-downloadCsvFile(
-'template_reminder_dengan_attachment_berbeda.csv',
-['name', 'phone', 'message', 'reminder_date', 'attachment_url', 'attachment_type', 'attachment_filename', 'attachment_caption'],
-[
-{
-name: 'Budi',
-phone: '="6285137908391"',
-message: 'Halo Kak Budi, ini reminder jadwal layanan dari Notiva.',
-reminder_date: '2026-06-22 09:00',
-attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-attachment_type: 'document',
-attachment_filename: 'reminder_budi.pdf',
-attachment_caption: 'Berikut file reminder untuk Kak Budi.'
-},
-{
-name: 'Sari',
-phone: '="6281234567890"',
-message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
-reminder_date: '2026-06-22 10:00',
-attachment_url: 'https://upload.wikimedia.org/wikipedia/commons/3/3f/JPEG_example_flower.jpg',
-attachment_type: 'image',
-attachment_filename: 'reminder_sari.jpg',
-attachment_caption: 'Berikut gambar reminder untuk Kak Sari.'
-}
-]
-)
-}
-
-function downloadReminderTemplateWithSeparateTime() {
-downloadCsvFile(
-'template_reminder_tanggal_dan_jam_terpisah.csv',
-['name', 'phone', 'message', 'reminder_date', 'reminder_time', 'attachment_url', 'attachment_type', 'attachment_filename', 'attachment_caption'],
-[
-{
-name: 'Budi',
-phone: '="6285137908391"',
-message: 'Halo Kak Budi, ini reminder jadwal layanan dari Notiva.',
-reminder_date: '2026-06-22',
-reminder_time: '09:00',
-attachment_url: '',
-attachment_type: '',
-attachment_filename: '',
-attachment_caption: ''
-},
-{
-name: 'Sari',
-phone: '="6281234567890"',
-message: 'Halo Kak Sari, ini reminder jadwal layanan dari Notiva.',
-reminder_date: '2026-06-22',
-reminder_time: '10:00',
-attachment_url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-attachment_type: 'document',
-attachment_filename: 'reminder_sari.pdf',
-attachment_caption: 'Berikut file reminder untuk Kak Sari.'
-}
-]
-)
+  return selected
 }
 
 export default function ImportReminderPage() {
-const [databaseName, setDatabaseName] = useState('')
-const [fileName, setFileName] = useState('')
-const [rows, setRows] = useState([])
-const [selectedAttachmentFile, setSelectedAttachmentFile] = useState(null)
-const [uploadingAttachment, setUploadingAttachment] = useState(false)
-const [loading, setLoading] = useState(false)
-const [message, setMessage] = useState('')
-const [error, setError] = useState('')
+  const fileRef = useRef(null)
 
-function buildFinalRows(uploadedAttachment) {
-return rows.map((row) => {
-const finalReminderDate = combineReminderDateTime(row)
+  const [databaseName, setDatabaseName] = useState('')
+  const [fileName, setFileName] = useState('')
+  const [rawRows, setRawRows] = useState([])
+  const [parsedRows, setParsedRows] = useState([])
+  const [defaultAttachment, setDefaultAttachment] = useState({
+    attachment_url: '',
+    attachment_type: '',
+    attachment_filename: '',
+    attachment_caption: ''
+  })
+  const [showAttachmentBox, setShowAttachmentBox] = useState(false)
+  const [scheduleTypes, setScheduleTypes] = useState({
+    h3: true,
+    h1: true,
+    h7jam: true
+  })
+  const [loading, setLoading] = useState(false)
+  const [progress, setProgress] = useState('')
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
-if (!uploadedAttachment || row.attachment_url) {
-return {
-...row,
-reminder_date: finalReminderDate
-}
-}
+  const selectedScheduleTypes = useMemo(() => {
+    return selectedTypesFromState(scheduleTypes)
+  }, [scheduleTypes])
 
-return {
-...row,
-reminder_date: finalReminderDate,
-attachment_url: uploadedAttachment.attachment_url,
-attachment_type: uploadedAttachment.attachment_type,
-attachment_filename: uploadedAttachment.attachment_filename,
-attachment_caption: row.attachment_caption || row.message || uploadedAttachment.attachment_filename
-}
-})
-}
+  function handleDownloadTemplateBasic() {
+    downloadCsv('template_reminder_tanpa_attachment.csv', [
+      'name,phone,message,reminder_date,reminder_time',
+      'Susi Salwa,628568032191,"Halo Susi, ini reminder jadwal vaksin besok ya.",2026-06-25,09:00',
+      'Budi,6281234567890,"Halo Budi, jangan lupa jadwal MCU ya.",2026-06-26,13:30'
+    ])
+  }
 
-async function handleFileChange(e) {
-const file = e.target.files?.[0]
+  function handleDownloadTemplateAttachment() {
+    downloadCsv('template_reminder_dengan_attachment.csv', [
+      'name,phone,message,reminder_date,reminder_time,attachment_url,attachment_type,attachment_filename,attachment_caption',
+      'Susi Salwa,628568032191,"Halo Susi, ini reminder jadwal vaksin besok ya.",2026-06-25,09:00,https://example.com/file.pdf,document,file.pdf,"Detail jadwal vaksin"',
+      'Budi,6281234567890,"Halo Budi, jangan lupa jadwal MCU ya.",2026-06-26,13:30,,,,'
+    ])
+  }
 
-setRows([])
-setMessage('')
-setError('')
+  function handleDownloadTemplateDateTime() {
+    downloadCsv('template_reminder_tanggal_jam.csv', [
+      'name,phone,message,reminder_date,reminder_time',
+      'Susi Salwa,628568032191,"Halo Susi, jadwal vaksin kamu tanggal 25 Juni jam 09:00.",2026-06-25,09:00',
+      'Budi,6281234567890,"Halo Budi, jadwal MCU kamu tanggal 26 Juni jam 13:30.",2026-06-26,13:30'
+    ])
+  }
 
-if (!file) return
+  function toggleSchedule(key) {
+    setScheduleTypes((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }))
+  }
 
-setFileName(file.name)
+  async function handleFileChange(event) {
+    const file = event.target.files?.[0]
 
-const text = await file.text()
-const parsed = parseCsv(text)
-setRows(normalizeParsedRows(parsed))
-}
+    setError('')
+    setSuccess('')
+    setRawRows([])
+    setParsedRows([])
+    setFileName('')
 
-function handleAttachmentChange(e) {
-const file = e.target.files?.[0]
+    if (!file) return
 
-setMessage('')
-setError('')
+    setFileName(file.name)
 
-if (!file) return
+    const text = await file.text()
+    const rows = parseCsv(text)
+    const normalized = normalizeReminderRows(rows, defaultAttachment)
 
-if (file.size > MAX_FILE_SIZE) {
-setSelectedAttachmentFile(null)
-setError('Ukuran file terlalu besar. Maksimal attachment adalah 1 MB.')
-e.target.value = ''
-return
-}
+    setRawRows(rows)
+    setParsedRows(normalized)
+  }
 
-const mimeType = String(file.type || '').trim().toLowerCase()
+  function applyAttachment() {
+    setError('')
 
-if (!validateMimeType(mimeType)) {
-setSelectedAttachmentFile(null)
-setError('Format file belum didukung. Gunakan JPG, PNG, WEBP, PDF, DOC/DOCX, atau XLS/XLSX.')
-e.target.value = ''
-return
-}
+    const url = cleanText(defaultAttachment.attachment_url)
 
-setSelectedAttachmentFile(file)
-setMessage('Attachment dipilih: ' + file.name + '. File akan di-upload saat klik Import Reminder.')
-e.target.value = ''
-}
+    if (!url) {
+      setDefaultAttachment({
+        attachment_url: '',
+        attachment_type: '',
+        attachment_filename: '',
+        attachment_caption: ''
+      })
+      setShowAttachmentBox(false)
+      return
+    }
 
-async function handleImport(e) {
-e.preventDefault()
+    try {
+      new URL(url)
+    } catch (err) {
+      setError('Attachment URL tidak valid.')
+      return
+    }
 
-if (loading) return
+    const attachmentType = cleanText(defaultAttachment.attachment_type) || guessAttachmentType(url)
+    const filename = cleanText(defaultAttachment.attachment_filename) || guessFilename(url)
 
-setLoading(true)
-setUploadingAttachment(false)
-setMessage('')
-setError('')
+    const updated = {
+      ...defaultAttachment,
+      attachment_url: url,
+      attachment_type: attachmentType,
+      attachment_filename: filename
+    }
 
-try {
-if (!databaseName.trim()) {
-throw new Error('Nama database wajib diisi')
-}
+    setDefaultAttachment(updated)
+    setParsedRows(normalizeReminderRows(rawRows, updated))
+    setShowAttachmentBox(false)
+  }
 
-if (rows.length === 0) {
-throw new Error('File CSV belum dipilih atau kosong')
-}
+  async function createDatabase() {
+    const response = await fetch('/api/contacts/create-import-database', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: databaseName,
+        database_name: databaseName,
+        databaseName,
+        type: 'reminder',
+        default_attachment_url: cleanText(defaultAttachment.attachment_url) || null,
+        default_attachment_type: cleanText(defaultAttachment.attachment_type) || null,
+        default_attachment_filename: cleanText(defaultAttachment.attachment_filename) || null,
+        default_attachment_caption: cleanText(defaultAttachment.attachment_caption) || null
+      })
+    })
 
-let uploadedAttachment = null
+    const data = await readJsonResponse(response)
 
-if (selectedAttachmentFile) {
-setUploadingAttachment(true)
-setMessage('Mengupload attachment...')
-uploadedAttachment = await uploadAttachmentDirect(selectedAttachmentFile)
-setUploadingAttachment(false)
-setMessage('Attachment berhasil di-upload. Melanjutkan import kontak...')
-}
+    if (!response.ok || data.success === false) {
+      throw new Error(data.message || 'Gagal membuat database reminder.')
+    }
 
-const finalRows = buildFinalRows(uploadedAttachment)
+    const databaseId = extractDatabaseId(data)
 
-const response = await fetchWithTimeout(
-'/api/contacts/import-fast',
-{
-method: 'POST',
-headers: {
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-databaseName: databaseName.trim(),
-type: 'reminder',
-contacts: finalRows
-})
-},
-10000
-)
+    if (!databaseId) {
+      throw new Error('Database berhasil dibuat tapi ID database tidak ditemukan dari response API.')
+    }
 
-const data = await readApiResponse(response)
+    return databaseId
+  }
 
-if (!response.ok || !data.success) {
-throw new Error(data.message || 'Import reminder gagal')
-}
+  async function importContacts(databaseId, rows) {
+    for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + IMPORT_CHUNK_SIZE)
+      const current = Math.min(i + IMPORT_CHUNK_SIZE, rows.length)
 
-setMessage(
-'Import berhasil: ' +
-(data.imported || data.total || finalRows.length) +
-' kontak. Attachment: ' +
-(data.with_attachment || 0) +
-'.'
-)
+      setProgress(`Import kontak ${current}/${rows.length}...`)
 
-setRows([])
-setFileName('')
-setSelectedAttachmentFile(null)
-} catch (err) {
-if (err.name === 'AbortError') {
-setError('Import terlalu lama dan dihentikan otomatis. Cek Database Manager apakah data sudah masuk.')
-} else {
-setError(err.message || 'Import reminder gagal')
-}
-} finally {
-setUploadingAttachment(false)
-setLoading(false)
-}
-}
+      const response = await fetch('/api/contacts/import-chunk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          database_id: databaseId,
+          databaseId,
+          type: 'reminder',
+          rows: chunk,
+          contacts: chunk
+        })
+      })
 
-const previewRows = buildFinalRows(
-selectedAttachmentFile
-? {
-attachment_url: 'selected',
-attachment_type: 'file',
-attachment_filename: selectedAttachmentFile.name
-}
-: null
-)
+      const data = await readJsonResponse(response)
 
-const attachmentCount = rows.filter((row) => row.attachment_url || selectedAttachmentFile).length
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || `Gagal import chunk kontak ${current}.`)
+      }
+    }
+  }
 
-return (
-<div className="min-h-screen bg-slate-50 lg:flex">
-<Sidebar />
+  async function generateSchedules(databaseId) {
+    setProgress('Membuat jadwal reminder otomatis...')
 
-<main className="flex-1 p-4 lg:p-8">
-<div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-<div>
-<h1 className="text-2xl font-bold text-slate-900">
-Import Database Reminder
-</h1>
-<p className="mt-2 text-sm text-slate-500">
-Upload CSV berisi kontak reminder pasien/customer.
-</p>
-</div>
+    const response = await fetch('/api/reminder-schedules/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        database_id: databaseId,
+        schedule_types: selectedScheduleTypes
+      })
+    })
 
-<div className="flex flex-wrap gap-2">
-<button
-type="button"
-onClick={downloadReminderTemplateWithoutAttachment}
-disabled={loading}
-className="rounded-2xl bg-white px-4 py-3 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
->
-Download Template Tanpa Attachment
-</button>
+    const data = await readJsonResponse(response)
 
-<button
-type="button"
-onClick={downloadReminderTemplateWithAttachment}
-disabled={loading}
-className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
->
-Download Template Dengan Attachment
-</button>
+    if (!response.ok || data.success === false) {
+      throw new Error(data.message || 'Gagal membuat jadwal reminder.')
+    }
 
-<button
-type="button"
-onClick={downloadReminderTemplateWithSeparateTime}
-disabled={loading}
-className="rounded-2xl bg-indigo-600 px-4 py-3 text-xs font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
->
-Download Template Tanggal + Jam
-</button>
-</div>
-</div>
+    return data
+  }
 
-<form
-onSubmit={handleImport}
-className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6"
->
-<div className="space-y-5">
-<div>
-<label className="mb-2 block text-sm font-semibold text-slate-700">
-Nama Database
-</label>
-<input
-value={databaseName}
-onChange={(e) => setDatabaseName(e.target.value)}
-disabled={loading}
-placeholder="Contoh: Reminder MCU Juni"
-className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
-/>
-</div>
+  async function handleImport() {
+    setLoading(true)
+    setError('')
+    setSuccess('')
+    setProgress('')
 
-<div>
-<label className="mb-2 block text-sm font-semibold text-slate-700">
-File CSV
-</label>
-<input
-type="file"
-accept=".csv,text/csv"
-onChange={handleFileChange}
-disabled={loading}
-className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-600 disabled:bg-slate-100"
-/>
-{fileName ? (
-<p className="mt-2 text-xs text-slate-500">
-File: {fileName}
-</p>
-) : null}
-</div>
+    try {
+      if (!cleanText(databaseName)) {
+        throw new Error('Nama database wajib diisi.')
+      }
 
-<div className="rounded-2xl border border-dashed border-indigo-200 bg-indigo-50 p-4">
-<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-<div>
-<p className="text-sm font-bold text-slate-800">
-Attachment untuk semua kontak
-</p>
-<p className="mt-1 text-xs text-slate-500">
-Maksimal 1 MB. File akan di-upload saat tombol Import diklik.
-</p>
-{selectedAttachmentFile ? (
-<p className="mt-2 text-xs font-semibold text-indigo-700">
-File siap: {selectedAttachmentFile.name}
-</p>
-) : null}
-</div>
+      if (!parsedRows.length) {
+        throw new Error('File CSV belum dipilih atau kosong.')
+      }
 
-<div className="flex gap-2">
-<label
-className={
-loading
-? 'cursor-not-allowed rounded-2xl bg-slate-300 px-4 py-3 text-sm font-bold text-white'
-: 'cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700'
-}
->
-Attach File
-<input
-type="file"
-accept="image/jpeg,image/png,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-onChange={handleAttachmentChange}
-disabled={loading}
-className="hidden"
-/>
-</label>
+      if (!selectedScheduleTypes.length) {
+        throw new Error('Pilih minimal 1 jadwal reminder: H-3, H-1, atau H-7 Jam.')
+      }
 
-{selectedAttachmentFile ? (
-<button
-type="button"
-onClick={() => setSelectedAttachmentFile(null)}
-disabled={loading}
-className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-red-600 ring-1 ring-red-100 hover:bg-red-50 disabled:bg-slate-100 disabled:text-slate-400"
->
-Remove
-</button>
-) : null}
-</div>
-</div>
-</div>
+      const validationErrors = validateRows(parsedRows)
 
-<div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-<p className="font-semibold text-slate-700">Format kolom CSV:</p>
-<code className="mt-2 block whitespace-pre-wrap text-xs">
-name, phone, message, reminder_date, attachment_url, attachment_type, attachment_filename, attachment_caption
-</code>
-<p className="mt-2 text-xs">
-Kolom attachment boleh kosong kalau memakai tombol Attach File.
-</p>
-</div>
+      if (validationErrors.length) {
+        throw new Error(validationErrors.slice(0, 8).join('\n'))
+      }
 
-{rows.length > 0 ? (
-<div className="rounded-2xl border border-slate-200 bg-white p-4">
-<p className="text-sm font-semibold text-slate-700">
-Preview: {previewRows.length} baris
-</p>
-<p className="mt-1 text-xs text-slate-500">
-Dengan attachment: {attachmentCount} baris
-</p>
-</div>
-) : null}
+      setProgress('Membuat database reminder...')
+      const databaseId = await createDatabase()
 
-<button
-type="submit"
-disabled={loading}
-className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
->
-{uploadingAttachment ? 'Uploading Attachment...' : loading ? 'Importing...' : 'Import Reminder'}
-</button>
+      await importContacts(databaseId, parsedRows)
 
-{message ? (
-<div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
-{message}
-</div>
-) : null}
+      const scheduleData = await generateSchedules(databaseId)
 
-{error ? (
-<div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-{error}
-</div>
-) : null}
-</div>
-</form>
-</main>
-</div>
-)
+      setSuccess(
+        `Import berhasil. ${parsedRows.length} kontak masuk. Jadwal dibuat/tersedia: ${
+          scheduleData.schedules_created_or_existing || 0
+        }.`
+      )
+      setProgress('Selesai.')
+    } catch (err) {
+      setError(err.message || 'Import reminder gagal.')
+      setProgress('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100 lg:flex">
+      <Sidebar />
+
+      <main className="flex-1 p-4 lg:p-8">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <h1 className="text-2xl font-black text-slate-900 lg:text-3xl">
+                Import Database Reminder
+              </h1>
+              <p className="mt-2 text-sm text-slate-500">
+                Upload CSV berisi kontak reminder pasien/customer.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadTemplateBasic}
+                className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm ring-1 ring-slate-200"
+              >
+                Download Template Tanpa Attachment
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadTemplateAttachment}
+                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white shadow-sm"
+              >
+                Download Template Dengan Attachment
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadTemplateDateTime}
+                className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm"
+              >
+                Download Template Tanggal + Jam
+              </button>
+            </div>
+          </div>
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:p-7">
+            {error ? (
+              <div className="mb-5 whitespace-pre-line rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {success ? (
+              <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+                {success}
+              </div>
+            ) : null}
+
+            <div className="space-y-5">
+              <div>
+                <label className="mb-2 block text-sm font-black text-slate-900">
+                  Nama Database
+                </label>
+                <input
+                  type="text"
+                  value={databaseName}
+                  onChange={(event) => setDatabaseName(event.target.value)}
+                  placeholder="Contoh: Reminder MCU Juni"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-4 text-sm outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-black text-slate-900">
+                  File CSV
+                </label>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleFileChange}
+                  className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-4 text-sm"
+                />
+
+                {fileName ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    File: {fileName} — {parsedRows.length} baris terbaca.
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="rounded-3xl border border-indigo-100 bg-indigo-50 p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <p className="font-black text-slate-900">
+                      Attachment untuk semua kontak
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Gunakan URL file agar import tetap ringan dan tidak hang.
+                    </p>
+
+                    {defaultAttachment.attachment_url ? (
+                      <p className="mt-2 break-all text-xs text-indigo-700">
+                        {defaultAttachment.attachment_url}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAttachmentBox(!showAttachmentBox)}
+                    className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white"
+                  >
+                    Attach File / URL
+                  </button>
+                </div>
+
+                {showAttachmentBox ? (
+                  <div className="mt-5 grid gap-3 lg:grid-cols-4">
+                    <input
+                      type="url"
+                      value={defaultAttachment.attachment_url}
+                      onChange={(event) => {
+                        setDefaultAttachment({
+                          ...defaultAttachment,
+                          attachment_url: event.target.value
+                        })
+                      }}
+                      placeholder="Attachment URL"
+                      className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none lg:col-span-2"
+                    />
+
+                    <select
+                      value={defaultAttachment.attachment_type}
+                      onChange={(event) => {
+                        setDefaultAttachment({
+                          ...defaultAttachment,
+                          attachment_type: event.target.value
+                        })
+                      }}
+                      className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none"
+                    >
+                      <option value="">Auto</option>
+                      <option value="image">Image</option>
+                      <option value="document">Document</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={applyAttachment}
+                      className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white"
+                    >
+                      Simpan Attachment
+                    </button>
+
+                    <input
+                      type="text"
+                      value={defaultAttachment.attachment_filename}
+                      onChange={(event) => {
+                        setDefaultAttachment({
+                          ...defaultAttachment,
+                          attachment_filename: event.target.value
+                        })
+                      }}
+                      placeholder="Filename optional"
+                      className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none lg:col-span-2"
+                    />
+
+                    <input
+                      type="text"
+                      value={defaultAttachment.attachment_caption}
+                      onChange={(event) => {
+                        setDefaultAttachment({
+                          ...defaultAttachment,
+                          attachment_caption: event.target.value
+                        })
+                      }}
+                      placeholder="Caption optional"
+                      className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none lg:col-span-2"
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                <p className="font-black text-slate-900">
+                  Jadwal Reminder Otomatis
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Pilih kapan reminder dikirim sebelum jadwal utama pada CSV.
+                </p>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <input
+                      type="checkbox"
+                      checked={scheduleTypes.h3}
+                      onChange={() => toggleSchedule('h3')}
+                    />
+                    <div>
+                      <p className="font-bold text-slate-900">Reminder H-3</p>
+                      <p className="text-xs text-slate-500">Kirim 3 hari sebelum jadwal</p>
+                    </div>
+                  </label>
+
+                  <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <input
+                      type="checkbox"
+                      checked={scheduleTypes.h1}
+                      onChange={() => toggleSchedule('h1')}
+                    />
+                    <div>
+                      <p className="font-bold text-slate-900">Reminder H-1</p>
+                      <p className="text-xs text-slate-500">Kirim 1 hari sebelum jadwal</p>
+                    </div>
+                  </label>
+
+                  <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <input
+                      type="checkbox"
+                      checked={scheduleTypes.h7jam}
+                      onChange={() => toggleSchedule('h7jam')}
+                    />
+                    <div>
+                      <p className="font-bold text-slate-900">Reminder H-7 Jam</p>
+                      <p className="text-xs text-slate-500">Kirim 7 jam sebelum jadwal</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-slate-50 p-5">
+                <p className="font-black text-slate-900">
+                  Format kolom CSV:
+                </p>
+                <p className="mt-3 font-mono text-xs text-slate-700">
+                  name, phone, message, reminder_date, reminder_time, attachment_url, attachment_type, attachment_filename, attachment_caption
+                </p>
+                <p className="mt-3 text-sm text-slate-500">
+                  reminder_date format YYYY-MM-DD. reminder_time format HH:mm. Kolom attachment boleh kosong.
+                </p>
+              </div>
+
+              {progress ? (
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+                  {progress}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={loading}
+                className="rounded-2xl bg-indigo-600 px-6 py-4 text-sm font-black text-white shadow-sm hover:bg-indigo-700 disabled:bg-slate-300"
+              >
+                {loading ? 'Importing...' : 'Import Reminder'}
+              </button>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  )
 }
