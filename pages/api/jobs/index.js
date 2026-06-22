@@ -11,29 +11,54 @@ function toNumber(value) {
   return number
 }
 
+function isSentStatus(status) {
+  const text = cleanText(status).toLowerCase()
+  return ['sent', 'delivered', 'read', 'success', 'completed', 'done'].includes(text)
+}
+
+function isFailedStatus(status) {
+  const text = cleanText(status).toLowerCase()
+  return ['failed', 'error', 'cancelled'].includes(text)
+}
+
+function isPendingStatus(status) {
+  const text = cleanText(status).toLowerCase()
+  return ['pending', 'queued', 'processing'].includes(text)
+}
+
 function normalizeJob(job, itemRows) {
   const jobItems = itemRows.filter((item) => cleanText(item.job_id) === cleanText(job.id))
 
-  const sent = jobItems.filter((item) => {
-    const status = cleanText(item.status).toLowerCase()
-    return ['sent', 'delivered', 'read', 'success', 'completed'].includes(status)
-  }).length
+  const countedSent = jobItems.filter((item) => isSentStatus(item.status)).length
+  const countedFailed = jobItems.filter((item) => isFailedStatus(item.status)).length
+  const countedPending = jobItems.filter((item) => isPendingStatus(item.status)).length
 
-  const failed = jobItems.filter((item) => {
-    const status = cleanText(item.status).toLowerCase()
-    return ['failed', 'error', 'cancelled'].includes(status)
-  }).length
-
-  const pending = jobItems.filter((item) => {
-    const status = cleanText(item.status).toLowerCase()
-    return ['pending', 'queued', 'processing'].includes(status)
-  }).length
-
-  const total =
-    jobItems.length ||
+  const totalFromItems = jobItems.length
+  const totalFromJob =
     toNumber(job.total_items) ||
     toNumber(job.total) ||
-    toNumber(job.total_contacts)
+    toNumber(job.total_contacts) ||
+    toNumber(job.count)
+
+  const sentFromJob =
+    toNumber(job.sent) ||
+    toNumber(job.sent_items) ||
+    toNumber(job.sent_count)
+
+  const failedFromJob =
+    toNumber(job.failed) ||
+    toNumber(job.failed_items) ||
+    toNumber(job.failed_count)
+
+  const pendingFromJob =
+    toNumber(job.pending) ||
+    toNumber(job.pending_items) ||
+    toNumber(job.pending_count)
+
+  const total = totalFromItems || totalFromJob
+  const sent = countedSent || sentFromJob
+  const failed = countedFailed || failedFromJob
+  const pending = countedPending || pendingFromJob || Math.max(total - sent - failed, 0)
 
   return {
     ...job,
@@ -46,7 +71,7 @@ function normalizeJob(job, itemRows) {
     sent,
     failed,
     pending,
-    item_count: jobItems.length
+    item_count: totalFromItems
   }
 }
 
@@ -93,9 +118,14 @@ export default async function handler(req, res) {
         .in('job_id', jobIds)
         .limit(10000)
 
-      if (!itemsResult.error && Array.isArray(itemsResult.data)) {
-        itemRows = itemsResult.data
+      if (itemsResult.error) {
+        return res.status(500).json({
+          success: false,
+          message: itemsResult.error.message
+        })
       }
+
+      itemRows = Array.isArray(itemsResult.data) ? itemsResult.data : []
     }
 
     const rows = jobs.map((job) => normalizeJob(job, itemRows))
