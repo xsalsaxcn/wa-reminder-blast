@@ -88,9 +88,7 @@ function parseCsv(text) {
 
     const hasValue = Object.values(row).some((value) => cleanText(value))
 
-    if (hasValue) {
-      rows.push(row)
-    }
+    if (hasValue) rows.push(row)
   }
 
   return rows
@@ -98,7 +96,6 @@ function parseCsv(text) {
 
 function excelSerialToDate(serialText) {
   const serial = Number(serialText)
-
   if (!Number.isFinite(serial)) return ''
 
   const utcDays = Math.floor(serial - 25569)
@@ -129,16 +126,10 @@ function normalizeDate(value) {
 
   if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(text)) {
     const parts = text.split('/')
-    const year = parts[0]
-    const month = parts[1].padStart(2, '0')
-    const day = parts[2].padStart(2, '0')
-
-    return `${year}-${month}-${day}`
+    return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`
   }
 
-  if (/^\d{5}$/.test(text)) {
-    return excelSerialToDate(text)
-  }
+  if (/^\d{5}$/.test(text)) return excelSerialToDate(text)
 
   const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
 
@@ -160,10 +151,7 @@ function normalizeDate(value) {
       month = second
     }
 
-    const safeDay = String(day).padStart(2, '0')
-    const safeMonth = String(month).padStart(2, '0')
-
-    return `${year}-${safeMonth}-${safeDay}`
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   }
 
   const dashMatch = text.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/)
@@ -186,10 +174,7 @@ function normalizeDate(value) {
       month = second
     }
 
-    const safeDay = String(day).padStart(2, '0')
-    const safeMonth = String(month).padStart(2, '0')
-
-    return `${year}-${safeMonth}-${safeDay}`
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   }
 
   return text
@@ -212,7 +197,6 @@ function normalizeTime(value) {
     const totalMinutes = Math.round(decimal * 24 * 60)
     const hour = String(Math.floor(totalMinutes / 60)).padStart(2, '0')
     const minute = String(totalMinutes % 60).padStart(2, '0')
-
     return `${hour}:${minute}`
   }
 
@@ -241,9 +225,7 @@ function normalizeTime(value) {
 
 function normalizeReminderRows(rows, defaultAttachment) {
   return rows
-    .filter((row) => {
-      return Object.values(row || {}).some((value) => cleanText(value))
-    })
+    .filter((row) => Object.values(row || {}).some((value) => cleanText(value)))
     .map((row) => {
       const name = cleanText(row.name || row.nama || row.customer_name || row.patient_name)
       const phone = cleanPhone(row.phone || row.no_hp || row.nomor || row.whatsapp || row.wa)
@@ -254,21 +236,6 @@ function normalizeReminderRows(rows, defaultAttachment) {
       const rowAttachmentUrl = cleanText(row.attachment_url || row.file_url || row.url)
       const attachmentUrl = rowAttachmentUrl || cleanText(defaultAttachment.attachment_url)
 
-      const attachmentType =
-        cleanText(row.attachment_type) ||
-        cleanText(defaultAttachment.attachment_type) ||
-        ''
-
-      const attachmentFilename =
-        cleanText(row.attachment_filename) ||
-        cleanText(defaultAttachment.attachment_filename) ||
-        ''
-
-      const attachmentCaption =
-        cleanText(row.attachment_caption) ||
-        cleanText(defaultAttachment.attachment_caption) ||
-        ''
-
       return {
         type: 'reminder',
         name,
@@ -277,9 +244,9 @@ function normalizeReminderRows(rows, defaultAttachment) {
         reminder_date: reminderDate,
         reminder_time: reminderTime,
         attachment_url: attachmentUrl,
-        attachment_type: attachmentType,
-        attachment_filename: attachmentFilename,
-        attachment_caption: attachmentCaption
+        attachment_type: cleanText(row.attachment_type) || cleanText(defaultAttachment.attachment_type) || '',
+        attachment_filename: cleanText(row.attachment_filename) || cleanText(defaultAttachment.attachment_filename) || '',
+        attachment_caption: cleanText(row.attachment_caption) || cleanText(defaultAttachment.attachment_caption) || ''
       }
     })
 }
@@ -308,8 +275,7 @@ function validateRows(rows) {
 }
 
 function downloadCsv(filename, rows) {
-  const content = rows.join('\n')
-  const blob = new Blob([content], {
+  const blob = new Blob([rows.join('\n')], {
     type: 'text/csv;charset=utf-8;'
   })
 
@@ -338,7 +304,6 @@ function guessFilename(url) {
     const parsed = new URL(url)
     const parts = parsed.pathname.split('/')
     const last = parts[parts.length - 1]
-
     return decodeURIComponent(last || 'attachment')
   } catch (err) {
     const parts = cleanText(url).split('/')
@@ -406,9 +371,7 @@ export default function ImportReminderPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const selectedScheduleTypes = useMemo(() => {
-    return selectedTypesFromState(scheduleTypes)
-  }, [scheduleTypes])
+  const selectedScheduleTypes = useMemo(() => selectedTypesFromState(scheduleTypes), [scheduleTypes])
 
   function handleDownloadTemplateBasic() {
     downloadCsv('template_reminder_tanpa_attachment.csv', [
@@ -485,14 +448,11 @@ export default function ImportReminderPage() {
       return
     }
 
-    const attachmentType = cleanText(defaultAttachment.attachment_type) || guessAttachmentType(url)
-    const filename = cleanText(defaultAttachment.attachment_filename) || guessFilename(url)
-
     const updated = {
       ...defaultAttachment,
       attachment_url: url,
-      attachment_type: attachmentType,
-      attachment_filename: filename
+      attachment_type: cleanText(defaultAttachment.attachment_type) || guessAttachmentType(url),
+      attachment_filename: cleanText(defaultAttachment.attachment_filename) || guessFilename(url)
     }
 
     setDefaultAttachment(updated)
@@ -592,17 +552,9 @@ export default function ImportReminderPage() {
     setProgress('')
 
     try {
-      if (!cleanText(databaseName)) {
-        throw new Error('Nama database wajib diisi.')
-      }
-
-      if (!parsedRows.length) {
-        throw new Error('File CSV belum dipilih atau kosong.')
-      }
-
-      if (!selectedScheduleTypes.length) {
-        throw new Error('Pilih minimal 1 jadwal reminder: H-3, H-1, atau H-7 Jam.')
-      }
+      if (!cleanText(databaseName)) throw new Error('Nama database wajib diisi.')
+      if (!parsedRows.length) throw new Error('File CSV belum dipilih atau kosong.')
+      if (!selectedScheduleTypes.length) throw new Error('Pilih minimal 1 jadwal reminder: H-3, H-1, atau H-7 Jam.')
 
       const validationErrors = validateRows(parsedRows)
 
@@ -620,7 +572,7 @@ export default function ImportReminderPage() {
       setSuccess(
         `Import berhasil. ${parsedRows.length} kontak masuk. Jadwal dibuat/tersedia: ${
           scheduleData.schedules_created_or_existing || 0
-        }.`
+        }. Silakan buka Job Queue lalu klik Create Job.`
       )
       setProgress('Selesai.')
     } catch (err) {
@@ -648,27 +600,15 @@ export default function ImportReminderPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleDownloadTemplateBasic}
-                className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm ring-1 ring-slate-200"
-              >
+              <button type="button" onClick={handleDownloadTemplateBasic} className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
                 Download Template Tanpa Attachment
               </button>
 
-              <button
-                type="button"
-                onClick={handleDownloadTemplateAttachment}
-                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white shadow-sm"
-              >
+              <button type="button" onClick={handleDownloadTemplateAttachment} className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white shadow-sm">
                 Download Template Dengan Attachment
               </button>
 
-              <button
-                type="button"
-                onClick={handleDownloadTemplateDateTime}
-                className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm"
-              >
+              <button type="button" onClick={handleDownloadTemplateDateTime} className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm">
                 Download Template Tanggal + Jam
               </button>
             </div>
@@ -751,24 +691,14 @@ export default function ImportReminderPage() {
                     <input
                       type="url"
                       value={defaultAttachment.attachment_url}
-                      onChange={(event) => {
-                        setDefaultAttachment({
-                          ...defaultAttachment,
-                          attachment_url: event.target.value
-                        })
-                      }}
+                      onChange={(event) => setDefaultAttachment({ ...defaultAttachment, attachment_url: event.target.value })}
                       placeholder="Attachment URL"
                       className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none lg:col-span-2"
                     />
 
                     <select
                       value={defaultAttachment.attachment_type}
-                      onChange={(event) => {
-                        setDefaultAttachment({
-                          ...defaultAttachment,
-                          attachment_type: event.target.value
-                        })
-                      }}
+                      onChange={(event) => setDefaultAttachment({ ...defaultAttachment, attachment_type: event.target.value })}
                       className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none"
                     >
                       <option value="">Auto</option>
@@ -776,23 +706,14 @@ export default function ImportReminderPage() {
                       <option value="document">Document</option>
                     </select>
 
-                    <button
-                      type="button"
-                      onClick={applyAttachment}
-                      className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white"
-                    >
+                    <button type="button" onClick={applyAttachment} className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white">
                       Simpan Attachment
                     </button>
 
                     <input
                       type="text"
                       value={defaultAttachment.attachment_filename}
-                      onChange={(event) => {
-                        setDefaultAttachment({
-                          ...defaultAttachment,
-                          attachment_filename: event.target.value
-                        })
-                      }}
+                      onChange={(event) => setDefaultAttachment({ ...defaultAttachment, attachment_filename: event.target.value })}
                       placeholder="Filename optional"
                       className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none lg:col-span-2"
                     />
@@ -800,12 +721,7 @@ export default function ImportReminderPage() {
                     <input
                       type="text"
                       value={defaultAttachment.attachment_caption}
-                      onChange={(event) => {
-                        setDefaultAttachment({
-                          ...defaultAttachment,
-                          attachment_caption: event.target.value
-                        })
-                      }}
+                      onChange={(event) => setDefaultAttachment({ ...defaultAttachment, attachment_caption: event.target.value })}
                       placeholder="Caption optional"
                       className="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none lg:col-span-2"
                     />
@@ -823,11 +739,7 @@ export default function ImportReminderPage() {
 
                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                   <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-                    <input
-                      type="checkbox"
-                      checked={scheduleTypes.h3}
-                      onChange={() => toggleSchedule('h3')}
-                    />
+                    <input type="checkbox" checked={scheduleTypes.h3} onChange={() => toggleSchedule('h3')} />
                     <div>
                       <p className="font-bold text-slate-900">Reminder H-3</p>
                       <p className="text-xs text-slate-500">Kirim 3 hari sebelum jadwal</p>
@@ -835,11 +747,7 @@ export default function ImportReminderPage() {
                   </label>
 
                   <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-                    <input
-                      type="checkbox"
-                      checked={scheduleTypes.h1}
-                      onChange={() => toggleSchedule('h1')}
-                    />
+                    <input type="checkbox" checked={scheduleTypes.h1} onChange={() => toggleSchedule('h1')} />
                     <div>
                       <p className="font-bold text-slate-900">Reminder H-1</p>
                       <p className="text-xs text-slate-500">Kirim 1 hari sebelum jadwal</p>
@@ -847,11 +755,7 @@ export default function ImportReminderPage() {
                   </label>
 
                   <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-                    <input
-                      type="checkbox"
-                      checked={scheduleTypes.h7jam}
-                      onChange={() => toggleSchedule('h7jam')}
-                    />
+                    <input type="checkbox" checked={scheduleTypes.h7jam} onChange={() => toggleSchedule('h7jam')} />
                     <div>
                       <p className="font-bold text-slate-900">Reminder H-7 Jam</p>
                       <p className="text-xs text-slate-500">Kirim 7 jam sebelum jadwal</p>
@@ -861,9 +765,7 @@ export default function ImportReminderPage() {
               </div>
 
               <div className="rounded-3xl bg-slate-50 p-5">
-                <p className="font-black text-slate-900">
-                  Format kolom CSV:
-                </p>
+                <p className="font-black text-slate-900">Format kolom CSV:</p>
                 <p className="mt-3 font-mono text-xs text-slate-700">
                   name, phone, message, reminder_date, reminder_time, attachment_url, attachment_type, attachment_filename, attachment_caption
                 </p>
