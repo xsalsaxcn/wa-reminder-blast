@@ -86,7 +86,11 @@ function parseCsv(text) {
       row[header] = cleanText(values[index])
     })
 
-    rows.push(row)
+    const hasValue = Object.values(row).some((value) => cleanText(value))
+
+    if (hasValue) {
+      rows.push(row)
+    }
   }
 
   return rows
@@ -236,44 +240,48 @@ function normalizeTime(value) {
 }
 
 function normalizeReminderRows(rows, defaultAttachment) {
-  return rows.map((row) => {
-    const name = cleanText(row.name || row.nama || row.customer_name || row.patient_name)
-    const phone = cleanPhone(row.phone || row.no_hp || row.nomor || row.whatsapp || row.wa)
-    const message = cleanText(row.message || row.pesan || row.template || row.text)
-    const reminderDate = normalizeDate(row.reminder_date || row.tanggal || row.date || row.jadwal_tanggal)
-    const reminderTime = normalizeTime(row.reminder_time || row.jam || row.time || row.jadwal_jam)
+  return rows
+    .filter((row) => {
+      return Object.values(row || {}).some((value) => cleanText(value))
+    })
+    .map((row) => {
+      const name = cleanText(row.name || row.nama || row.customer_name || row.patient_name)
+      const phone = cleanPhone(row.phone || row.no_hp || row.nomor || row.whatsapp || row.wa)
+      const message = cleanText(row.message || row.pesan || row.template || row.text)
+      const reminderDate = normalizeDate(row.reminder_date || row.tanggal || row.date || row.jadwal_tanggal)
+      const reminderTime = normalizeTime(row.reminder_time || row.jam || row.time || row.jadwal_jam)
 
-    const rowAttachmentUrl = cleanText(row.attachment_url || row.file_url || row.url)
-    const attachmentUrl = rowAttachmentUrl || cleanText(defaultAttachment.attachment_url)
+      const rowAttachmentUrl = cleanText(row.attachment_url || row.file_url || row.url)
+      const attachmentUrl = rowAttachmentUrl || cleanText(defaultAttachment.attachment_url)
 
-    const attachmentType =
-      cleanText(row.attachment_type) ||
-      cleanText(defaultAttachment.attachment_type) ||
-      ''
+      const attachmentType =
+        cleanText(row.attachment_type) ||
+        cleanText(defaultAttachment.attachment_type) ||
+        ''
 
-    const attachmentFilename =
-      cleanText(row.attachment_filename) ||
-      cleanText(defaultAttachment.attachment_filename) ||
-      ''
+      const attachmentFilename =
+        cleanText(row.attachment_filename) ||
+        cleanText(defaultAttachment.attachment_filename) ||
+        ''
 
-    const attachmentCaption =
-      cleanText(row.attachment_caption) ||
-      cleanText(defaultAttachment.attachment_caption) ||
-      ''
+      const attachmentCaption =
+        cleanText(row.attachment_caption) ||
+        cleanText(defaultAttachment.attachment_caption) ||
+        ''
 
-    return {
-      type: 'reminder',
-      name,
-      phone,
-      message,
-      reminder_date: reminderDate,
-      reminder_time: reminderTime,
-      attachment_url: attachmentUrl,
-      attachment_type: attachmentType,
-      attachment_filename: attachmentFilename,
-      attachment_caption: attachmentCaption
-    }
-  })
+      return {
+        type: 'reminder',
+        name,
+        phone,
+        message,
+        reminder_date: reminderDate,
+        reminder_time: reminderTime,
+        attachment_url: attachmentUrl,
+        attachment_type: attachmentType,
+        attachment_filename: attachmentFilename,
+        attachment_caption: attachmentCaption
+      }
+    })
 }
 
 function validateRows(rows) {
@@ -860,7 +868,7 @@ export default function ImportReminderPage() {
                   name, phone, message, reminder_date, reminder_time, attachment_url, attachment_type, attachment_filename, attachment_caption
                 </p>
                 <p className="mt-3 text-sm text-slate-500">
-                  Format aman reminder_date: YYYY-MM-DD, contoh 2026-06-25. Excel format 6/25/2026 juga akan dibaca otomatis.
+                  Format aman reminder_date: YYYY-MM-DD, contoh 2026-06-25. Excel format 6/25/2026 juga akan dibaca otomatis. Baris kosong akan otomatis dilewati.
                 </p>
               </div>
 
