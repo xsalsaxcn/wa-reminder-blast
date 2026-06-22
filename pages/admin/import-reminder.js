@@ -92,40 +92,138 @@ function parseCsv(text) {
   return rows
 }
 
+function excelSerialToDate(serialText) {
+  const serial = Number(serialText)
+
+  if (!Number.isFinite(serial)) return ''
+
+  const utcDays = Math.floor(serial - 25569)
+  const utcValue = utcDays * 86400
+  const dateInfo = new Date(utcValue * 1000)
+
+  if (Number.isNaN(dateInfo.getTime())) return ''
+
+  const year = dateInfo.getUTCFullYear()
+  const month = String(dateInfo.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(dateInfo.getUTCDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
 function normalizeDate(value) {
-  const text = cleanText(value)
+  let text = cleanText(value)
 
   if (!text) return ''
 
+  if (text.startsWith('="')) text = text.slice(2)
+  if (text.endsWith('"')) text = text.slice(0, -1)
+  if (text.startsWith("'")) text = text.slice(1)
+
+  text = text.split(' ')[0].trim()
+
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+
+  if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(text)) {
+    const parts = text.split('/')
+    const year = parts[0]
+    const month = parts[1].padStart(2, '0')
+    const day = parts[2].padStart(2, '0')
+
+    return `${year}-${month}-${day}`
+  }
+
+  if (/^\d{5}$/.test(text)) {
+    return excelSerialToDate(text)
+  }
 
   const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
 
   if (slashMatch) {
-    const day = slashMatch[1].padStart(2, '0')
-    const month = slashMatch[2].padStart(2, '0')
+    const first = Number(slashMatch[1])
+    const second = Number(slashMatch[2])
     const year = slashMatch[3]
 
-    return `${year}-${month}-${day}`
+    let day = first
+    let month = second
+
+    if (second > 12) {
+      month = first
+      day = second
+    }
+
+    if (first > 12) {
+      day = first
+      month = second
+    }
+
+    const safeDay = String(day).padStart(2, '0')
+    const safeMonth = String(month).padStart(2, '0')
+
+    return `${year}-${safeMonth}-${safeDay}`
   }
 
   const dashMatch = text.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/)
 
   if (dashMatch) {
-    const day = dashMatch[1].padStart(2, '0')
-    const month = dashMatch[2].padStart(2, '0')
+    const first = Number(dashMatch[1])
+    const second = Number(dashMatch[2])
     const year = dashMatch[3]
 
-    return `${year}-${month}-${day}`
+    let day = first
+    let month = second
+
+    if (second > 12) {
+      month = first
+      day = second
+    }
+
+    if (first > 12) {
+      day = first
+      month = second
+    }
+
+    const safeDay = String(day).padStart(2, '0')
+    const safeMonth = String(month).padStart(2, '0')
+
+    return `${year}-${safeMonth}-${safeDay}`
   }
 
   return text
 }
 
 function normalizeTime(value) {
-  const text = cleanText(value)
+  let text = cleanText(value)
 
   if (!text) return '09:00'
+
+  if (text.startsWith('="')) text = text.slice(2)
+  if (text.endsWith('"')) text = text.slice(0, -1)
+  if (text.startsWith("'")) text = text.slice(1)
+
+  text = text.trim()
+
+  const decimal = Number(text)
+
+  if (Number.isFinite(decimal) && decimal > 0 && decimal < 1) {
+    const totalMinutes = Math.round(decimal * 24 * 60)
+    const hour = String(Math.floor(totalMinutes / 60)).padStart(2, '0')
+    const minute = String(totalMinutes % 60).padStart(2, '0')
+
+    return `${hour}:${minute}`
+  }
+
+  const ampmMatch = text.match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)$/i)
+
+  if (ampmMatch) {
+    let hour = Number(ampmMatch[1])
+    const minute = String(ampmMatch[2] || '00').padStart(2, '0')
+    const marker = ampmMatch[3].toUpperCase()
+
+    if (marker === 'PM' && hour < 12) hour += 12
+    if (marker === 'AM' && hour === 12) hour = 0
+
+    return `${String(hour).padStart(2, '0')}:${minute}`
+  }
 
   const match = text.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
 
@@ -184,20 +282,17 @@ function validateRows(rows) {
   rows.forEach((row, index) => {
     const rowNumber = index + 2
 
-    if (!row.name) {
-      errors.push(`Baris ${rowNumber}: name kosong.`)
+    if (!row.name) errors.push(`Baris ${rowNumber}: name kosong.`)
+    if (!row.phone) errors.push(`Baris ${rowNumber}: phone kosong / tidak valid.`)
+    if (!row.message) errors.push(`Baris ${rowNumber}: message kosong.`)
+    if (!row.reminder_date) errors.push(`Baris ${rowNumber}: reminder_date kosong.`)
+
+    if (row.reminder_date && !/^\d{4}-\d{2}-\d{2}$/.test(row.reminder_date)) {
+      errors.push(`Baris ${rowNumber}: reminder_date tidak valid. Gunakan YYYY-MM-DD, contoh 2026-06-25.`)
     }
 
-    if (!row.phone) {
-      errors.push(`Baris ${rowNumber}: phone kosong / tidak valid.`)
-    }
-
-    if (!row.message) {
-      errors.push(`Baris ${rowNumber}: message kosong.`)
-    }
-
-    if (!row.reminder_date) {
-      errors.push(`Baris ${rowNumber}: reminder_date kosong.`)
+    if (row.reminder_time && !/^\d{2}:\d{2}$/.test(row.reminder_time)) {
+      errors.push(`Baris ${rowNumber}: reminder_time tidak valid. Gunakan HH:mm, contoh 09:00.`)
     }
   })
 
@@ -224,7 +319,6 @@ function guessAttachmentType(url) {
   const lower = cleanText(url).toLowerCase()
 
   if (!lower) return ''
-
   if (lower.match(/\.(jpg|jpeg|png|webp|gif)(\?|$)/)) return 'image'
   if (lower.match(/\.(pdf|doc|docx|xls|xlsx|csv|txt)(\?|$)/)) return 'document'
 
@@ -766,7 +860,7 @@ export default function ImportReminderPage() {
                   name, phone, message, reminder_date, reminder_time, attachment_url, attachment_type, attachment_filename, attachment_caption
                 </p>
                 <p className="mt-3 text-sm text-slate-500">
-                  reminder_date format YYYY-MM-DD. reminder_time format HH:mm. Kolom attachment boleh kosong.
+                  Format aman reminder_date: YYYY-MM-DD, contoh 2026-06-25. Excel format 6/25/2026 juga akan dibaca otomatis.
                 </p>
               </div>
 
