@@ -1,330 +1,279 @@
 ﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import {
-  sendWhatsAppText,
-  sendWhatsAppMedia,
-  normalizeAttachment
-} from '../../../lib/whatsappSender'
+import { sendWhatsAppText } from '../../../lib/whatsappSender'
 
-function getSecret(req) {
-  return (
-    req.headers['x-job-runner-secret'] ||
-    req.query.secret ||
-    req.body?.secret ||
-    ''
-  )
+function cleanText(value) {
+  return String(value || '').trim()
 }
 
-async function authorize(req, res) {
-  const secret = getSecret(req)
+function cleanPhone(value) {
+  let phone = String(value || '').trim()
+  let result = ''
 
-  if (
-    process.env.JOB_RUNNER_SECRET &&
-    secret &&
-    secret === process.env.JOB_RUNNER_SECRET
-  ) {
-    return {
-      username: 'job-runner',
-      role: 'system'
-    }
+  if (phone.startsWith('="')) phone = phone.slice(2)
+  if (phone.endsWith('"')) phone = phone.slice(0, -1)
+  if (phone.startsWith("'")) phone = phone.slice(1)
+
+  for (const char of phone) {
+    if ('0123456789'.includes(char)) result += char
   }
 
-  return requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+  if (result.startsWith('0')) result = '62' + result.slice(1)
+
+  return result
 }
 
-async function getContactAttachmentFallback(item, job) {
-  if (item.attachment_url) return item
+function hasAttachment(item) {
+  return Boolean(cleanText(item.attachment_url))
+}
 
-  if (!job?.database_id || !item.phone) return item
+function isPendingStatus(status) {
+  const text = cleanText(status).toLowerCase()
+  return text === 'pending' || text === 'queued'
+}
 
-  const { data } = await supabaseAdmin
-    .from('contacts')
-    .select('attachment_url, attachment_type, attachment_filename, attachment_caption')
-    .eq('database_id', job.database_id)
-    .eq('phone', item.phone)
-    .maybeSingle()
+function isSentStatus(status) {
+  const text = cleanText(status).toLowerCase()
+  return ['sent', 'delivered', 'read', 'success', 'completed', 'done'].includes(text)
+}
 
-  if (!data?.attachment_url) return item
+function isFailedStatus(status) {
+  const text = cleanText(status).toLowerCase()
+  return ['failed', 'error', 'cancelled'].includes(text)
+}
 
-  return {
-    ...item,
-    attachment_url: data.attachment_url,
-    attachment_type: data.attachment_type,
-    attachment_filename: data.attachment_filename,
-    attachment_caption: data.attachment_caption
+async function updateItemSafe(itemId, payload) {
+  const fullPayload = {
+    ...payload,
+    updated_at: new Date().toISOString()
   }
+
+  const first = await supabaseAdmin
+    .from('send_job_items')
+    .update(fullPayload)
+    .eq('id', itemId)
+
+  if (!first.error) return first
+
+  const minimalPayload = {}
+
+  if (payload.status !== undefined) minimalPayload.status = payload.status
+  if (payload.error_message !== undefined) minimalPayload.error_message = payload.error_message
+  if (payload.processed_at !== undefined) minimalPayload.processed_at = payload.processed_at
+
+  const second = await supabaseAdmin
+    .from('send_job_items')
+    .update(minimalPayload)
+    .eq('id', itemId)
+
+  return second
 }
 
-async function sendItem(item) {
-  const attachment = normalizeAttachment(item)
+async function updateJobSafe(jobId) {
+  if (!jobId) return
 
-  if (attachment.hasAttachment) {
-    return sendWhatsAppMedia({
-      phone: item.phone,
-      message: item.message,
-      attachment_url: attachment.attachment_url,
-      attachment_type: attachment.attachment_type,
-      attachment_filename: attachment.attachment_filename,
-      attachment_caption: attachment.attachment_caption
+  const itemsResult = await supabaseAdmin
+    .from('send_job_items')
+    .select('id, status')
+    .eq('job_id', jobId)
+    .limit(10000)
+
+  if (itemsResult.error) return
+
+  const items = Array.isArray(itemsResult.data) ? itemsResult.data : []
+
+  const total = items.length
+  const sent = items.filter((item) => isSentStatus(item.status)).length
+  const failed = items.filter((item) => isFailedStatus(item.status)).length
+  const pending = items.filter((item) => isPendingStatus(item.status) || cleanText(item.status).toLowerCase() === 'processing').length
+
+  let nextStatus = 'pending'
+
+  if (total > 0 && pending === 0) {
+    nextStatus = failed > 0 && sent === 0 ? 'failed' : 'done'
+  } else if (sent > 0 || failed > 0) {
+    nextStatus = 'processing'
+  }
+
+  const fullUpdate = {
+    status: nextStatus,
+    total_items: total,
+    sent,
+    failed,
+    updated_at: new Date().toISOString()
+  }
+
+  const first = await supabaseAdmin
+    .from('send_jobs')
+    .update(fullUpdate)
+    .eq('id', jobId)
+
+  if (!first.error) return
+
+  await supabaseAdmin
+    .from('send_jobs')
+    .update({
+      status: nextStatus
     })
-  }
-
-  return sendWhatsAppText({
-    phone: item.phone,
-    message: item.message
-  })
-}
-
-async function writeLog({ job, item, status, errorMessage, metaMessageId }) {
-  const attachment = normalizeAttachment(item)
-
-  const payload = {
-    phone: item.phone,
-    name: item.name || null,
-    message: item.message || '',
-    status,
-    error_message: errorMessage || null,
-    job_id: job.id,
-    attachment_url: attachment.attachment_url || null,
-    attachment_type: attachment.attachment_type || null,
-    attachment_filename: attachment.attachment_filename || null,
-    attachment_caption: attachment.attachment_caption || null,
-    meta_message_id: metaMessageId || null,
-    created_at: new Date().toISOString()
-  }
-
-  const jobType = String(job.type || '').toLowerCase()
-
-  if (jobType === 'reminder') {
-    await supabaseAdmin.from('reminder_logs').insert(payload)
-  } else {
-    await supabaseAdmin.from('blast_logs').insert(payload)
-  }
+    .eq('id', jobId)
 }
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
 
   try {
-    await authorize(req, res)
+    const secret = req.headers['x-worker-secret']
+    const expectedSecret = process.env.WORKER_SECRET
 
-    if (!['POST', 'GET'].includes(req.method)) {
+    if (!expectedSecret || secret !== expectedSecret) {
+      const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+      if (!authUser) return
+    }
+
+    if (req.method !== 'GET' && req.method !== 'POST') {
       return res.status(405).json({
         success: false,
         message: 'Method not allowed'
       })
     }
 
-    const batchLimit = Number(
-      req.query.limit ||
-      req.body?.limit ||
-      process.env.JOB_BATCH_LIMIT ||
-      10
-    )
+    const limitRaw = req.query.limit || req.body?.limit || 10
+    const limit = Number(limitRaw)
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 50) : 10
 
-    const { data: job, error: jobError } = await supabaseAdmin
-      .from('send_jobs')
-      .select('*')
-      .in('status', ['pending', 'processing'])
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle()
+    const jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
 
-    if (jobError) {
-      return res.status(500).json({
-        success: false,
-        message: jobError.message
-      })
-    }
-
-    if (!job) {
-      return res.status(200).json({
-        success: true,
-        message: 'Tidak ada job pending',
-        processed: 0
-      })
-    }
-
-    await supabaseAdmin
-      .from('send_jobs')
-      .update({
-        status: 'processing',
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', job.id)
-
-    const { data: rawItems, error: itemsError } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('send_job_items')
       .select('*')
-      .eq('job_id', job.id)
       .in('status', ['pending', 'queued'])
       .order('created_at', { ascending: true })
-      .limit(batchLimit)
+      .limit(200)
 
-    if (itemsError) {
+    if (jobId) {
+      query = query.eq('job_id', jobId)
+    }
+
+    const itemsResult = await query
+
+    if (itemsResult.error) {
       return res.status(500).json({
         success: false,
-        message: itemsError.message
+        message: itemsResult.error.message
       })
     }
 
-    if (!rawItems || rawItems.length === 0) {
-      await supabaseAdmin
-        .from('send_jobs')
-        .update({
-          status: 'done',
-          finished_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', job.id)
+    const allPendingItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
+    const textItems = allPendingItems
+      .filter((item) => !hasAttachment(item))
+      .slice(0, safeLimit)
 
+    if (!textItems.length) {
       return res.status(200).json({
         success: true,
-        message: 'Job selesai',
-        job_id: job.id,
-        processed: 0
+        message: 'Tidak ada text item pending untuk diproses.',
+        checked: allPendingItems.length,
+        processed: 0,
+        sent: 0,
+        failed: 0,
+        skipped_attachment: allPendingItems.filter(hasAttachment).length
       })
     }
 
     let sent = 0
     let failed = 0
     const results = []
+    const affectedJobIds = new Set()
 
-    for (const rawItem of rawItems) {
-      const item = await getContactAttachmentFallback(rawItem, job)
-      const attachment = normalizeAttachment(item)
+    for (const item of textItems) {
+      const itemId = item.id
+      const itemJobId = item.job_id
+      const phone = cleanPhone(item.phone)
+      const message = cleanText(item.message)
 
-      await supabaseAdmin
-        .from('send_job_items')
-        .update({
-          status: 'processing',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', item.id)
+      affectedJobIds.add(itemJobId)
 
-      try {
-        const result = await sendItem({
-          ...item,
-          attachment_url: attachment.attachment_url,
-          attachment_type: attachment.attachment_type,
-          attachment_filename: attachment.attachment_filename,
-          attachment_caption: attachment.attachment_caption
-        })
-
-        const metaMessageId = result?.messages?.[0]?.id || null
-
-        await supabaseAdmin
-          .from('send_job_items')
-          .update({
-            status: 'sent',
-            error_message: null,
-            processed_at: new Date().toISOString(),
-            meta_message_id: metaMessageId,
-            attachment_url: attachment.attachment_url || null,
-            attachment_type: attachment.attachment_type || null,
-            attachment_filename: attachment.attachment_filename || null,
-            attachment_caption: attachment.attachment_caption || null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', item.id)
-
-        await writeLog({
-          job,
-          item: {
-            ...item,
-            attachment_url: attachment.attachment_url,
-            attachment_type: attachment.attachment_type,
-            attachment_filename: attachment.attachment_filename,
-            attachment_caption: attachment.attachment_caption
-          },
-          status: 'sent',
-          errorMessage: null,
-          metaMessageId
-        })
-
-        sent += 1
-
-        results.push({
-          item_id: item.id,
-          phone: item.phone,
-          status: 'sent',
-          mode: attachment.hasAttachment ? 'media' : 'text',
-          attachment_url: attachment.attachment_url || null,
-          uploaded_media_id: result?.uploaded_media_id || null,
-          meta_message_id: metaMessageId
-        })
-      } catch (err) {
-        await supabaseAdmin
-          .from('send_job_items')
-          .update({
-            status: 'failed',
-            error_message: err.message,
-            processed_at: new Date().toISOString(),
-            attachment_url: attachment.attachment_url || null,
-            attachment_type: attachment.attachment_type || null,
-            attachment_filename: attachment.attachment_filename || null,
-            attachment_caption: attachment.attachment_caption || null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', item.id)
-
-        await writeLog({
-          job,
-          item: {
-            ...item,
-            attachment_url: attachment.attachment_url,
-            attachment_type: attachment.attachment_type,
-            attachment_filename: attachment.attachment_filename,
-            attachment_caption: attachment.attachment_caption
-          },
+      if (!itemId || !phone || !message) {
+        await updateItemSafe(itemId, {
           status: 'failed',
-          errorMessage: err.message,
-          metaMessageId: null
+          error_message: 'Phone atau message kosong.'
         })
 
         failed += 1
 
         results.push({
-          item_id: item.id,
-          phone: item.phone,
+          id: itemId,
+          phone,
+          success: false,
+          error: 'Phone atau message kosong.'
+        })
+
+        continue
+      }
+
+      await updateItemSafe(itemId, {
+        status: 'processing',
+        error_message: null
+      })
+
+      try {
+        const sendResult = await sendWhatsAppText({
+          to: phone,
+          message
+        })
+
+        await updateItemSafe(itemId, {
+          status: 'sent',
+          processed_at: new Date().toISOString(),
+          error_message: null
+        })
+
+        sent += 1
+
+        results.push({
+          id: itemId,
+          phone,
+          success: true,
+          result: sendResult || null
+        })
+      } catch (error) {
+        await updateItemSafe(itemId, {
           status: 'failed',
-          mode: attachment.hasAttachment ? 'media' : 'text',
-          attachment_url: attachment.attachment_url || null,
-          error: err.message
+          processed_at: new Date().toISOString(),
+          error_message: error.message || 'Gagal kirim WhatsApp.'
+        })
+
+        failed += 1
+
+        results.push({
+          id: itemId,
+          phone,
+          success: false,
+          error: error.message || 'Gagal kirim WhatsApp.'
         })
       }
     }
 
-    const { count: remaining } = await supabaseAdmin
-      .from('send_job_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('job_id', job.id)
-      .in('status', ['pending', 'queued', 'processing'])
-
-    if (!remaining || remaining <= 0) {
-      await supabaseAdmin
-        .from('send_jobs')
-        .update({
-          status: 'done',
-          finished_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', job.id)
+    for (const affectedJobId of affectedJobIds) {
+      await updateJobSafe(affectedJobId)
     }
 
     return res.status(200).json({
       success: true,
-      job_id: job.id,
-      processed: rawItems.length,
+      message: 'Process text batch selesai.',
+      checked: allPendingItems.length,
+      processed: textItems.length,
       sent,
       failed,
-      remaining: remaining || 0,
+      skipped_attachment: allPendingItems.filter(hasAttachment).length,
       results
     })
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: error.message || 'Failed to process job'
+      message: error.message || 'Process text batch gagal.'
     })
   }
 }
