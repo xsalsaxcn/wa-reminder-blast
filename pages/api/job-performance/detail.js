@@ -20,26 +20,15 @@ function getTime(value) {
   return Number.isFinite(time) ? time : 0
 }
 
-function getCreatedAt(row) {
-  return (
-    row?.created_at ||
-    row?.createdAt ||
-    row?.started_at ||
-    row?.updated_at ||
-    row?.processed_at ||
-    null
-  )
-}
+function normalizeStatus(status) {
+  const text = cleanText(status).toLowerCase()
 
-function getMessageText(row) {
-  return cleanText(
-    row?.body ||
-      row?.message ||
-      row?.last_message ||
-      row?.media_caption ||
-      row?.caption ||
-      ''
-  )
+  if (text === 'success') return 'sent'
+  if (text === 'done') return 'sent'
+  if (text === 'completed') return 'sent'
+  if (text === 'error') return 'failed'
+
+  return text || 'pending'
 }
 
 function classifyReply(text) {
@@ -72,6 +61,29 @@ function classifyReply(text) {
     'not interested'
   ]
 
+  const hotLeadWords = [
+    'berminat',
+    'minat',
+    'minta penawaran',
+    'buatkan penawaran',
+    'proposal',
+    'bisa ka',
+    'bisa kak',
+    'daftar',
+    'mau daftar',
+    'ikut'
+  ]
+
+  const interestedWords = [
+    'interested',
+    'mau',
+    'boleh',
+    'oke',
+    'ok',
+    'yes',
+    'ya'
+  ]
+
   const followUpWords = [
     'nanti',
     'follow up',
@@ -82,37 +94,7 @@ function classifyReply(text) {
     'kirim detail',
     'jadwal',
     'berapa',
-    'harga',
-    'proposal',
-    'penawaran',
-    'bisa ka',
-    'bisa kak'
-  ]
-
-  const interestedWords = [
-    'berminat',
-    'minat',
-    'interested',
-    'mau',
-    'boleh',
-    'oke',
-    'ok',
-    'yes',
-    'ya',
-    'daftar',
-    'ikut'
-  ]
-
-  const hotLeadWords = [
-    'daftar',
-    'mau daftar',
-    'ikut',
-    'berminat',
-    'minta penawaran',
-    'buatkan penawaran',
-    'proposal',
-    'bisa ka',
-    'bisa kak'
+    'harga'
   ]
 
   if (optOutWords.some((word) => value.includes(word))) return 'opt_out'
@@ -121,22 +103,49 @@ function classifyReply(text) {
   if (interestedWords.some((word) => value.includes(word))) return 'interested'
   if (followUpWords.some((word) => value.includes(word))) return 'follow_up'
 
-  return 'reply'
+  return 'neutral'
 }
 
-function bucketMatches(bucket, item) {
+function getReplyBody(row) {
+  return cleanText(row?.body || row?.message || row?.media_caption || row?.caption || '')
+}
+
+function getItemTime(item, job) {
+  return (
+    item.processed_at ||
+    item.sent_at ||
+    item.updated_at ||
+    item.created_at ||
+    job.created_at ||
+    job.updated_at
+  )
+}
+
+function isSentStatus(status) {
+  const text = normalizeStatus(status)
+  return ['sent', 'delivered', 'read'].includes(text)
+}
+
+function isFailedStatus(status) {
+  const text = normalizeStatus(status)
+  return ['failed', 'cancelled'].includes(text)
+}
+
+function bucketMatches(bucket, detail) {
   const selected = cleanText(bucket).toLowerCase()
 
   if (selected === 'target') return true
-  if (selected === 'sent') return item.sent
-  if (selected === 'failed') return item.failed
-  if (selected === 'replies') return item.hasReply
-  if (selected === 'interested') return item.replyBucket === 'interested' || item.replyBucket === 'hot_lead'
-  if (selected === 'follow_up') return item.replyBucket === 'follow_up'
-  if (selected === 'not_interested') return item.replyBucket === 'not_interested'
-  if (selected === 'opt_out') return item.replyBucket === 'opt_out'
-  if (selected === 'hot_lead') return item.replyBucket === 'hot_lead'
-  if (selected === 'score') return item.hasReply || item.sent || item.failed
+  if (selected === 'sent') return detail.sent
+  if (selected === 'failed') return detail.failed
+  if (selected === 'replies') return detail.hasReply
+  if (selected === 'interested') {
+    return detail.replyBucket === 'interested' || detail.replyBucket === 'hot_lead'
+  }
+  if (selected === 'follow_up') return detail.replyBucket === 'follow_up'
+  if (selected === 'not_interested') return detail.replyBucket === 'not_interested'
+  if (selected === 'opt_out') return detail.replyBucket === 'opt_out'
+  if (selected === 'hot_lead') return detail.replyBucket === 'hot_lead'
+  if (selected === 'score') return detail.hasReply || detail.sent || detail.failed
 
   return true
 }
@@ -171,7 +180,7 @@ async function getJobItems(jobId) {
     .select('*')
     .eq('job_id', jobId)
     .order('created_at', { ascending: true })
-    .limit(10000)
+    .limit(50000)
 
   if (error) throw error
 
@@ -187,8 +196,8 @@ async function getIncomingByPhones(phones, since) {
     let builder = query
       .select('*')
       .in('phone', safePhones)
-      .order('received_at', { ascending: false })
-      .limit(5000)
+      .order('received_at', { ascending: true })
+      .limit(50000)
 
     if (since) {
       builder = builder.gte('received_at', since)
@@ -196,16 +205,6 @@ async function getIncomingByPhones(phones, since) {
 
     return builder
   })
-}
-
-async function getDeliveryLogsByJob(jobId) {
-  return safeSelect('send_delivery_logs', (query) =>
-    query
-      .select('*')
-      .eq('job_id', jobId)
-      .order('created_at', { ascending: false })
-      .limit(10000)
-  )
 }
 
 async function getContactsByPhones(phones) {
@@ -217,28 +216,47 @@ async function getContactsByPhones(phones) {
     query
       .select('*')
       .in('phone', safePhones)
-      .limit(10000)
+      .limit(50000)
   )
 }
 
-function getNameFromContact(contact, fallbackPhone) {
+function groupIncomingByPhone(messages) {
+  const map = new Map()
+
+  for (const message of messages || []) {
+    const phone = cleanPhone(message.phone)
+    if (!phone) continue
+
+    const list = map.get(phone) || []
+    list.push(message)
+    map.set(phone, list)
+  }
+
+  return map
+}
+
+function getFirstReplyForContact({ phone, item, job, incomingByPhone }) {
+  const messages = incomingByPhone.get(phone) || []
+  const startTime = getTime(getItemTime(item, job))
+
+  for (const message of messages) {
+    const messageTime = getTime(message.received_at)
+
+    if (messageTime >= startTime) {
+      return message
+    }
+  }
+
+  return null
+}
+
+function getName(contact, fallback) {
   return (
     cleanText(contact?.name) ||
     cleanText(contact?.profile_name) ||
     cleanText(contact?.full_name) ||
-    fallbackPhone
+    fallback
   )
-}
-
-function normalizeStatus(status) {
-  const text = cleanText(status).toLowerCase()
-
-  if (text === 'success') return 'sent'
-  if (text === 'done') return 'sent'
-  if (text === 'completed') return 'sent'
-  if (text === 'error') return 'failed'
-
-  return text || 'pending'
 }
 
 export default async function handler(req, res) {
@@ -275,104 +293,67 @@ export default async function handler(req, res) {
       })
     }
 
-    const jobCreatedAt = getCreatedAt(job)
     const jobItems = await getJobItems(jobId)
-    const deliveryLogs = await getDeliveryLogsByJob(jobId)
 
-    const phonesFromItems = jobItems.map((item) => item.phone)
-    const phonesFromLogs = deliveryLogs.map((item) => item.phone)
-    const phones = Array.from(new Set([...phonesFromItems, ...phonesFromLogs].map(cleanPhone).filter(Boolean)))
+    const phoneMap = new Map()
 
-    const incomingMessages = await getIncomingByPhones(phones, jobCreatedAt)
+    for (const item of jobItems || []) {
+      const phone = cleanPhone(item.phone)
+      if (!phone) continue
+
+      const existing = phoneMap.get(phone)
+      const itemTime = getTime(getItemTime(item, job))
+      const existingTime = getTime(getItemTime(existing, job))
+
+      if (!existing || itemTime >= existingTime) {
+        phoneMap.set(phone, item)
+      }
+    }
+
+    const phones = Array.from(phoneMap.keys())
+    const earliestTime = job.created_at || job.updated_at || null
+
+    const incomingMessages = await getIncomingByPhones(phones, earliestTime)
+    const incomingByPhone = groupIncomingByPhone(incomingMessages)
     const contacts = await getContactsByPhones(phones)
 
     const contactMap = new Map()
-    for (const contact of contacts) {
+
+    for (const contact of contacts || []) {
       const phone = cleanPhone(contact.phone)
       if (!phone) continue
       contactMap.set(phone, contact)
     }
 
-    const incomingByPhone = new Map()
-    for (const message of incomingMessages) {
-      const phone = cleanPhone(message.phone)
-      if (!phone) continue
-
-      const list = incomingByPhone.get(phone) || []
-      list.push(message)
-      incomingByPhone.set(phone, list)
-    }
-
-    const logByPhone = new Map()
-    for (const log of deliveryLogs) {
-      const phone = cleanPhone(log.phone)
-      if (!phone) continue
-
-      const list = logByPhone.get(phone) || []
-      list.push(log)
-      logByPhone.set(phone, list)
-    }
-
-    const itemByPhone = new Map()
-    for (const item of jobItems) {
-      const phone = cleanPhone(item.phone)
-      if (!phone) continue
-
-      const existing = itemByPhone.get(phone)
-      const itemTime = getTime(item.processed_at || item.updated_at || item.created_at)
-      const existingTime = getTime(existing?.processed_at || existing?.updated_at || existing?.created_at)
-
-      if (!existing || itemTime >= existingTime) {
-        itemByPhone.set(phone, item)
-      }
-    }
-
     const rows = []
 
-    for (const phone of phones) {
-      const item = itemByPhone.get(phone) || {}
-      const logs = logByPhone.get(phone) || []
-      const replies = incomingByPhone.get(phone) || []
-      const latestReply = replies[0] || null
-      const latestLog = logs[0] || null
+    for (const [phone, item] of phoneMap.entries()) {
+      const firstReply = getFirstReplyForContact({
+        phone,
+        item,
+        job,
+        incomingByPhone
+      })
 
-      const itemStatus = normalizeStatus(item.status)
-      const logStatus = normalizeStatus(latestLog?.status)
-      const finalStatus = itemStatus || logStatus
-
-      const replyText = getMessageText(latestReply)
+      const replyText = getReplyBody(firstReply)
       const replyBucket = classifyReply(replyText)
-
-      const sent =
-        finalStatus === 'sent' ||
-        finalStatus === 'delivered' ||
-        finalStatus === 'read' ||
-        finalStatus === 'success'
-
-      const failed =
-        finalStatus === 'failed' ||
-        finalStatus === 'error'
-
+      const status = normalizeStatus(item.status)
       const contact = contactMap.get(phone)
 
       const detail = {
         phone,
-        name: getNameFromContact(contact, phone),
-        status: finalStatus || 'pending',
-        sent,
-        failed,
-        hasReply: replies.length > 0,
-        replyCount: replies.length,
+        name: getName(contact, phone),
+        status,
+        sent: isSentStatus(status),
+        failed: isFailedStatus(status),
+        hasReply: Boolean(firstReply),
+        replyCount: firstReply ? 1 : 0,
         replyBucket,
         lastReply: replyText,
-        lastReplyAt: latestReply?.received_at || null,
-        lastMessage: item.message || latestLog?.message || '',
-        processedAt: item.processed_at || latestLog?.created_at || null,
-        metaMessageId:
-          item.meta_message_id ||
-          latestLog?.meta_message_id ||
-          latestLog?.meta_response?.messages?.[0]?.id ||
-          null,
+        lastReplyAt: firstReply?.received_at || null,
+        lastMessage: item.message || '',
+        processedAt: getItemTime(item, job),
+        metaMessageId: item.meta_message_id || null,
         inboxUrl: `/inbox?phone=${encodeURIComponent(phone)}`
       }
 
