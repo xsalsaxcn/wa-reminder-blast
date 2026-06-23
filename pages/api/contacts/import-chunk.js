@@ -66,9 +66,27 @@ function getRows(body) {
   return []
 }
 
+function parseTemplateParams(row) {
+  const params = []
+
+  for (let i = 1; i <= 20; i += 1) {
+    const value = cleanText(
+      row[`param_${i}`] ||
+      row[`parameter_${i}`] ||
+      row[`template_param_${i}`]
+    )
+
+    if (value) params.push(value)
+  }
+
+  return params
+}
+
 function normalizeRow(row, databaseId, type) {
   const name = cleanText(row.name || row.nama || row.customer_name || row.patient_name)
   const phone = cleanPhone(row.phone || row.no_hp || row.nomor || row.whatsapp || row.wa)
+
+  // Untuk Template Blast, message boleh kosong.
   const message = cleanText(row.message || row.pesan || row.template || row.text)
 
   const reminderDate = normalizeDate(
@@ -86,16 +104,24 @@ function normalizeRow(row, databaseId, type) {
   )
 
   const reminderAt = buildReminderAt(reminderDate, reminderTime)
+  const templateParams = parseTemplateParams(row)
 
   return {
     database_id: databaseId,
     type,
     name,
     phone,
-    message,
+
+    // Untuk blast biasa, message tetap disimpan kalau ada.
+    // Untuk template blast, message boleh null karena body diambil dari wa_templates.
+    message: message || null,
+
     reminder_date: reminderDate,
     reminder_time: reminderTime,
     reminder_at: reminderAt,
+
+    template_params: templateParams.length ? templateParams : null,
+
     attachment_url: cleanText(row.attachment_url || row.file_url || row.url) || null,
     attachment_type: cleanText(row.attachment_type) || null,
     attachment_filename: cleanText(row.attachment_filename) || null,
@@ -152,24 +178,37 @@ export default async function handler(req, res) {
     rows.forEach((row, index) => {
       const normalized = normalizeRow(row, databaseId, type)
 
-      if (!normalized.name || !normalized.phone || !normalized.message) {
+      if (!normalized.name || !normalized.phone) {
         skipped.push({
           index,
           name: normalized.name,
           phone: normalized.phone,
-          reason: 'name/phone/message kosong'
+          reason: 'name/phone kosong'
         })
         return
       }
 
-      if (type === 'reminder' && !normalized.reminder_date) {
-        skipped.push({
-          index,
-          name: normalized.name,
-          phone: normalized.phone,
-          reason: 'reminder_date kosong'
-        })
-        return
+      // Reminder tetap wajib punya message dan reminder_date.
+      if (type === 'reminder') {
+        if (!normalized.message) {
+          skipped.push({
+            index,
+            name: normalized.name,
+            phone: normalized.phone,
+            reason: 'message kosong untuk reminder'
+          })
+          return
+        }
+
+        if (!normalized.reminder_date) {
+          skipped.push({
+            index,
+            name: normalized.name,
+            phone: normalized.phone,
+            reason: 'reminder_date kosong'
+          })
+          return
+        }
       }
 
       insertRows.push(normalized)
@@ -186,7 +225,7 @@ export default async function handler(req, res) {
     const result = await supabaseAdmin
       .from('contacts')
       .insert(insertRows)
-      .select('id, database_id, type, name, phone, message, reminder_date, reminder_time, reminder_at')
+      .select('id, database_id, type, name, phone, message, template_params, attachment_url, attachment_filename, reminder_date, reminder_time, reminder_at')
 
     if (result.error) {
       return res.status(500).json({
