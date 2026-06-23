@@ -1,400 +1,458 @@
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
-import { useEffect, useMemo, useState } from 'react'
 
 const LOGO_URL = 'https://cdn.phototourl.com/free/2026-06-21-c4d82306-6ffd-4d1e-badb-95ea9484d1b9.jpg'
 
-function cleanText(value) {
-  return String(value || '').trim()
-}
-
-function normalizeRole(value) {
-  const role = cleanText(value).toLowerCase()
-
-  if (role === 'master') return 'master'
-  if (role === 'admin') return 'admin'
-  if (role === 'agent') return 'agent'
-  if (role === 'user') return 'user'
-
-  return 'agent'
-}
-
-function canSee(item, role) {
-  if (!item.roles || !item.roles.length) return true
-  return item.roles.includes(role)
-}
-
-const menuGroups = [
+const OPERATIONAL_MENUS = [
   {
-    title: 'Main',
-    items: [
-      {
-        label: 'Dashboard',
-        href: '/dashboard',
-        icon: 'DB',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'WhatsApp Blast',
-        href: '/blast',
-        icon: 'WB',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Reminder',
-        href: '/reminder',
-        icon: 'RM',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Template Blast',
-        href: '/admin/template-blast',
-        icon: 'TB',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Job Queue',
-        href: '/jobs',
-        icon: 'JQ',
-        roles: ['master', 'admin', 'user', 'agent']
-      }
-    ]
+    label: 'Home',
+    href: '/',
+    roles: ['master', 'admin', 'user', 'agent']
   },
   {
-    title: 'Monitoring',
-    items: [
-      {
-        label: 'Logs',
-        href: '/logs',
-        icon: 'LG',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Inbox',
-        href: '/inbox',
-        icon: 'IN',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Reply Analysis',
-        href: '/analysis',
-        icon: 'RA',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Usage',
-        href: '/usage',
-        icon: 'US',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Job Performance',
-        href: '/job-performance',
-        icon: 'JP',
-        roles: ['master', 'admin', 'user', 'agent']
-      }
-    ]
+    label: 'Dashboard',
+    href: '/dashboard',
+    roles: ['master', 'admin', 'user', 'agent']
   },
   {
-    title: 'Data',
-    items: [
-      {
-        label: 'Import Blast',
-        href: '/admin/import-blast',
-        icon: 'IB',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Import Reminder',
-        href: '/admin/import-reminder',
-        icon: 'IR',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Database Manager',
-        href: '/admin/database-manager',
-        icon: 'DM',
-        roles: ['master', 'admin']
-      },
-      {
-        label: 'Blacklist',
-        href: '/blacklist',
-        icon: 'BL',
-        roles: ['master', 'admin', 'user', 'agent']
-      },
-      {
-        label: 'Quick Replies',
-        href: '/quick-replies',
-        icon: 'QR',
-        roles: ['master', 'admin', 'user', 'agent']
-      }
-    ]
+    label: 'Inbox',
+    href: '/inbox',
+    roles: ['master', 'admin', 'user', 'agent']
   },
   {
-    title: 'Meta',
-    items: [
-      {
-        label: 'Meta Templates',
-        href: '/admin/meta-templates',
-        icon: 'MT',
-        roles: ['master', 'admin']
-      },
-      {
-        label: 'Meta API Test',
-        href: '/admin/meta-test',
-        icon: 'MA',
-        roles: ['master', 'admin']
-      },
-      {
-        label: 'WABA Profile',
-        href: '/admin/waba-profile',
-        icon: 'WP',
-        roles: ['master', 'admin']
-      },
-      {
-        label: 'WhatsApp Settings',
-        href: '/admin/whatsapp-settings',
-        icon: 'WS',
-        roles: ['master', 'admin']
-      }
-    ]
+    label: 'Quick Replies',
+    href: '/quick-replies',
+    roles: ['master', 'admin', 'user', 'agent']
   },
   {
-    title: 'Admin',
-    items: [
-      {
-        label: 'Auto Worker',
-        href: '/admin/auto-worker',
-        icon: 'AW',
-        roles: ['master', 'admin']
-      },
-      {
-        label: 'Manage Users',
-        href: '/admin/manage-users',
-        icon: 'MU',
-        roles: ['master', 'admin']
-      },
-      {
-        label: 'Reset DB',
-        href: '/admin/reset-db',
-        icon: 'RD',
-        roles: ['master']
-      },
-      {
-        label: 'Setup Master',
-        href: '/setup-master',
-        icon: 'SM',
-        roles: ['master']
-      }
-    ]
+    label: 'Reply Analysis',
+    href: '/analysis',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Usage Log',
+    href: '/usage',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Blacklist',
+    href: '/blacklist',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Reminder',
+    href: '/reminder',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'WhatsApp Blast',
+    href: '/blast',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Template Blast',
+    href: '/admin/template-blast',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Import Reminder',
+    href: '/admin/import-reminder',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Import Blast',
+    href: '/admin/import-blast',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Job Queue',
+    href: '/jobs',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Job Performance',
+    href: '/job-performance',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
+    label: 'Logs',
+    href: '/logs',
+    roles: ['master', 'admin', 'user', 'agent']
   }
 ]
 
-function isActivePath(currentPath, href) {
-  if (!href) return false
-
-  if (href === '/dashboard') {
-    return currentPath === '/' || currentPath === '/dashboard'
+const ADMIN_MENUS = [
+  {
+    label: 'Database Manager',
+    href: '/admin/database-manager',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'Auto Worker',
+    href: '/admin/auto-worker',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'Meta Templates',
+    href: '/admin/meta-templates',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'Meta API Test',
+    href: '/admin/meta-test',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'WABA Profile',
+    href: '/admin/waba-profile',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'WhatsApp Settings',
+    href: '/admin/whatsapp-settings',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'Manage Users',
+    href: '/admin/manage-users',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'Reset DB',
+    href: '/admin/reset-db',
+    roles: ['master']
   }
+]
 
-  if (href === '/jobs') {
-    return currentPath === '/jobs' || currentPath.startsWith('/jobs/')
-  }
-
-  return currentPath === href || currentPath.startsWith(`${href}/`)
+function normalizeRole(value) {
+  return String(value || 'master').trim().toLowerCase()
 }
 
-function MenuLink({ href, icon, children }) {
-  const router = useRouter()
-  const active = isActivePath(router.pathname, href)
+function getStoredUser() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const keys = [
+    'authUser',
+    'user',
+    'currentUser',
+    'notivaUser',
+    'waUser',
+    'loggedInUser'
+  ]
+
+  for (const key of keys) {
+    try {
+      const value = window.localStorage.getItem(key)
+
+      if (!value) continue
+
+      const parsed = JSON.parse(value)
+
+      if (parsed) return parsed
+    } catch (err) {
+      // ignore invalid localStorage value
+    }
+  }
+
+  return null
+}
+
+function getUserName(user) {
+  return (
+    user?.name ||
+    user?.username ||
+    user?.email ||
+    user?.full_name ||
+    user?.user_name ||
+    'masteradmin'
+  )
+}
+
+function getUserRole(user) {
+  return normalizeRole(
+    user?.role ||
+    user?.user_role ||
+    user?.account_role ||
+    'master'
+  )
+}
+
+function isActivePath(pathname, href) {
+  if (href === '/') {
+    return pathname === '/'
+  }
+
+  return pathname === href || pathname.startsWith(href + '/')
+}
+
+function MenuLink({ item, pathname, onClick }) {
+  const active = isActivePath(pathname, item.href)
 
   return (
-    <Link
-      href={href}
-      className={[
-        'group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-bold transition',
-        active
-          ? 'bg-cyan-50 text-slate-950 shadow-sm ring-1 ring-cyan-100'
-          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950'
-      ].join(' ')}
-    >
-      <span
-        className={[
-          'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[10px] font-black tracking-tight transition',
+    <Link href={item.href} legacyBehavior>
+      <a
+        onClick={onClick}
+        className={
           active
-            ? 'bg-cyan-500 text-white'
-            : 'bg-slate-100 text-slate-500 group-hover:bg-slate-200 group-hover:text-slate-800'
-        ].join(' ')}
+            ? 'flex items-center justify-between rounded-2xl bg-cyan-50 px-4 py-3 text-sm font-extrabold text-slate-950 ring-1 ring-cyan-200 shadow-sm'
+            : 'flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+        }
       >
-        {icon}
-      </span>
-      <span className="truncate">{children}</span>
+        <span>{item.label}</span>
+        {active ? (
+          <span className="h-2 w-2 rounded-full bg-cyan-500" />
+        ) : null}
+      </a>
     </Link>
   )
 }
 
-export default function Sidebar(props) {
+function BrandBlock() {
+  return (
+    <div className="mb-5 overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+      <div className="bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-700 p-4">
+        <div className="rounded-3xl bg-white p-3 shadow-sm">
+          <img
+            src={LOGO_URL}
+            alt="Notiva Logo"
+            className="h-24 w-full rounded-2xl object-contain"
+          />
+        </div>
+
+        <div className="mt-4">
+          <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-100">
+            Notiva
+          </p>
+          <h1 className="mt-1 text-2xl font-black leading-tight text-white">
+            WA Automation
+          </h1>
+          <p className="mt-1 text-xs font-medium text-cyan-50">
+            Blast · Reminder · Inbox
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UserCard({ userName, role }) {
+  return (
+    <div className="mb-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+        Logged in as
+      </p>
+      <p className="mt-2 truncate text-sm font-extrabold text-slate-900">
+        {userName}
+      </p>
+      <p className="mt-1 text-xs font-bold text-indigo-600">
+        {role}
+      </p>
+    </div>
+  )
+}
+
+export default function Sidebar() {
   const router = useRouter()
-  const [storedRole, setStoredRole] = useState('')
-  const [storedName, setStoredName] = useState('')
+  const [open, setOpen] = useState(false)
+  const [user, setUser] = useState(null)
+  const [loadingUser, setLoadingUser] = useState(true)
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    let mounted = true
 
-    const possibleRole =
-      localStorage.getItem('role') ||
-      localStorage.getItem('user_role') ||
-      localStorage.getItem('notiva_role') ||
-      localStorage.getItem('wa_role') ||
-      ''
+    async function loadUser() {
+      try {
+        const endpoints = [
+          '/api/auth/me',
+          '/api/me',
+          '/api/user/me'
+        ]
 
-    const possibleName =
-      localStorage.getItem('name') ||
-      localStorage.getItem('user_name') ||
-      localStorage.getItem('notiva_name') ||
-      localStorage.getItem('email') ||
-      ''
+        for (const endpoint of endpoints) {
+          try {
+            const response = await fetch(endpoint, {
+              method: 'GET',
+              cache: 'no-store'
+            })
 
-    setStoredRole(possibleRole)
-    setStoredName(possibleName)
+            if (!response.ok) continue
+
+            const data = await response.json()
+            const foundUser = data.user || data.data || data.authUser || data
+
+            if (foundUser && mounted) {
+              setUser(foundUser)
+              setLoadingUser(false)
+              return
+            }
+          } catch (err) {
+            // try next endpoint
+          }
+        }
+
+        const storedUser = getStoredUser()
+
+        if (mounted) {
+          setUser(storedUser || { name: 'masteradmin', role: 'master' })
+          setLoadingUser(false)
+        }
+      } catch (err) {
+        if (mounted) {
+          setUser({ name: 'masteradmin', role: 'master' })
+          setLoadingUser(false)
+        }
+      }
+    }
+
+    loadUser()
+
+    return () => {
+      mounted = false
+    }
   }, [])
 
-  const role = useMemo(() => {
-    return normalizeRole(
-      props.role ||
-      props.user?.role ||
-      props.currentUser?.role ||
-      storedRole
-    )
-  }, [props.role, props.user?.role, props.currentUser?.role, storedRole])
+  useEffect(() => {
+    setOpen(false)
+  }, [router.pathname])
 
-  const displayName = useMemo(() => {
-    return cleanText(
-      props.name ||
-      props.user?.name ||
-      props.user?.email ||
-      props.currentUser?.name ||
-      props.currentUser?.email ||
-      storedName ||
-      'Notiva User'
-    )
-  }, [
-    props.name,
-    props.user?.name,
-    props.user?.email,
-    props.currentUser?.name,
-    props.currentUser?.email,
-    storedName
-  ])
+  useEffect(() => {
+    function handleResize() {
+      if (window.innerWidth >= 1024) {
+        setOpen(false)
+      }
+    }
 
-  const visibleGroups = useMemo(() => {
-    return menuGroups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => canSee(item, role))
-      }))
-      .filter((group) => group.items.length > 0)
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [])
+
+  const userName = getUserName(user)
+  const role = getUserRole(user)
+
+  const operationalMenus = useMemo(() => {
+    return OPERATIONAL_MENUS.filter((item) => item.roles.includes(role))
+  }, [role])
+
+  const adminMenus = useMemo(() => {
+    return ADMIN_MENUS.filter((item) => item.roles.includes(role))
   }, [role])
 
   async function handleLogout() {
-    if (typeof props.onLogout === 'function') {
-      props.onLogout()
-      return
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST'
+      })
+    } catch (err) {
+      try {
+        await fetch('/api/logout', {
+          method: 'POST'
+        })
+      } catch (err2) {
+        // ignore
+      }
     }
 
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('token')
-      localStorage.removeItem('auth_token')
-      localStorage.removeItem('session')
-      localStorage.removeItem('user')
-      localStorage.removeItem('role')
-      localStorage.removeItem('user_role')
-      localStorage.removeItem('notiva_role')
-      localStorage.removeItem('wa_role')
+    try {
+      window.localStorage.removeItem('authUser')
+      window.localStorage.removeItem('user')
+      window.localStorage.removeItem('currentUser')
+      window.localStorage.removeItem('notivaUser')
+      window.localStorage.removeItem('waUser')
+      window.localStorage.removeItem('loggedInUser')
+    } catch (err) {
+      // ignore
     }
 
-    router.push('/login')
+    window.location.href = '/login'
   }
 
-  return (
-    <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 border-r border-slate-200 bg-white/95 shadow-sm backdrop-blur xl:flex xl:flex-col">
-      <div className="flex h-full flex-col">
-        <div className="border-b border-slate-100 px-5 py-5">
-          <Link href="/dashboard" className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-slate-100 bg-slate-50 shadow-sm">
-              <img
-                src={LOGO_URL}
-                alt="Notiva"
-                className="h-full w-full object-cover"
-              />
-            </div>
+  const sidebarContent = (
+    <aside className="flex h-full w-[290px] flex-col border-r border-slate-200 bg-white">
+      <div className="flex-1 overflow-y-auto p-4">
+        <BrandBlock />
 
-            <div className="min-w-0">
-              <div className="truncate text-lg font-black tracking-tight text-slate-950">
-                Notiva
-              </div>
-              <div className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-cyan-600">
-                WA Automation
-              </div>
-            </div>
-          </Link>
-        </div>
+        <UserCard
+          userName={loadingUser ? 'Loading...' : userName}
+          role={loadingUser ? '-' : role}
+        />
 
-        <div className="flex-1 overflow-y-auto px-4 py-5">
-          <div className="space-y-6">
-            {visibleGroups.map((group) => (
-              <div key={group.title}>
-                <div className="mb-2 px-3 text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
-                  {group.title}
-                </div>
+        <nav className="space-y-1">
+          {operationalMenus.map((item) => (
+            <MenuLink
+              key={item.href}
+              item={item}
+              pathname={router.pathname}
+              onClick={() => setOpen(false)}
+            />
+          ))}
+        </nav>
 
-                <div className="space-y-1">
-                  {group.items.map((item) => (
-                    <MenuLink
-                      key={item.href}
-                      href={item.href}
-                      icon={item.icon}
-                    >
-                      {item.label}
-                    </MenuLink>
-                  ))}
-                </div>
-              </div>
-            ))}
+        {adminMenus.length > 0 ? (
+          <div className="mt-6">
+            <p className="mb-2 px-4 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">
+              Admin Tools
+            </p>
+
+            <nav className="space-y-1">
+              {adminMenus.map((item) => (
+                <MenuLink
+                  key={item.href}
+                  item={item}
+                  pathname={router.pathname}
+                  onClick={() => setOpen(false)}
+                />
+              ))}
+            </nav>
           </div>
-        </div>
+        ) : null}
+      </div>
 
-        <div className="border-t border-slate-100 p-4">
-          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-xs font-black text-white">
-                {displayName.slice(0, 2).toUpperCase()}
-              </div>
-
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-black text-slate-950">
-                  {displayName}
-                </div>
-                <div className="mt-0.5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                  {role}
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="mt-4 w-full rounded-2xl bg-white px-4 py-2.5 text-sm font-black text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-950 hover:text-white"
-            >
-              Logout
-            </button>
-          </div>
-
-          <div className="mt-4 text-center text-[11px] font-semibold text-slate-400">
-            Blast - Reminder - Inbox
-          </div>
-        </div>
+      <div className="border-t border-slate-200 p-4">
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-red-50 hover:text-red-600"
+        >
+          Logout
+        </button>
       </div>
     </aside>
+  )
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="fixed left-4 top-4 z-50 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-lg lg:hidden"
+      >
+        Menu
+      </button>
+
+      <div className="hidden min-h-screen lg:block">
+        {sidebarContent}
+      </div>
+
+      {open ? (
+        <div className="fixed inset-0 z-[80] lg:hidden">
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            onClick={() => setOpen(false)}
+            className="absolute inset-0 bg-slate-950/40"
+          />
+
+          <div className="absolute left-0 top-0 h-full">
+            {sidebarContent}
+          </div>
+        </div>
+      ) : null}
+    </>
   )
 }
