@@ -11,6 +11,8 @@ export default function InboxPage() {
   const [messages, setMessages] = useState([])
   const [replyText, setReplyText] = useState('')
   const [searchText, setSearchText] = useState('')
+  const [messageSearchText, setMessageSearchText] = useState('')
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false)
   const [quickReplyTemplates, setQuickReplyTemplates] = useState([])
   const [attachmentFile, setAttachmentFile] = useState(null)
   const [attachmentPreview, setAttachmentPreview] = useState('')
@@ -43,6 +45,26 @@ export default function InboxPage() {
       )
     })
   }, [conversations, searchText])
+
+  const filteredMessages = useMemo(() => {
+    const q = messageSearchText.trim().toLowerCase()
+
+    if (!q) return messages
+
+    return messages.filter((msg) => {
+      const text = String(msg.message || '').toLowerCase()
+      const filename = String(msg.media_filename || '').toLowerCase()
+      const caption = String(msg.media_caption || '').toLowerCase()
+      const status = String(msg.status || '').toLowerCase()
+
+      return (
+        text.includes(q) ||
+        filename.includes(q) ||
+        caption.includes(q) ||
+        status.includes(q)
+      )
+    })
+  }, [messages, messageSearchText])
 
   function scrollToBottom() {
     setTimeout(() => {
@@ -209,6 +231,8 @@ export default function InboxPage() {
     setSelectedConversation(nextConversation)
     selectedPhoneRef.current = conversation.phone
     setMobileView('chat')
+    setMessageSearchText('')
+    setMessageSearchOpen(false)
     markLocalConversationRead(conversation.phone)
 
     await loadMessages(conversation.phone)
@@ -595,26 +619,66 @@ export default function InboxPage() {
               }`}
             >
               <div className="shrink-0 border-b border-slate-200 bg-white p-3 md:p-4">
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setMobileView('list')}
-                    className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 lg:hidden"
-                  >
-                    &lt; Back
-                  </button>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setMobileView('list')}
+                      className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 lg:hidden"
+                    >
+                      &lt; Back
+                    </button>
 
-                  <div className="min-w-0">
-                    <h2 className="truncate font-semibold text-slate-900">
-                      {selectedConversation
-                        ? selectedConversation.profile_name || selectedConversation.phone
-                        : 'Detail Pesan'}
-                    </h2>
-                    <p className="truncate text-xs text-slate-500">
-                      {selectedConversation ? selectedConversation.phone : 'Pilih conversation'}
-                    </p>
+                    <div className="min-w-0">
+                      <h2 className="truncate font-semibold text-slate-900">
+                        {selectedConversation
+                          ? selectedConversation.profile_name || selectedConversation.phone
+                          : 'Detail Pesan'}
+                      </h2>
+                      <p className="truncate text-xs text-slate-500">
+                        {selectedConversation ? selectedConversation.phone : 'Pilih conversation'}
+                      </p>
+                    </div>
                   </div>
+
+                  {selectedConversation ? (
+                    <button
+                      type="button"
+                      onClick={() => setMessageSearchOpen((current) => !current)}
+                      className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                    >
+                      Search
+                    </button>
+                  ) : null}
                 </div>
+
+                {messageSearchOpen ? (
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      type="text"
+                      value={messageSearchText}
+                      onChange={(event) => setMessageSearchText(event.target.value)}
+                      placeholder="Cari pesan di chat ini..."
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                    />
+
+                    {messageSearchText ? (
+                      <button
+                        type="button"
+                        onClick={() => setMessageSearchText('')}
+                        className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {messageSearchText ? (
+                  <p className="mt-2 text-xs text-slate-400">
+                    Hasil: {filteredMessages.length} dari {messages.length} pesan.
+                  </p>
+                ) : null}
               </div>
 
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-3 md:p-4">
@@ -626,8 +690,10 @@ export default function InboxPage() {
                   <div className="text-sm text-slate-500">Loading messages...</div>
                 ) : messages.length === 0 ? (
                   <div className="text-sm text-slate-500">Belum ada detail pesan untuk nomor ini.</div>
+                ) : filteredMessages.length === 0 ? (
+                  <div className="text-sm text-slate-500">Tidak ada pesan yang cocok dengan pencarian.</div>
                 ) : (
-                  messages.map((msg) => {
+                  filteredMessages.map((msg) => {
                     const outgoing = msg.direction === 'outgoing'
 
                     return (

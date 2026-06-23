@@ -10,6 +10,94 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback
 }
 
+function getTime(value) {
+  const time = value ? new Date(value).getTime() : 0
+  return Number.isFinite(time) ? time : 0
+}
+
+function getLogMessage(item) {
+  return (
+    cleanText(item?.message) ||
+    cleanText(item?.body) ||
+    cleanText(item?.caption) ||
+    cleanText(item?.meta_response?.message) ||
+    ''
+  )
+}
+
+function getLogTime(item) {
+  return item?.created_at || item?.sent_at || item?.updated_at || new Date().toISOString()
+}
+
+async function getOutgoingMessages() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wa_outgoing_messages')
+      .select('*')
+      .order('sent_at', { ascending: false })
+      .limit(500)
+
+    if (error) return []
+
+    return data || []
+  } catch (error) {
+    return []
+  }
+}
+
+async function getDeliveryLogs() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('send_delivery_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1000)
+
+    if (error) return []
+
+    return data || []
+  } catch (error) {
+    return []
+  }
+}
+
+function mergeLastMessage(mergedMap, payload) {
+  const phone = cleanText(payload.phone)
+  const message = cleanText(payload.message)
+  const messageAt = payload.message_at
+
+  if (!phone || !message || !messageAt) return
+
+  const existing = mergedMap.get(phone)
+  const messageTime = getTime(messageAt)
+  const existingTime = getTime(existing?.last_message_at)
+
+  if (!existing) {
+    mergedMap.set(phone, {
+      id: phone,
+      phone,
+      profile_name: phone,
+      last_message: message,
+      last_message_at: messageAt,
+      unread_count: 0,
+      status: 'open',
+      created_at: messageAt,
+      updated_at: messageAt
+    })
+
+    return
+  }
+
+  if (messageTime >= existingTime) {
+    mergedMap.set(phone, {
+      ...existing,
+      last_message: message,
+      last_message_at: messageAt,
+      updated_at: messageAt
+    })
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -50,6 +138,9 @@ export default async function handler(req, res) {
       })
     }
 
+    const outgoingMessages = await getOutgoingMessages()
+    const deliveryLogs = await getDeliveryLogs()
+
     const mergedMap = new Map()
 
     for (const conv of conversations || []) {
@@ -72,8 +163,8 @@ export default async function handler(req, res) {
       if (!msg.phone) continue
 
       const existing = mergedMap.get(msg.phone)
-      const msgTime = msg.received_at ? new Date(msg.received_at).getTime() : 0
-      const existingTime = existing?.last_message_at ? new Date(existing.last_message_at).getTime() : 0
+      const msgTime = getTime(msg.received_at)
+      const existingTime = getTime(existing?.last_message_at)
 
       if (!existing) {
         mergedMap.set(msg.phone, {
@@ -97,8 +188,28 @@ export default async function handler(req, res) {
       }
     }
 
+    for (const item of outgoingMessages || []) {
+      mergeLastMessage(mergedMap, {
+        phone: item.phone,
+        message: item.message || item.media_caption || '',
+        message_at: item.sent_at || item.created_at
+      })
+    }
+
+    for (const item of deliveryLogs || []) {
+      const mode = cleanText(item.mode).toLowerCase()
+
+      if (mode === 'webhook_status') continue
+
+      mergeLastMessage(mergedMap, {
+        phone: item.phone,
+        message: getLogMessage(item),
+        message_at: getLogTime(item)
+      })
+    }
+
     const mergedConversations = Array.from(mergedMap.values()).sort((a, b) => {
-      return new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0)
+      return getTime(b.last_message_at) - getTime(a.last_message_at)
     })
 
     return res.status(200).json({
