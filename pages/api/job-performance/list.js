@@ -120,12 +120,15 @@ function getJobCreatedAt(job) {
 }
 
 function getItemTime(item, job) {
+  const safeItem = item || {}
+  const safeJob = job || {}
+
   return (
-    item.processed_at ||
-    item.sent_at ||
-    item.updated_at ||
-    item.created_at ||
-    getJobCreatedAt(job)
+    safeItem.processed_at ||
+    safeItem.sent_at ||
+    safeItem.updated_at ||
+    safeItem.created_at ||
+    getJobCreatedAt(safeJob)
   )
 }
 

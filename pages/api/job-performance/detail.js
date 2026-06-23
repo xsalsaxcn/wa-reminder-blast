@@ -111,13 +111,17 @@ function getReplyBody(row) {
 }
 
 function getItemTime(item, job) {
+  const safeItem = item || {}
+  const safeJob = job || {}
+
   return (
-    item.processed_at ||
-    item.sent_at ||
-    item.updated_at ||
-    item.created_at ||
-    job.created_at ||
-    job.updated_at
+    safeItem.processed_at ||
+    safeItem.sent_at ||
+    safeItem.updated_at ||
+    safeItem.created_at ||
+    safeJob.created_at ||
+    safeJob.updated_at ||
+    null
   )
 }
 
