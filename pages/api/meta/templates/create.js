@@ -51,6 +51,7 @@ function normalizeCategory(value) {
 
   if (text === 'UTILITY') return 'UTILITY'
   if (text === 'AUTHENTICATION') return 'AUTHENTICATION'
+
   return 'MARKETING'
 }
 
@@ -145,6 +146,22 @@ function parseBodyExamples(value, expectedCount) {
   return arr.slice(0, Math.max(expectedCount, arr.length))
 }
 
+function parseButtons(value) {
+  if (Array.isArray(value)) {
+    return value.map(cleanText).filter(Boolean).slice(0, 3)
+  }
+
+  const text = cleanText(value)
+
+  if (!text) return []
+
+  return text
+    .split('|')
+    .map(cleanText)
+    .filter(Boolean)
+    .slice(0, 3)
+}
+
 async function readJson(response) {
   const text = await response.text()
 
@@ -157,7 +174,14 @@ async function readJson(response) {
   }
 }
 
-async function uploadSampleMediaToMeta({ token, appId, version, sampleUrl, filename, mimeType }) {
+async function uploadSampleMediaToMeta({
+  token,
+  appId,
+  version,
+  sampleUrl,
+  filename,
+  mimeType
+}) {
   const fileResponse = await fetch(sampleUrl)
 
   if (!fileResponse.ok) {
@@ -213,7 +237,8 @@ function buildComponents({
   headerHandle,
   body,
   bodyExamples,
-  footer
+  footer,
+  buttons
 }) {
   const components = []
 
@@ -248,6 +273,18 @@ function buildComponents({
     components.push({
       type: 'FOOTER',
       text: cleanText(footer)
+    })
+  }
+
+  const buttonTexts = parseButtons(buttons)
+
+  if (buttonTexts.length) {
+    components.push({
+      type: 'BUTTONS',
+      buttons: buttonTexts.map((buttonText) => ({
+        type: 'QUICK_REPLY',
+        text: buttonText
+      }))
     })
   }
 
@@ -309,6 +346,8 @@ export default async function handler(req, res) {
     const headerType = normalizeHeaderType(bodyPayload.header_type || bodyPayload.headerType)
     const body = cleanText(bodyPayload.body)
     const footer = cleanText(bodyPayload.footer)
+    const buttons = bodyPayload.buttons || bodyPayload.quick_reply_buttons || bodyPayload.quickReplyButtons
+
     const sampleUrl = cleanText(bodyPayload.sample_url || bodyPayload.sampleUrl)
     const sampleFilename = guessFilename(sampleUrl, bodyPayload.sample_filename || bodyPayload.sampleFilename)
     const sampleMimeType = normalizeMimeType(
@@ -327,6 +366,13 @@ export default async function handler(req, res) {
       return res.status(400).json({
         success: false,
         message: 'Body template wajib diisi.'
+      })
+    }
+
+    if (body.length > 1024) {
+      return res.status(400).json({
+        success: false,
+        message: 'Body template maksimal 1.024 karakter. Pendekkan body dan taruh detail panjang di attachment.'
       })
     }
 
@@ -361,7 +407,8 @@ export default async function handler(req, res) {
       headerHandle,
       body,
       bodyExamples,
-      footer
+      footer,
+      buttons
     })
 
     const metaPayload = {
@@ -417,7 +464,7 @@ export default async function handler(req, res) {
     if (!response.ok) {
       return res.status(400).json({
         success: false,
-        message: metaData.error?.message || 'Meta menolak pembuatan template.',
+        message: metaData.error?.error_user_msg || metaData.error?.message || 'Meta menolak pembuatan template.',
         meta: metaData,
         local: localResult.data
       })
