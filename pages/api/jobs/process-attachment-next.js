@@ -172,11 +172,12 @@ export default async function handler(req, res) {
     const jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
 
     let query = supabaseAdmin
-      .from('send_job_items')
-      .select('*')
-      .in('status', ['pending', 'queued'])
-      .order('created_at', { ascending: true })
-      .limit(500)
+  .from('send_job_items')
+  .select('*')
+  .in('status', ['pending', 'queued'])
+  .is('template_name', null)
+  .order('created_at', { ascending: true })
+  .limit(500)
 
     if (jobId) query = query.eq('job_id', jobId)
 

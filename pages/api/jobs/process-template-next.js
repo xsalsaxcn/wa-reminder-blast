@@ -1,7 +1,7 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
-import { sendWhatsAppText } from '../../../lib/whatsappSender'
 import { saveDeliveryLog } from '../../../lib/sendDeliveryLog'
+import { sendWhatsAppTemplate } from '../../../lib/whatsappTemplateSender'
 
 function cleanText(value) {
   return String(value || '').trim()
@@ -24,20 +24,13 @@ function cleanPhone(value) {
   return result
 }
 
-function hasAttachment(item) {
-  return Boolean(cleanText(item.attachment_url))
-}
-
 function isForce(req) {
   const value = cleanText(req.query.force || req.body?.force).toLowerCase()
-  return value === '1' || value === 'true' || value === 'yes' || value === 'now'
+  return value === '1'
 }
 
 function isDue(item, force) {
   if (force) return true
-
-  // Mode Sesuai Jadwal CSV:
-  // scheduled_at wajib ada. Kalau kosong, tidak boleh kirim.
   if (!item.scheduled_at) return false
 
   const scheduledAt = new Date(item.scheduled_at)
@@ -49,8 +42,6 @@ function isDue(item, force) {
 
 function isFuture(item, force) {
   if (force) return false
-
-  // Kalau scheduled_at kosong, anggap belum boleh dikirim.
   if (!item.scheduled_at) return true
 
   const scheduledAt = new Date(item.scheduled_at)
@@ -58,6 +49,21 @@ function isFuture(item, force) {
   if (Number.isNaN(scheduledAt.getTime())) return true
 
   return scheduledAt > new Date()
+}
+
+function normalizeParams(value) {
+  if (Array.isArray(value)) return value.map(cleanText).filter(Boolean)
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) return parsed.map(cleanText).filter(Boolean)
+    } catch (error) {
+      return value.split('|').map(cleanText).filter(Boolean)
+    }
+  }
+
+  return []
 }
 
 function isSentStatus(status) {
@@ -176,13 +182,13 @@ export default async function handler(req, res) {
     const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 50) : 10
     const jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
 
-   let query = supabaseAdmin
-  .from('send_job_items')
-  .select('*')
-  .in('status', ['pending', 'queued'])
-  .is('template_name', null)
-  .order('created_at', { ascending: true })
-  .limit(500)
+    let query = supabaseAdmin
+      .from('send_job_items')
+      .select('*')
+      .in('status', ['pending', 'queued'])
+      .not('template_name', 'is', null)
+      .order('created_at', { ascending: true })
+      .limit(500)
 
     if (jobId) query = query.eq('job_id', jobId)
 
@@ -195,24 +201,22 @@ export default async function handler(req, res) {
       })
     }
 
-    const allPendingItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
-    const textCandidates = allPendingItems.filter((item) => !hasAttachment(item))
-    const futureItems = textCandidates.filter((item) => isFuture(item, force))
-    const textItems = textCandidates.filter((item) => isDue(item, force)).slice(0, safeLimit)
+    const allItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
+    const futureItems = allItems.filter((item) => isFuture(item, force))
+    const dueItems = allItems.filter((item) => isDue(item, force)).slice(0, safeLimit)
 
-    if (!textItems.length) {
+    if (!dueItems.length) {
       return res.status(200).json({
         success: true,
         message: futureItems.length
-          ? 'Belum ada text item yang waktunya due. Semua masih menunggu scheduled_at.'
-          : 'Tidak ada text item pending untuk diproses.',
+          ? 'Belum ada template item yang waktunya due.'
+          : 'Tidak ada template item pending untuk diproses.',
         mode: force ? 'now' : 'scheduled',
-        checked: allPendingItems.length,
+        checked: allItems.length,
         future_items: futureItems.length,
         processed: 0,
         sent: 0,
-        failed: 0,
-        skipped_attachment: allPendingItems.filter(hasAttachment).length
+        failed: 0
       })
     }
 
@@ -221,42 +225,14 @@ export default async function handler(req, res) {
     const results = []
     const affectedJobIds = new Set()
 
-    for (const item of textItems) {
+    for (const item of dueItems) {
       const itemId = item.id
       const itemJobId = item.job_id
       const phone = cleanPhone(item.phone)
       const message = cleanText(item.message)
+      const params = normalizeParams(item.template_params)
 
       affectedJobIds.add(itemJobId)
-
-      if (!itemId || !phone || !message) {
-        await updateItemSafe(itemId, {
-          status: 'failed',
-          processed_at: new Date().toISOString(),
-          error_message: 'Phone atau message kosong.'
-        })
-
-        await saveDeliveryLog({
-          job_id: itemJobId,
-          item_id: itemId,
-          phone,
-          message,
-          status: 'failed',
-          mode: 'text',
-          error_message: 'Phone atau message kosong.'
-        })
-
-        failed += 1
-
-        results.push({
-          id: itemId,
-          phone,
-          success: false,
-          error: 'Phone atau message kosong.'
-        })
-
-        continue
-      }
 
       await updateItemSafe(itemId, {
         status: 'processing',
@@ -264,9 +240,14 @@ export default async function handler(req, res) {
       })
 
       try {
-        const sendResult = await sendWhatsAppText({
+        const sendResult = await sendWhatsAppTemplate({
           to: phone,
-          message
+          templateName: item.template_name,
+          language: item.template_language || 'id',
+          headerType: item.template_header_type || 'NONE',
+          attachmentUrl: item.attachment_url || '',
+          attachmentFilename: item.attachment_filename || '',
+          params
         })
 
         await updateItemSafe(itemId, {
@@ -281,7 +262,7 @@ export default async function handler(req, res) {
           phone,
           message,
           status: 'success',
-          mode: 'text',
+          mode: 'template',
           meta_response: sendResult || null
         })
 
@@ -297,7 +278,7 @@ export default async function handler(req, res) {
         await updateItemSafe(itemId, {
           status: 'failed',
           processed_at: new Date().toISOString(),
-          error_message: error.message || 'Gagal kirim WhatsApp.'
+          error_message: error.message || 'Gagal kirim template WhatsApp.'
         })
 
         await saveDeliveryLog({
@@ -306,8 +287,8 @@ export default async function handler(req, res) {
           phone,
           message,
           status: 'failed',
-          mode: 'text',
-          error_message: error.message || 'Gagal kirim WhatsApp.'
+          mode: 'template',
+          error_message: error.message || 'Gagal kirim template WhatsApp.'
         })
 
         failed += 1
@@ -316,7 +297,7 @@ export default async function handler(req, res) {
           id: itemId,
           phone,
           success: false,
-          error: error.message || 'Gagal kirim WhatsApp.'
+          error: error.message || 'Gagal kirim template WhatsApp.'
         })
       }
     }
@@ -327,20 +308,19 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Process text batch selesai.',
+      message: 'Process template batch selesai.',
       mode: force ? 'now' : 'scheduled',
-      checked: allPendingItems.length,
+      checked: allItems.length,
       future_items: futureItems.length,
-      processed: textItems.length,
+      processed: dueItems.length,
       sent,
       failed,
-      skipped_attachment: allPendingItems.filter(hasAttachment).length,
       results
     })
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: error.message || 'Process text batch gagal.'
+      message: error.message || 'Process template batch gagal.'
     })
   }
 }
