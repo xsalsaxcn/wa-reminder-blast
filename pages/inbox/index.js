@@ -50,6 +50,32 @@ export default function InboxPage() {
     }, 100)
   }
 
+  function markLocalConversationRead(phone) {
+    const targetPhone = String(phone || '')
+
+    if (!targetPhone) return
+
+    setConversations((current) =>
+      current.map((item) =>
+        item.phone === targetPhone
+          ? {
+              ...item,
+              unread_count: 0
+            }
+          : item
+      )
+    )
+
+    setSelectedConversation((current) =>
+      current?.phone === targetPhone
+        ? {
+            ...current,
+            unread_count: 0
+          }
+        : current
+    )
+  }
+
   function exportInboxContacts(mode) {
     const url = '/api/inbox/export-contacts?mode=' + mode + '&t=' + Date.now()
     window.open(url, '_blank')
@@ -102,6 +128,7 @@ export default function InboxPage() {
       }
 
       setMessages(data.messages || [])
+      markLocalConversationRead(phone)
       scrollToBottom()
     } catch (err) {
       setError(err.message || 'Gagal memuat pesan')
@@ -125,7 +152,18 @@ export default function InboxPage() {
         throw new Error(data.message || 'Gagal memuat inbox')
       }
 
-      const list = data.conversations || []
+      const rawList = data.conversations || []
+      const activePhoneForRead = selectedPhoneRef.current
+
+      const list = rawList.map((item) =>
+        item.phone === activePhoneForRead
+          ? {
+              ...item,
+              unread_count: 0
+            }
+          : item
+      )
+
       setConversations(list)
       setLastUpdated(new Date())
 
@@ -163,9 +201,16 @@ export default function InboxPage() {
   }
 
   async function selectConversation(conversation) {
-    setSelectedConversation(conversation)
+    const nextConversation = {
+      ...conversation,
+      unread_count: 0
+    }
+
+    setSelectedConversation(nextConversation)
     selectedPhoneRef.current = conversation.phone
     setMobileView('chat')
+    markLocalConversationRead(conversation.phone)
+
     await loadMessages(conversation.phone)
   }
 
@@ -316,8 +361,67 @@ export default function InboxPage() {
         rel="noreferrer"
         className="mt-2 flex items-center gap-2 rounded-xl bg-white/20 px-3 py-2 text-sm font-semibold underline"
       >
-        📎 {msg.media_filename || 'Download attachment'}
+        File: {msg.media_filename || 'Download attachment'}
       </a>
+    )
+  }
+
+  function normalizeMessageStatus(status) {
+    const text = String(status || '').toLowerCase()
+
+    if (text === 'read') return 'read'
+    if (text === 'delivered') return 'delivered'
+    if (text === 'failed') return 'failed'
+    if (text === 'error') return 'failed'
+    if (text === 'processing') return 'processing'
+    if (text === 'pending') return 'pending'
+    if (text === 'sent') return 'sent'
+    if (text === 'success') return 'sent'
+
+    return text || 'sent'
+  }
+
+  function renderOutgoingStatus(msg) {
+    if (msg.direction !== 'outgoing') return null
+
+    const status = normalizeMessageStatus(msg.status)
+
+    if (status === 'read') {
+      return (
+        <span className="ml-2 font-black text-sky-200" title="Read">
+          ✓✓
+        </span>
+      )
+    }
+
+    if (status === 'delivered') {
+      return (
+        <span className="ml-2 font-black text-green-100" title="Delivered">
+          ✓✓
+        </span>
+      )
+    }
+
+    if (status === 'failed') {
+      return (
+        <span className="ml-2 font-bold text-red-200" title="Failed">
+          gagal
+        </span>
+      )
+    }
+
+    if (status === 'pending' || status === 'processing') {
+      return (
+        <span className="ml-2 font-bold text-green-100" title={status}>
+          ...
+        </span>
+      )
+    }
+
+    return (
+      <span className="ml-2 font-black text-green-100" title="Sent">
+        ✓
+      </span>
     )
   }
 
@@ -344,11 +448,11 @@ export default function InboxPage() {
   }, [router.isReady, router.query.phone])
 
   return (
-    <div className="min-h-[100dvh] bg-slate-100 md:flex">
+    <div className="h-[100dvh] overflow-hidden bg-slate-100 md:flex">
       <Sidebar />
 
-      <main className="flex-1">
-        <div className="mx-auto flex h-[100dvh] max-w-7xl flex-col p-3 md:h-[calc(100vh-48px)] md:p-6">
+      <main className="min-w-0 flex-1 overflow-hidden">
+        <div className="mx-auto flex h-full max-w-7xl flex-col p-3 md:p-6">
           <div className="mb-3 flex shrink-0 flex-col gap-3 md:mb-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-xl font-bold text-slate-900 md:text-2xl">Inbox</h1>
@@ -357,7 +461,7 @@ export default function InboxPage() {
               </p>
               <p className="mt-1 text-[11px] text-slate-400 md:text-xs">
                 Auto-refresh 5 detik
-                {lastUpdated ? ` • ${lastUpdated.toLocaleTimeString('id-ID')}` : ''}
+                {lastUpdated ? ` - ${lastUpdated.toLocaleTimeString('id-ID')}` : ''}
               </p>
             </div>
 
@@ -403,7 +507,7 @@ export default function InboxPage() {
                     <h2 className="font-semibold text-slate-900">Conversations</h2>
                     <p className="text-xs text-slate-500">
                       Total: {conversations.length}
-                      {searchText.trim() ? ` • Hasil: ${filteredConversations.length}` : ''}
+                      {searchText.trim() ? ` - Hasil: ${filteredConversations.length}` : ''}
                     </p>
                   </div>
 
@@ -497,7 +601,7 @@ export default function InboxPage() {
                     onClick={() => setMobileView('list')}
                     className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 lg:hidden"
                   >
-                    ← Back
+                    &lt; Back
                   </button>
 
                   <div className="min-w-0">
@@ -545,13 +649,16 @@ export default function InboxPage() {
                           ) : null}
 
                           <div
-                            className={`mt-2 text-[11px] ${
+                            className={`mt-2 flex items-center justify-end text-[11px] ${
                               outgoing ? 'text-green-100' : 'text-slate-400'
                             }`}
                           >
-                            {msg.created_at
-                              ? new Date(msg.created_at).toLocaleString('id-ID')
-                              : ''}
+                            <span>
+                              {msg.created_at
+                                ? new Date(msg.created_at).toLocaleString('id-ID')
+                                : ''}
+                            </span>
+                            {renderOutgoingStatus(msg)}
                           </div>
 
                           {msg.error_message ? (
@@ -623,7 +730,7 @@ export default function InboxPage() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-800">
-                          📎 {attachmentFile.name}
+                          File: {attachmentFile.name}
                         </p>
                         <p className="text-xs text-slate-400">
                           {(attachmentFile.size / 1024 / 1024).toFixed(2)} MB
@@ -662,19 +769,19 @@ export default function InboxPage() {
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={!selectedConversation || sending}
-                    className="rounded-xl bg-slate-100 px-3 py-3 text-lg font-semibold text-slate-700 hover:bg-slate-200 disabled:bg-slate-100 disabled:text-slate-300"
+                    className="rounded-xl bg-slate-100 px-3 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:bg-slate-100 disabled:text-slate-300"
                     title="Attach file"
                   >
-                    📎
+                    Attach
                   </button>
 
                   <textarea
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     placeholder={attachmentFile ? 'Tulis caption...' : 'Tulis balasan...'}
-                    rows={2}
+                    rows={1}
                     disabled={!selectedConversation || sending}
-                    className="max-h-32 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100 md:rows-3"
+                    className="max-h-28 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100"
                   />
 
                   <button

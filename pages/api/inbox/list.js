@@ -1,6 +1,15 @@
 ﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
 
+function cleanText(value) {
+  return String(value || '').trim()
+}
+
+function toNumber(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -49,10 +58,10 @@ export default async function handler(req, res) {
       mergedMap.set(conv.phone, {
         id: conv.id || conv.phone,
         phone: conv.phone,
-        profile_name: conv.profile_name || conv.phone,
+        profile_name: cleanText(conv.profile_name) || conv.phone,
         last_message: conv.last_message || '',
         last_message_at: conv.last_message_at || conv.updated_at || conv.created_at,
-        unread_count: conv.unread_count || 0,
+        unread_count: Math.max(0, toNumber(conv.unread_count, 0)),
         status: conv.status || 'open',
         created_at: conv.created_at,
         updated_at: conv.updated_at
@@ -66,17 +75,24 @@ export default async function handler(req, res) {
       const msgTime = msg.received_at ? new Date(msg.received_at).getTime() : 0
       const existingTime = existing?.last_message_at ? new Date(existing.last_message_at).getTime() : 0
 
-      if (!existing || msgTime >= existingTime) {
+      if (!existing) {
         mergedMap.set(msg.phone, {
-          id: existing?.id || msg.phone,
+          id: msg.phone,
           phone: msg.phone,
-          profile_name: msg.profile_name || existing?.profile_name || msg.phone,
-          last_message: msg.body || existing?.last_message || '',
-          last_message_at: msg.received_at || existing?.last_message_at,
-          unread_count: existing?.unread_count ?? 1,
-          status: existing?.status || 'open',
-          created_at: existing?.created_at || msg.received_at,
-          updated_at: existing?.updated_at || msg.received_at
+          profile_name: cleanText(msg.profile_name) || msg.phone,
+          last_message: msg.body || msg.media_caption || '',
+          last_message_at: msg.received_at,
+          unread_count: 1,
+          status: 'open',
+          created_at: msg.received_at,
+          updated_at: msg.received_at
+        })
+      } else if (msgTime >= existingTime) {
+        mergedMap.set(msg.phone, {
+          ...existing,
+          profile_name: cleanText(msg.profile_name) || existing.profile_name || msg.phone,
+          last_message: msg.body || msg.media_caption || existing.last_message || '',
+          last_message_at: msg.received_at || existing.last_message_at
         })
       }
     }
