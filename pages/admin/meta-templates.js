@@ -51,7 +51,20 @@ function getButtonsFromComponents(components) {
   if (!buttonComponent || !Array.isArray(buttonComponent.buttons)) return ''
 
   return buttonComponent.buttons
-    .map((button) => cleanText(button.text))
+    .map((button) => {
+      const type = cleanText(button.type).toUpperCase()
+      const text = cleanText(button.text)
+
+      if (type === 'URL') {
+        return `${text} → ${cleanText(button.url)}`
+      }
+
+      if (type === 'PHONE_NUMBER') {
+        return `${text} → ${cleanText(button.phone_number)}`
+      }
+
+      return text
+    })
     .filter(Boolean)
     .join(' | ')
 }
@@ -85,7 +98,9 @@ export default function MetaTemplatesPage() {
     body: 'Halo {{1}}, informasi dari inHarmony Clinic.',
     body_examples: 'Kak Susi',
     footer: 'inHarmony Clinic',
-    buttons: 'Berminat | Tidak Minat'
+    buttons: 'Berminat | Tidak Minat',
+    url_buttons: '',
+    phone_buttons: ''
   })
 
   const variableCount = useMemo(() => {
@@ -421,6 +436,36 @@ export default function MetaTemplatesPage() {
                   />
                   <p className="mt-1 text-xs text-slate-500">
                     Pisahkan tombol dengan tanda pipe: |. Maksimal 3 tombol.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                    URL Buttons Optional
+                  </label>
+                  <input
+                    value={form.url_buttons}
+                    onChange={(event) => updateForm('url_buttons', event.target.value)}
+                    placeholder="Daftar Sekarang=https://link-pendaftaran.com"
+                    className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Format: Label=https://url. Pisahkan beberapa tombol dengan tanda pipe: |
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Phone Button Optional
+                  </label>
+                  <input
+                    value={form.phone_buttons}
+                    onChange={(event) => updateForm('phone_buttons', event.target.value)}
+                    placeholder="Hubungi Admin=6282288412728"
+                    className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Format: Label=nomor. Contoh: Hubungi Admin=6282288412728.
                   </p>
                 </div>
 
