@@ -62,8 +62,6 @@ function classifyReply(text) {
   ]
 
   const hotLeadWords = [
-    'berminat',
-    'minat',
     'minta penawaran',
     'buatkan penawaran',
     'proposal',
@@ -75,6 +73,8 @@ function classifyReply(text) {
   ]
 
   const interestedWords = [
+    'berminat',
+    'minat',
     'interested',
     'mau',
     'boleh',
@@ -142,6 +142,7 @@ function bucketMatches(bucket, detail) {
   if (selected === 'sent') return detail.sent
   if (selected === 'failed') return detail.failed
   if (selected === 'replies') return detail.hasReply
+  if (selected === 'no_response') return detail.sent && !detail.hasReply
   if (selected === 'interested') {
     return detail.replyBucket === 'interested' || detail.replyBucket === 'hot_lead'
   }

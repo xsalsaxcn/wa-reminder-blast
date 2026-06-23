@@ -68,11 +68,21 @@ function normalizeRow(row) {
   )
 
   const hotLead = toNumber(
-    getFirst(row, ['hot_lead', 'hotLead', 'hot_lead_count'], interested)
+    getFirst(row, ['hot_lead', 'hotLead', 'hot_lead_count'], 0)
+  )
+
+  const noResponse = toNumber(
+    getFirst(row, ['no_response', 'no_response_count', 'noResponse'], Math.max(0, sent - replies))
   )
 
   const score = toNumber(getFirst(row, ['score', 'lead_score'], 0))
   const cost = toNumber(getFirst(row, ['cost', 'estimated_cost', 'est_cost'], 0))
+  const replyRate = toNumber(
+    getFirst(row, ['reply_rate', 'replyRate'], sent > 0 ? Math.round((replies / sent) * 100) : 0)
+  )
+  const interestRate = toNumber(
+    getFirst(row, ['interest_rate', 'interestRate', 'rate'], sent > 0 ? Math.round((interested / sent) * 100) : 0)
+  )
 
   return {
     raw: row,
@@ -86,6 +96,7 @@ function normalizeRow(row) {
     sent,
     failed,
     replies,
+    noResponse,
     interested,
     followUp,
     notInterested,
@@ -93,7 +104,9 @@ function normalizeRow(row) {
     hotLead,
     score,
     cost,
-    rate: sent > 0 ? Math.round((replies / sent) * 100) : 0
+    replyRate,
+    interestRate,
+    rate: interestRate
   }
 }
 
@@ -135,12 +148,15 @@ function bucketLabel(bucket) {
     sent: 'Sent',
     failed: 'Failed',
     replies: 'Replies',
+    no_response: 'No Response',
     interested: 'Interested',
     follow_up: 'Follow-up',
     not_interested: 'Not Interested',
     opt_out: 'Opt-out',
     hot_lead: 'Hot Lead',
-    score: 'Score Detail'
+    score: 'Score Detail',
+    none: 'No Reply',
+    neutral: 'Neutral'
   }
 
   return map[bucket] || bucket
@@ -246,12 +262,13 @@ function DetailPanel({ detail, loading, error, onClose }) {
                   <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-3 py-3">Kontak</th>
                     <th className="px-3 py-3">Status</th>
-                    <th className="px-3 py-3">Reply</th>
+                    <th className="px-3 py-3">Reply / Message</th>
                     <th className="px-3 py-3">Kategori</th>
-                    <th className="px-3 py-3">Waktu Reply</th>
+                    <th className="px-3 py-3">Waktu</th>
                     <th className="px-3 py-3">Action</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {detail.rows.map((row) => (
                     <tr key={row.phone} className="border-b border-slate-100">
@@ -259,26 +276,31 @@ function DetailPanel({ detail, loading, error, onClose }) {
                         <p className="font-bold text-slate-900">{row.name || row.phone}</p>
                         <p className="text-xs text-slate-500">{row.phone}</p>
                       </td>
+
                       <td className="px-3 py-4">
                         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
                           {row.status || '-'}
                         </span>
                       </td>
+
                       <td className="max-w-md px-3 py-4 text-slate-700">
                         {row.lastReply || row.lastMessage || '-'}
                       </td>
+
                       <td className="px-3 py-4">
                         <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                          {bucketLabel(row.replyBucket || '-')}
+                          {bucketLabel(row.replyBucket || 'none')}
                         </span>
                       </td>
+
                       <td className="px-3 py-4 text-xs text-slate-500">
                         {formatDate(row.lastReplyAt || row.processedAt)}
                       </td>
+
                       <td className="px-3 py-4">
                         <Link
                           href={`/inbox?phone=${encodeURIComponent(row.phone)}`}
-                          className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                          className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold !text-white hover:bg-blue-700"
                         >
                           Open Inbox
                         </Link>
@@ -335,18 +357,23 @@ function JobCard({ item, onMetricClick }) {
           <MiniStat label="Target" value={item.target} onClick={() => onMetricClick(item, 'target')} />
           <MiniStat label="Sent" value={item.sent} className="text-emerald-700" onClick={() => onMetricClick(item, 'sent')} />
           <MiniStat label="Failed" value={item.failed} className="text-red-700" onClick={() => onMetricClick(item, 'failed')} />
-          <MiniStat label="Rate" value={String(item.rate) + '%'} className="text-blue-700" />
+          <MiniStat
+            label="Interest Rate"
+            value={String(item.interestRate || item.rate) + '%'}
+            className="text-blue-700"
+          />
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
         <MiniStat label="Replies" value={item.replies} className="text-blue-700" onClick={() => onMetricClick(item, 'replies')} />
         <MiniStat label="Interested" value={item.interested} className="text-emerald-700" onClick={() => onMetricClick(item, 'interested')} />
+        <MiniStat label="No Response" value={item.noResponse} className="text-slate-700" onClick={() => onMetricClick(item, 'no_response')} />
         <MiniStat label="Follow-up" value={item.followUp} className="text-amber-700" onClick={() => onMetricClick(item, 'follow_up')} />
         <MiniStat label="Not Int." value={item.notInterested} className="text-red-700" onClick={() => onMetricClick(item, 'not_interested')} />
         <MiniStat label="Opt-out" value={item.optOut} className="text-slate-700" onClick={() => onMetricClick(item, 'opt_out')} />
         <MiniStat label="Hot Lead" value={item.hotLead} className="text-emerald-700" onClick={() => onMetricClick(item, 'hot_lead')} />
-        <MiniStat label="Score" value={item.score} className="text-slate-900" onClick={() => onMetricClick(item, 'score')} />
+        <MiniStat label="Score" value={`${item.score}/100`} className="text-slate-900" onClick={() => onMetricClick(item, 'score')} />
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
@@ -356,6 +383,10 @@ function JobCard({ item, onMetricClick }) {
         <p className="text-sm font-black text-slate-900">
           {formatRupiah(item.cost)}
         </p>
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 text-xs text-slate-500">
+        <b>Rate:</b> Interested / Sent. <b>Score:</b> kualitas lead 0–100.
       </div>
     </div>
   )
@@ -504,6 +535,7 @@ export default function JobPerformancePage() {
         sent: summary.sent || 0,
         failed: summary.failed || 0,
         replies: summary.replies || 0,
+        noResponse: summary.no_response || summary.noResponse || 0,
         hotLead: summary.hot_lead || summary.hotLead || 0,
         cost: summary.cost || 0
       }
@@ -516,6 +548,7 @@ export default function JobPerformancePage() {
         acc.sent += item.sent
         acc.failed += item.failed
         acc.replies += item.replies
+        acc.noResponse += item.noResponse
         acc.hotLead += item.hotLead
         acc.cost += item.cost
         return acc
@@ -526,6 +559,7 @@ export default function JobPerformancePage() {
         sent: 0,
         failed: 0,
         replies: 0,
+        noResponse: 0,
         hotLead: 0,
         cost: 0
       }
@@ -547,7 +581,7 @@ export default function JobPerformancePage() {
                 Klik metric di setiap job untuk melihat daftar kontak dan buka Inbox langsung.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Replies, Interested, Follow-up, Not Interested, Opt-out, dan Hot Lead diambil dari balasan customer setelah job dibuat.
+                Interest Rate = Interested / Sent. Score = kualitas lead 0–100.
               </p>
             </div>
 
@@ -671,12 +705,13 @@ export default function JobPerformancePage() {
             </div>
           </section>
 
-          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
             <MetricCard label="Jobs" value={safeSummary.jobs} />
             <MetricCard label="Target" value={safeSummary.target} />
             <MetricCard label="Sent" value={safeSummary.sent} />
             <MetricCard label="Failed" value={safeSummary.failed} />
             <MetricCard label="Replies" value={safeSummary.replies} />
+            <MetricCard label="No Response" value={safeSummary.noResponse} />
             <MetricCard label="Hot Lead" value={safeSummary.hotLead} />
             <MetricCard label="Est. Cost" value={formatRupiah(safeSummary.cost)} />
           </section>

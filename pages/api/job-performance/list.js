@@ -67,8 +67,6 @@ function classifyReply(text) {
   ]
 
   const hotLeadWords = [
-    'berminat',
-    'minat',
     'minta penawaran',
     'buatkan penawaran',
     'proposal',
@@ -80,6 +78,8 @@ function classifyReply(text) {
   ]
 
   const interestedWords = [
+    'berminat',
+    'minat',
     'interested',
     'mau',
     'boleh',
@@ -116,7 +116,15 @@ function getReplyBody(row) {
 }
 
 function getJobCreatedAt(job) {
-  return job.created_at || job.createdAt || job.started_at || job.updated_at || null
+  const safeJob = job || {}
+
+  return (
+    safeJob.created_at ||
+    safeJob.createdAt ||
+    safeJob.started_at ||
+    safeJob.updated_at ||
+    null
+  )
 }
 
 function getItemTime(item, job) {
@@ -133,21 +141,27 @@ function getItemTime(item, job) {
 }
 
 function getJobName(job) {
+  const safeJob = job || {}
+
   return (
-    cleanText(job.name) ||
-    cleanText(job.job_name) ||
-    cleanText(job.title) ||
-    cleanText(job.database_name) ||
+    cleanText(safeJob.name) ||
+    cleanText(safeJob.job_name) ||
+    cleanText(safeJob.title) ||
+    cleanText(safeJob.database_name) ||
     'Campaign'
   )
 }
 
 function getJobType(job) {
-  return cleanText(job.type || job.job_type || job.send_mode || '-')
+  const safeJob = job || {}
+
+  return cleanText(safeJob.type || safeJob.job_type || safeJob.send_mode || '-')
 }
 
 function getJobStatus(job) {
-  return cleanText(job.status || job.job_status || '-')
+  const safeJob = job || {}
+
+  return cleanText(safeJob.status || safeJob.job_status || '-')
 }
 
 function isSentStatus(status) {
@@ -160,15 +174,20 @@ function isFailedStatus(status) {
   return ['failed', 'cancelled'].includes(text)
 }
 
-function buildScore({ interested, followUp, notInterested, optOut, hotLead }) {
-  const score =
-    hotLead * 10 +
-    interested * 5 +
-    followUp * 3 -
-    notInterested * 3 -
-    optOut * 5
+function buildScore({ sent, interestedOnly, followUp, notInterested, optOut, hotLead }) {
+  const safeSent = Math.max(toNumber(sent), 1)
+  const maxPoint = safeSent * 10
 
-  return Math.max(0, score)
+  const point =
+    toNumber(hotLead) * 10 +
+    toNumber(interestedOnly) * 5 +
+    toNumber(followUp) * 2 -
+    toNumber(notInterested) * 3 -
+    toNumber(optOut) * 5
+
+  const score = Math.round((Math.max(0, point) / maxPoint) * 100)
+
+  return Math.min(100, Math.max(0, score))
 }
 
 async function safeSelect(table, queryBuilder) {
@@ -360,6 +379,7 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
   let notInterested = 0
   let optOut = 0
   let hotLead = 0
+  let neutral = 0
 
   for (const [phone, item] of uniqueItems) {
     const itemStatus = normalizeStatus(item.status)
@@ -385,11 +405,18 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
     else if (bucket === 'follow_up') followUp += 1
     else if (bucket === 'not_interested') notInterested += 1
     else if (bucket === 'opt_out') optOut += 1
+    else neutral += 1
   }
 
   const interested = interestedOnly + hotLead
   const target = uniqueItems.length
-  const rate = sent > 0 ? Math.round((replies / sent) * 100) : 0
+  const noResponse = Math.max(0, sent - replies)
+
+  const replyRate = sent > 0 ? Math.round((replies / sent) * 100) : 0
+  const interestRate = sent > 0 ? Math.round((interested / sent) * 100) : 0
+  const noResponseRate = sent > 0 ? Math.round((noResponse / sent) * 100) : 0
+  const notInterestedRate = sent > 0 ? Math.round((notInterested / sent) * 100) : 0
+
   const cost = sent * 350
 
   return {
@@ -405,31 +432,51 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
     type: getJobType(job),
     status: getJobStatus(job),
     created_at: getJobCreatedAt(job),
+
     target,
     total_items: target,
     sent,
     failed,
+
     replies,
+    neutral,
+    no_response: noResponse,
+    no_response_count: noResponse,
+
     interested,
     interested_count: interested,
+    interested_only: interestedOnly,
+
     follow_up: followUp,
     follow_up_count: followUp,
+
     not_interested: notInterested,
     not_interested_count: notInterested,
+
     opt_out: optOut,
     opt_out_count: optOut,
+
     hot_lead: hotLead,
     hot_lead_count: hotLead,
+
+    reply_rate: replyRate,
+    interest_rate: interestRate,
+    no_response_rate: noResponseRate,
+    not_interested_rate: notInterestedRate,
+
+    rate: interestRate,
+
     score: buildScore({
-      interested,
+      sent,
+      interestedOnly,
       followUp,
       notInterested,
       optOut,
       hotLead
     }),
+
     cost,
-    estimated_cost: cost,
-    rate
+    estimated_cost: cost
   }
 }
 
@@ -480,11 +527,12 @@ export default async function handler(req, res) {
 
     const summary = items.reduce(
       (acc, item) => {
-        acc.jobs += 1
+        acc.jobs += toNumber(1)
         acc.target += toNumber(item.target)
         acc.sent += toNumber(item.sent)
         acc.failed += toNumber(item.failed)
         acc.replies += toNumber(item.replies)
+        acc.no_response += toNumber(item.no_response)
         acc.interested += toNumber(item.interested)
         acc.follow_up += toNumber(item.follow_up)
         acc.not_interested += toNumber(item.not_interested)
@@ -499,6 +547,7 @@ export default async function handler(req, res) {
         sent: 0,
         failed: 0,
         replies: 0,
+        no_response: 0,
         interested: 0,
         follow_up: 0,
         not_interested: 0,
