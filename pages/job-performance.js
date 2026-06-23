@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
 
 function cleanText(value) {
@@ -128,6 +129,23 @@ function typeClass(type) {
   return 'bg-slate-50 text-slate-700 ring-slate-200'
 }
 
+function bucketLabel(bucket) {
+  const map = {
+    target: 'Target',
+    sent: 'Sent',
+    failed: 'Failed',
+    replies: 'Replies',
+    interested: 'Interested',
+    follow_up: 'Follow-up',
+    not_interested: 'Not Interested',
+    opt_out: 'Opt-out',
+    hot_lead: 'Hot Lead',
+    score: 'Score Detail'
+  }
+
+  return map[bucket] || bucket
+}
+
 function MetricCard({ label, value, hint }) {
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -140,7 +158,28 @@ function MetricCard({ label, value, hint }) {
   )
 }
 
-function MiniStat({ label, value, className }) {
+function MiniStat({ label, value, className, onClick }) {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="rounded-2xl bg-slate-50 p-3 text-left transition hover:-translate-y-0.5 hover:bg-blue-50 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+        title={`Klik untuk lihat detail ${label}`}
+      >
+        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          {label}
+        </p>
+        <p className={'mt-1 text-lg font-black ' + (className || 'text-slate-900')}>
+          {value}
+        </p>
+        <p className="mt-1 text-[10px] font-semibold text-blue-500">
+          Klik detail
+        </p>
+      </button>
+    )
+  }
+
   return (
     <div className="rounded-2xl bg-slate-50 p-3">
       <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
@@ -153,7 +192,110 @@ function MiniStat({ label, value, className }) {
   )
 }
 
-function JobCard({ item }) {
+function DetailPanel({ detail, loading, error, onClose }) {
+  if (!detail) return null
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-3 backdrop-blur-sm md:items-center md:justify-center">
+      <div className="max-h-[88vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-600">
+              {bucketLabel(detail.bucket)}
+            </p>
+            <h2 className="mt-1 text-xl font-black text-slate-900">
+              {detail.jobName}
+            </h2>
+            <p className="mt-1 text-xs text-slate-400">
+              Job ID: {detail.jobId}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200"
+          >
+            Tutup
+          </button>
+        </div>
+
+        <div className="max-h-[70vh] overflow-auto p-5">
+          {loading ? (
+            <div className="rounded-2xl bg-slate-50 p-5 text-sm text-slate-500">
+              Loading detail...
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
+
+          {!loading && !error && !detail.rows.length ? (
+            <div className="rounded-2xl bg-slate-50 p-5 text-sm text-slate-500">
+              Tidak ada kontak untuk kategori ini.
+            </div>
+          ) : null}
+
+          {!loading && !error && detail.rows.length ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
+                    <th className="px-3 py-3">Kontak</th>
+                    <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3">Reply</th>
+                    <th className="px-3 py-3">Kategori</th>
+                    <th className="px-3 py-3">Waktu Reply</th>
+                    <th className="px-3 py-3">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.rows.map((row) => (
+                    <tr key={row.phone} className="border-b border-slate-100">
+                      <td className="px-3 py-4">
+                        <p className="font-bold text-slate-900">{row.name || row.phone}</p>
+                        <p className="text-xs text-slate-500">{row.phone}</p>
+                      </td>
+                      <td className="px-3 py-4">
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                          {row.status || '-'}
+                        </span>
+                      </td>
+                      <td className="max-w-md px-3 py-4 text-slate-700">
+                        {row.lastReply || row.lastMessage || '-'}
+                      </td>
+                      <td className="px-3 py-4">
+                        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                          {bucketLabel(row.replyBucket || '-')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-4 text-xs text-slate-500">
+                        {formatDate(row.lastReplyAt || row.processedAt)}
+                      </td>
+                      <td className="px-3 py-4">
+                        <Link
+                          href={`/inbox?phone=${encodeURIComponent(row.phone)}`}
+                          className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                        >
+                          Open Inbox
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function JobCard({ item, onMetricClick }) {
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -190,21 +332,21 @@ function JobCard({ item }) {
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[520px]">
-          <MiniStat label="Target" value={item.target} />
-          <MiniStat label="Sent" value={item.sent} className="text-emerald-700" />
-          <MiniStat label="Failed" value={item.failed} className="text-red-700" />
+          <MiniStat label="Target" value={item.target} onClick={() => onMetricClick(item, 'target')} />
+          <MiniStat label="Sent" value={item.sent} className="text-emerald-700" onClick={() => onMetricClick(item, 'sent')} />
+          <MiniStat label="Failed" value={item.failed} className="text-red-700" onClick={() => onMetricClick(item, 'failed')} />
           <MiniStat label="Rate" value={String(item.rate) + '%'} className="text-blue-700" />
         </div>
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
-        <MiniStat label="Replies" value={item.replies} className="text-blue-700" />
-        <MiniStat label="Interested" value={item.interested} className="text-emerald-700" />
-        <MiniStat label="Follow-up" value={item.followUp} className="text-amber-700" />
-        <MiniStat label="Not Int." value={item.notInterested} className="text-red-700" />
-        <MiniStat label="Opt-out" value={item.optOut} className="text-slate-700" />
-        <MiniStat label="Hot Lead" value={item.hotLead} className="text-emerald-700" />
-        <MiniStat label="Score" value={item.score} className="text-slate-900" />
+        <MiniStat label="Replies" value={item.replies} className="text-blue-700" onClick={() => onMetricClick(item, 'replies')} />
+        <MiniStat label="Interested" value={item.interested} className="text-emerald-700" onClick={() => onMetricClick(item, 'interested')} />
+        <MiniStat label="Follow-up" value={item.followUp} className="text-amber-700" onClick={() => onMetricClick(item, 'follow_up')} />
+        <MiniStat label="Not Int." value={item.notInterested} className="text-red-700" onClick={() => onMetricClick(item, 'not_interested')} />
+        <MiniStat label="Opt-out" value={item.optOut} className="text-slate-700" onClick={() => onMetricClick(item, 'opt_out')} />
+        <MiniStat label="Hot Lead" value={item.hotLead} className="text-emerald-700" onClick={() => onMetricClick(item, 'hot_lead')} />
+        <MiniStat label="Score" value={item.score} className="text-slate-900" onClick={() => onMetricClick(item, 'score')} />
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
@@ -224,6 +366,9 @@ export default function JobPerformancePage() {
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
 
   const [filters, setFilters] = useState({
     start: '',
@@ -287,6 +432,58 @@ export default function JobPerformancePage() {
     }
   }
 
+  async function openMetricDetail(item, bucket) {
+    if (!item.id) {
+      setDetail({
+        jobId: '',
+        jobName: item.jobName,
+        bucket,
+        rows: []
+      })
+      setDetailError('Job ID tidak tersedia untuk item ini.')
+      return
+    }
+
+    setDetail({
+      jobId: item.id,
+      jobName: item.jobName,
+      bucket,
+      rows: []
+    })
+    setDetailLoading(true)
+    setDetailError('')
+
+    try {
+      const params = new URLSearchParams()
+      params.set('job_id', item.id)
+      params.set('bucket', bucket)
+      params.set('t', String(Date.now()))
+
+      const response = await fetch('/api/job-performance/detail?' + params.toString(), {
+        cache: 'no-store'
+      })
+
+      const data = await response.json().catch(function () {
+        return {}
+      })
+
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || 'Gagal memuat detail.')
+      }
+
+      setDetail({
+        jobId: item.id,
+        jobName: item.jobName,
+        bucket,
+        rows: data.rows || []
+      })
+    } catch (err) {
+      setDetailError(err.message || 'Gagal memuat detail.')
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
   function exportCsv() {
     window.open('/api/job-performance/export?' + buildQuery(), '_blank')
   }
@@ -347,10 +544,10 @@ export default function JobPerformancePage() {
                 Job Performance
               </h1>
               <p className="mt-1 text-sm text-slate-500">
-                Lihat performa setiap blast/reminder job berdasarkan status kirim dan reply customer.
+                Klik metric di setiap job untuk melihat daftar kontak dan buka Inbox langsung.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Tampilan ini hanya mengubah UI, data tetap dari API Job Performance yang sudah berjalan.
+                Replies, Interested, Follow-up, Not Interested, Opt-out, dan Hot Lead diambil dari balasan customer setelah job dibuat.
               </p>
             </div>
 
@@ -506,13 +703,27 @@ export default function JobPerformancePage() {
             <section className="space-y-4">
               {items.map(function (item, index) {
                 return (
-                  <JobCard key={item.id || index} item={item} />
+                  <JobCard
+                    key={item.id || index}
+                    item={item}
+                    onMetricClick={openMetricDetail}
+                  />
                 )
               })}
             </section>
           ) : null}
         </div>
       </main>
+
+      <DetailPanel
+        detail={detail}
+        loading={detailLoading}
+        error={detailError}
+        onClose={() => {
+          setDetail(null)
+          setDetailError('')
+        }}
+      />
     </div>
   )
 }
