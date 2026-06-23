@@ -26,6 +26,7 @@ export default function InboxPage() {
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
   const messagesEndRef = useRef(null)
+  const messagesScrollRef = useRef(null)
   const fileInputRef = useRef(null)
 
   const filteredConversations = useMemo(() => {
@@ -66,9 +67,23 @@ export default function InboxPage() {
     })
   }, [messages, messageSearchText])
 
-  function scrollToBottom() {
+  function isNearBottom() {
+    const el = messagesScrollRef.current
+
+    if (!el) return true
+
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+
+    return distanceFromBottom < 120
+  }
+
+  function scrollToBottom(force = false) {
+    if (!force && !isNearBottom()) return
+
     setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      messagesEndRef.current?.scrollIntoView({
+        behavior: force ? 'auto' : 'smooth'
+      })
     }, 100)
   }
 
@@ -131,13 +146,15 @@ export default function InboxPage() {
     }
   }
 
-  async function loadMessages(phone, silent = false) {
+  async function loadMessages(phone, silent = false, forceScroll = false) {
     if (!phone) return
 
     if (!silent) setLoadingMessages(true)
     setError('')
 
     try {
+      const shouldKeepBottom = isNearBottom()
+
       const response = await fetch(
         '/api/inbox/messages?phone=' + encodeURIComponent(phone) + '&t=' + Date.now(),
         { cache: 'no-store' }
@@ -151,7 +168,10 @@ export default function InboxPage() {
 
       setMessages(data.messages || [])
       markLocalConversationRead(phone)
-      scrollToBottom()
+
+      if (forceScroll || shouldKeepBottom) {
+        scrollToBottom(forceScroll)
+      }
     } catch (err) {
       setError(err.message || 'Gagal memuat pesan')
     } finally {
@@ -214,7 +234,7 @@ export default function InboxPage() {
 
       if (queryPhone) setMobileView('chat')
 
-      await loadMessages(nextSelected.phone, true)
+      await loadMessages(nextSelected.phone, true, !silent)
     } catch (err) {
       setError(err.message || 'Gagal memuat inbox')
     } finally {
@@ -235,7 +255,7 @@ export default function InboxPage() {
     setMessageSearchOpen(false)
     markLocalConversationRead(conversation.phone)
 
-    await loadMessages(conversation.phone)
+    await loadMessages(conversation.phone, false, true)
   }
 
   function clearAttachment() {
@@ -343,7 +363,7 @@ export default function InboxPage() {
       }
 
       setReplyText('')
-      await loadMessages(selectedConversation.phone, true)
+      await loadMessages(selectedConversation.phone, true, true)
       await loadConversations(true)
     } catch (err) {
       setError(err.message || 'Gagal mengirim balasan')
@@ -681,7 +701,10 @@ export default function InboxPage() {
                 ) : null}
               </div>
 
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-3 md:p-4">
+              <div
+                ref={messagesScrollRef}
+                className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-3 md:p-4"
+              >
                 {!selectedConversation ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-500">
                     Pilih conversation.
