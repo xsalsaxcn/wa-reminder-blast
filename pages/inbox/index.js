@@ -492,11 +492,11 @@ export default function InboxPage() {
   }, [router.isReady, router.query.phone])
 
   return (
-    <div className="h-[100dvh] overflow-hidden bg-slate-100 md:flex">
+    <div className="min-h-[100dvh] bg-slate-100 md:flex md:h-[100dvh] md:overflow-hidden">
       <Sidebar />
 
-      <main className="min-w-0 flex-1 overflow-hidden">
-        <div className="mx-auto flex h-full max-w-7xl flex-col p-3 md:p-6">
+      <main className="min-w-0 flex-1 md:overflow-hidden">
+        <div className="mx-auto flex min-h-[100dvh] max-w-7xl flex-col p-3 md:h-full md:min-h-0 md:p-6">
           <div className="mb-3 flex shrink-0 flex-col gap-3 md:mb-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-xl font-bold text-slate-900 md:text-2xl">Inbox</h1>
@@ -703,7 +703,11 @@ export default function InboxPage() {
 
               <div
                 ref={messagesScrollRef}
-                className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-3 md:p-4"
+                style={{
+                  WebkitOverflowScrolling: 'touch',
+                  touchAction: 'pan-y'
+                }}
+                className="min-h-[45dvh] flex-1 space-y-3 overflow-y-auto overscroll-contain bg-slate-50 p-3 md:min-h-0 md:p-4"
               >
                 {!selectedConversation ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-500">

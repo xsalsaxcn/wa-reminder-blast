@@ -15,9 +15,38 @@ function cleanPhone(value) {
   return phone
 }
 
+function toNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
 function getTime(value) {
   const time = value ? new Date(value).getTime() : 0
   return Number.isFinite(time) ? time : 0
+}
+
+function secondsToLabel(seconds) {
+  const value = toNumber(seconds)
+
+  if (!value) return '-'
+
+  if (value < 60) return `${value} detik`
+
+  const minutes = Math.floor(value / 60)
+  const remainSeconds = value % 60
+
+  if (minutes < 60) {
+    return remainSeconds
+      ? `${minutes} menit ${remainSeconds} detik`
+      : `${minutes} menit`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  const remainMinutes = minutes % 60
+
+  return remainMinutes
+    ? `${hours} jam ${remainMinutes} menit`
+    : `${hours} jam`
 }
 
 function normalizeStatus(status) {
@@ -143,6 +172,7 @@ function bucketMatches(bucket, detail) {
   if (selected === 'failed') return detail.failed
   if (selected === 'replies') return detail.hasReply
   if (selected === 'no_response') return detail.sent && !detail.hasReply
+  if (selected === 'need_response') return detail.hasReply && !detail.hasAgentReply
   if (selected === 'interested') {
     return detail.replyBucket === 'interested' || detail.replyBucket === 'hot_lead'
   }
@@ -212,6 +242,26 @@ async function getIncomingByPhones(phones, since) {
   })
 }
 
+async function getOutgoingByPhones(phones, since) {
+  const safePhones = Array.from(new Set(phones.map(cleanPhone).filter(Boolean)))
+
+  if (!safePhones.length) return []
+
+  return safeSelect('wa_outgoing_messages', (query) => {
+    let builder = query
+      .select('*')
+      .in('phone', safePhones)
+      .order('sent_at', { ascending: true })
+      .limit(50000)
+
+    if (since) {
+      builder = builder.gte('sent_at', since)
+    }
+
+    return builder
+  })
+}
+
 async function getContactsByPhones(phones) {
   const safePhones = Array.from(new Set(phones.map(cleanPhone).filter(Boolean)))
 
@@ -240,6 +290,21 @@ function groupIncomingByPhone(messages) {
   return map
 }
 
+function groupOutgoingByPhone(messages) {
+  const map = new Map()
+
+  for (const message of messages || []) {
+    const phone = cleanPhone(message.phone)
+    if (!phone) continue
+
+    const list = map.get(phone) || []
+    list.push(message)
+    map.set(phone, list)
+  }
+
+  return map
+}
+
 function getFirstReplyForContact({ phone, item, job, incomingByPhone }) {
   const messages = incomingByPhone.get(phone) || []
   const startTime = getTime(getItemTime(item, job))
@@ -248,6 +313,23 @@ function getFirstReplyForContact({ phone, item, job, incomingByPhone }) {
     const messageTime = getTime(message.received_at)
 
     if (messageTime >= startTime) {
+      return message
+    }
+  }
+
+  return null
+}
+
+function getFirstAgentReplyAfterCustomer({ phone, firstReplyAt, outgoingByPhone }) {
+  const outgoing = outgoingByPhone.get(phone) || []
+  const startTime = getTime(firstReplyAt)
+
+  if (!startTime) return null
+
+  for (const message of outgoing) {
+    const messageTime = getTime(message.sent_at || message.created_at)
+
+    if (messageTime > startTime) {
       return message
     }
   }
@@ -319,7 +401,11 @@ export default async function handler(req, res) {
     const earliestTime = job.created_at || job.updated_at || null
 
     const incomingMessages = await getIncomingByPhones(phones, earliestTime)
+    const outgoingMessages = await getOutgoingByPhones(phones, earliestTime)
+
     const incomingByPhone = groupIncomingByPhone(incomingMessages)
+    const outgoingByPhone = groupOutgoingByPhone(outgoingMessages)
+
     const contacts = await getContactsByPhones(phones)
 
     const contactMap = new Map()
@@ -340,6 +426,23 @@ export default async function handler(req, res) {
         incomingByPhone
       })
 
+      const firstAgentReply = firstReply
+        ? getFirstAgentReplyAfterCustomer({
+            phone,
+            firstReplyAt: firstReply.received_at,
+            outgoingByPhone
+          })
+        : null
+
+      const responseSeconds = firstReply && firstAgentReply
+        ? Math.max(
+            0,
+            Math.round(
+              (getTime(firstAgentReply.sent_at || firstAgentReply.created_at) - getTime(firstReply.received_at)) / 1000
+            )
+          )
+        : 0
+
       const replyText = getReplyBody(firstReply)
       const replyBucket = classifyReply(replyText)
       const status = normalizeStatus(item.status)
@@ -352,10 +455,15 @@ export default async function handler(req, res) {
         sent: isSentStatus(status),
         failed: isFailedStatus(status),
         hasReply: Boolean(firstReply),
+        hasAgentReply: Boolean(firstAgentReply),
         replyCount: firstReply ? 1 : 0,
         replyBucket,
         lastReply: replyText,
         lastReplyAt: firstReply?.received_at || null,
+        agentReply: cleanText(firstAgentReply?.message || firstAgentReply?.media_caption || ''),
+        agentReplyAt: firstAgentReply?.sent_at || firstAgentReply?.created_at || null,
+        responseSeconds,
+        responseTime: secondsToLabel(responseSeconds),
         lastMessage: item.message || '',
         processedAt: getItemTime(item, job),
         metaMessageId: item.meta_message_id || null,

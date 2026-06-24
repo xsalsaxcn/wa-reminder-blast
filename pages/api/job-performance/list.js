@@ -25,6 +25,30 @@ function getTime(value) {
   return Number.isFinite(time) ? time : 0
 }
 
+function secondsToLabel(seconds) {
+  const value = toNumber(seconds)
+
+  if (!value) return '-'
+
+  if (value < 60) return `${value} detik`
+
+  const minutes = Math.floor(value / 60)
+  const remainSeconds = value % 60
+
+  if (minutes < 60) {
+    return remainSeconds
+      ? `${minutes} menit ${remainSeconds} detik`
+      : `${minutes} menit`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  const remainMinutes = minutes % 60
+
+  return remainMinutes
+    ? `${hours} jam ${remainMinutes} menit`
+    : `${hours} jam`
+}
+
 function normalizeStatus(status) {
   const text = cleanText(status).toLowerCase()
 
@@ -287,6 +311,26 @@ async function getIncomingMessages(phones, since) {
   })
 }
 
+async function getOutgoingMessages(phones, since) {
+  const safePhones = Array.from(new Set(phones.map(cleanPhone).filter(Boolean)))
+
+  if (!safePhones.length) return []
+
+  return safeSelect('wa_outgoing_messages', (query) => {
+    let builder = query
+      .select('*')
+      .in('phone', safePhones)
+      .order('sent_at', { ascending: true })
+      .limit(50000)
+
+    if (since) {
+      builder = builder.gte('sent_at', since)
+    }
+
+    return builder
+  })
+}
+
 async function getDatabaseNames(databaseIds) {
   const ids = Array.from(new Set(databaseIds.map(cleanText).filter(Boolean)))
 
@@ -338,6 +382,21 @@ function groupIncomingByPhone(messages) {
   return map
 }
 
+function groupOutgoingByPhone(messages) {
+  const map = new Map()
+
+  for (const message of messages || []) {
+    const phone = cleanPhone(message.phone)
+    if (!phone) continue
+
+    const list = map.get(phone) || []
+    list.push(message)
+    map.set(phone, list)
+  }
+
+  return map
+}
+
 function getFirstReplyForContact({ phone, item, job, incomingByPhone }) {
   const messages = incomingByPhone.get(phone) || []
   const startTime = getTime(getItemTime(item, job))
@@ -353,7 +412,24 @@ function getFirstReplyForContact({ phone, item, job, incomingByPhone }) {
   return null
 }
 
-function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
+function getFirstAgentReplyAfterCustomer({ phone, firstReplyAt, outgoingByPhone }) {
+  const outgoing = outgoingByPhone.get(phone) || []
+  const startTime = getTime(firstReplyAt)
+
+  if (!startTime) return null
+
+  for (const message of outgoing) {
+    const messageTime = getTime(message.sent_at || message.created_at)
+
+    if (messageTime > startTime) {
+      return message
+    }
+  }
+
+  return null
+}
+
+function summarizeJob({ job, items, incomingByPhone, outgoingByPhone, databaseMap }) {
   const phoneMap = new Map()
 
   for (const item of items || []) {
@@ -380,6 +456,8 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
   let optOut = 0
   let hotLead = 0
   let neutral = 0
+  let needResponse = 0
+  const responseSecondsList = []
 
   for (const [phone, item] of uniqueItems) {
     const itemStatus = normalizeStatus(item.status)
@@ -397,6 +475,25 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
     if (!firstReply) continue
 
     replies += 1
+
+    const firstAgentReply = getFirstAgentReplyAfterCustomer({
+      phone,
+      firstReplyAt: firstReply.received_at,
+      outgoingByPhone
+    })
+
+    if (firstAgentReply) {
+      const responseSeconds = Math.max(
+        0,
+        Math.round(
+          (getTime(firstAgentReply.sent_at || firstAgentReply.created_at) - getTime(firstReply.received_at)) / 1000
+        )
+      )
+
+      responseSecondsList.push(responseSeconds)
+    } else {
+      needResponse += 1
+    }
 
     const bucket = classifyReply(getReplyBody(firstReply))
 
@@ -416,6 +513,18 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
   const interestRate = sent > 0 ? Math.round((interested / sent) * 100) : 0
   const noResponseRate = sent > 0 ? Math.round((noResponse / sent) * 100) : 0
   const notInterestedRate = sent > 0 ? Math.round((notInterested / sent) * 100) : 0
+
+  const avgResponseSeconds = responseSecondsList.length
+    ? Math.round(responseSecondsList.reduce((sum, value) => sum + value, 0) / responseSecondsList.length)
+    : 0
+
+  const fastestResponseSeconds = responseSecondsList.length
+    ? Math.min(...responseSecondsList)
+    : 0
+
+  const slowestResponseSeconds = responseSecondsList.length
+    ? Math.max(...responseSecondsList)
+    : 0
 
   const cost = sent * 350
 
@@ -458,6 +567,16 @@ function summarizeJob({ job, items, incomingByPhone, databaseMap }) {
 
     hot_lead: hotLead,
     hot_lead_count: hotLead,
+
+    need_response: needResponse,
+    need_response_count: needResponse,
+
+    avg_response_seconds: avgResponseSeconds,
+    avg_response_time: secondsToLabel(avgResponseSeconds),
+    fastest_response_seconds: fastestResponseSeconds,
+    fastest_response_time: secondsToLabel(fastestResponseSeconds),
+    slowest_response_seconds: slowestResponseSeconds,
+    slowest_response_time: secondsToLabel(slowestResponseSeconds),
 
     reply_rate: replyRate,
     interest_rate: interestRate,
@@ -507,12 +626,13 @@ export default async function handler(req, res) {
       .filter(Boolean)
       .sort((a, b) => a - b)[0]
 
-    const incomingMessages = await getIncomingMessages(
-      phones,
-      earliestJobTime ? new Date(earliestJobTime).toISOString() : null
-    )
+    const sinceTime = earliestJobTime ? new Date(earliestJobTime).toISOString() : null
+
+    const incomingMessages = await getIncomingMessages(phones, sinceTime)
+    const outgoingMessages = await getOutgoingMessages(phones, sinceTime)
 
     const incomingByPhone = groupIncomingByPhone(incomingMessages)
+    const outgoingByPhone = groupOutgoingByPhone(outgoingMessages)
 
     const databaseMap = await getDatabaseNames(jobs.map((job) => job.database_id))
 
@@ -521,13 +641,14 @@ export default async function handler(req, res) {
         job,
         items: itemsByJob.get(job.id) || [],
         incomingByPhone,
+        outgoingByPhone,
         databaseMap
       })
     )
 
     const summary = items.reduce(
       (acc, item) => {
-        acc.jobs += toNumber(1)
+        acc.jobs += 1
         acc.target += toNumber(item.target)
         acc.sent += toNumber(item.sent)
         acc.failed += toNumber(item.failed)
@@ -538,7 +659,14 @@ export default async function handler(req, res) {
         acc.not_interested += toNumber(item.not_interested)
         acc.opt_out += toNumber(item.opt_out)
         acc.hot_lead += toNumber(item.hot_lead)
+        acc.need_response += toNumber(item.need_response)
         acc.cost += toNumber(item.cost)
+
+        if (item.avg_response_seconds) {
+          acc.response_seconds_sum += toNumber(item.avg_response_seconds)
+          acc.response_jobs += 1
+        }
+
         return acc
       },
       {
@@ -553,9 +681,18 @@ export default async function handler(req, res) {
         not_interested: 0,
         opt_out: 0,
         hot_lead: 0,
-        cost: 0
+        need_response: 0,
+        cost: 0,
+        response_seconds_sum: 0,
+        response_jobs: 0
       }
     )
+
+    summary.avg_response_seconds = summary.response_jobs
+      ? Math.round(summary.response_seconds_sum / summary.response_jobs)
+      : 0
+
+    summary.avg_response_time = secondsToLabel(summary.avg_response_seconds)
 
     return res.status(200).json({
       success: true,

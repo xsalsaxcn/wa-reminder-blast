@@ -75,6 +75,23 @@ function normalizeRow(row) {
     getFirst(row, ['no_response', 'no_response_count', 'noResponse'], Math.max(0, sent - replies))
   )
 
+  const needResponse = toNumber(
+    getFirst(row, ['need_response', 'need_response_count', 'needResponse'], 0)
+  )
+
+  const avgResponseSeconds = toNumber(
+    getFirst(row, ['avg_response_seconds', 'avgResponseSeconds'], 0)
+  )
+
+  const avgResponseTime = getFirst(
+    row,
+    ['avg_response_time', 'avgResponseTime'],
+    avgResponseSeconds ? `${avgResponseSeconds} detik` : '-'
+  )
+
+  const fastestResponseTime = getFirst(row, ['fastest_response_time', 'fastestResponseTime'], '-')
+  const slowestResponseTime = getFirst(row, ['slowest_response_time', 'slowestResponseTime'], '-')
+
   const score = toNumber(getFirst(row, ['score', 'lead_score'], 0))
   const cost = toNumber(getFirst(row, ['cost', 'estimated_cost', 'est_cost'], 0))
   const replyRate = toNumber(
@@ -97,6 +114,7 @@ function normalizeRow(row) {
     failed,
     replies,
     noResponse,
+    needResponse,
     interested,
     followUp,
     notInterested,
@@ -106,7 +124,11 @@ function normalizeRow(row) {
     cost,
     replyRate,
     interestRate,
-    rate: interestRate
+    rate: interestRate,
+    avgResponseSeconds,
+    avgResponseTime,
+    fastestResponseTime,
+    slowestResponseTime
   }
 }
 
@@ -149,6 +171,7 @@ function bucketLabel(bucket) {
     failed: 'Failed',
     replies: 'Replies',
     no_response: 'No Response',
+    need_response: 'Need Response',
     interested: 'Interested',
     follow_up: 'Follow-up',
     not_interested: 'Not Interested',
@@ -213,7 +236,7 @@ function DetailPanel({ detail, loading, error, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-3 backdrop-blur-sm md:items-center md:justify-center">
-      <div className="max-h-[88vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div className="max-h-[88vh] w-full max-w-6xl overflow-hidden rounded-3xl bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-blue-600">
@@ -264,6 +287,7 @@ function DetailPanel({ detail, loading, error, onClose }) {
                     <th className="px-3 py-3">Status</th>
                     <th className="px-3 py-3">Reply / Message</th>
                     <th className="px-3 py-3">Kategori</th>
+                    <th className="px-3 py-3">Response Time</th>
                     <th className="px-3 py-3">Waktu</th>
                     <th className="px-3 py-3">Action</th>
                   </tr>
@@ -291,6 +315,18 @@ function DetailPanel({ detail, loading, error, onClose }) {
                         <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
                           {bucketLabel(row.replyBucket || 'none')}
                         </span>
+                      </td>
+
+                      <td className="px-3 py-4">
+                        {row.hasReply && !row.hasAgentReply ? (
+                          <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">
+                            Need Response
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-slate-700">
+                            {row.responseTime || '-'}
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-3 py-4 text-xs text-slate-500">
@@ -353,7 +389,7 @@ function JobCard({ item, onMetricClick }) {
           ) : null}
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[520px]">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 xl:w-[650px]">
           <MiniStat label="Target" value={item.target} onClick={() => onMetricClick(item, 'target')} />
           <MiniStat label="Sent" value={item.sent} className="text-emerald-700" onClick={() => onMetricClick(item, 'sent')} />
           <MiniStat label="Failed" value={item.failed} className="text-red-700" onClick={() => onMetricClick(item, 'failed')} />
@@ -362,13 +398,19 @@ function JobCard({ item, onMetricClick }) {
             value={String(item.interestRate || item.rate) + '%'}
             className="text-blue-700"
           />
+          <MiniStat
+            label="Avg Response"
+            value={item.avgResponseTime || '-'}
+            className="text-orange-700"
+          />
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-9">
         <MiniStat label="Replies" value={item.replies} className="text-blue-700" onClick={() => onMetricClick(item, 'replies')} />
         <MiniStat label="Interested" value={item.interested} className="text-emerald-700" onClick={() => onMetricClick(item, 'interested')} />
         <MiniStat label="No Response" value={item.noResponse} className="text-slate-700" onClick={() => onMetricClick(item, 'no_response')} />
+        <MiniStat label="Need Response" value={item.needResponse} className="text-orange-700" onClick={() => onMetricClick(item, 'need_response')} />
         <MiniStat label="Follow-up" value={item.followUp} className="text-amber-700" onClick={() => onMetricClick(item, 'follow_up')} />
         <MiniStat label="Not Int." value={item.notInterested} className="text-red-700" onClick={() => onMetricClick(item, 'not_interested')} />
         <MiniStat label="Opt-out" value={item.optOut} className="text-slate-700" onClick={() => onMetricClick(item, 'opt_out')} />
@@ -386,7 +428,7 @@ function JobCard({ item, onMetricClick }) {
       </div>
 
       <div className="mt-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 text-xs text-slate-500">
-        <b>Rate:</b> Interested / Sent. <b>Score:</b> kualitas lead 0–100.
+        <b>Rate:</b> Interested / Sent. <b>Avg Response:</b> waktu rata-rata CS membalas setelah customer reply. <b>Score:</b> kualitas lead 0–100.
       </div>
     </div>
   )
@@ -536,7 +578,9 @@ export default function JobPerformancePage() {
         failed: summary.failed || 0,
         replies: summary.replies || 0,
         noResponse: summary.no_response || summary.noResponse || 0,
+        needResponse: summary.need_response || summary.needResponse || 0,
         hotLead: summary.hot_lead || summary.hotLead || 0,
+        avgResponseTime: summary.avg_response_time || summary.avgResponseTime || '-',
         cost: summary.cost || 0
       }
     }
@@ -549,6 +593,7 @@ export default function JobPerformancePage() {
         acc.failed += item.failed
         acc.replies += item.replies
         acc.noResponse += item.noResponse
+        acc.needResponse += item.needResponse
         acc.hotLead += item.hotLead
         acc.cost += item.cost
         return acc
@@ -560,7 +605,9 @@ export default function JobPerformancePage() {
         failed: 0,
         replies: 0,
         noResponse: 0,
+        needResponse: 0,
         hotLead: 0,
+        avgResponseTime: '-',
         cost: 0
       }
     )
@@ -581,7 +628,7 @@ export default function JobPerformancePage() {
                 Klik metric di setiap job untuk melihat daftar kontak dan buka Inbox langsung.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Interest Rate = Interested / Sent. Score = kualitas lead 0–100.
+                Avg Response = waktu rata-rata CS membalas setelah customer reply.
               </p>
             </div>
 
@@ -705,14 +752,15 @@ export default function JobPerformancePage() {
             </div>
           </section>
 
-          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-9">
             <MetricCard label="Jobs" value={safeSummary.jobs} />
             <MetricCard label="Target" value={safeSummary.target} />
             <MetricCard label="Sent" value={safeSummary.sent} />
             <MetricCard label="Failed" value={safeSummary.failed} />
             <MetricCard label="Replies" value={safeSummary.replies} />
             <MetricCard label="No Response" value={safeSummary.noResponse} />
-            <MetricCard label="Hot Lead" value={safeSummary.hotLead} />
+            <MetricCard label="Need Response" value={safeSummary.needResponse} />
+            <MetricCard label="Avg Response" value={safeSummary.avgResponseTime} />
             <MetricCard label="Est. Cost" value={formatRupiah(safeSummary.cost)} />
           </section>
 
