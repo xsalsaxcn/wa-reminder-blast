@@ -62,12 +62,15 @@ export default function InboxNotifier() {
   const [conversations, setConversations] = useState([])
   const [totalUnread, setTotalUnread] = useState(0)
   const [latestUnread, setLatestUnread] = useState(null)
+  const [soundEnabled, setSoundEnabled] = useState(false)
 
   const initializedRef = useRef(false)
   const knownRef = useRef(new Map())
   const toastTimerRef = useRef(null)
   const originalTitleRef = useRef('')
   const pollingRef = useRef(null)
+  const audioContextRef = useRef(null)
+  const soundEnabledRef = useRef(false)
 
   const unreadConversations = useMemo(() => {
     return (conversations || [])
@@ -100,6 +103,96 @@ export default function InboxNotifier() {
       document.title = `(${nextTotalUnread}) Pesan baru - Notiva`
     } else {
       document.title = originalTitleRef.current || 'Notiva'
+    }
+  }
+
+  function getAudioContext() {
+    if (typeof window === 'undefined') return null
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext
+
+    if (!AudioContextClass) return null
+
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContextClass()
+    }
+
+    return audioContextRef.current
+  }
+
+  function playNotificationSound(force = false) {
+    if (!force && !soundEnabledRef.current) return
+
+    try {
+      const audioContext = getAudioContext()
+
+      if (!audioContext) return
+
+      const playTone = () => {
+        const now = audioContext.currentTime
+
+        const tones = [
+          {
+            frequency: 880,
+            start: 0,
+            duration: 0.12
+          },
+          {
+            frequency: 1175,
+            start: 0.16,
+            duration: 0.16
+          }
+        ]
+
+        tones.forEach((tone) => {
+          const oscillator = audioContext.createOscillator()
+          const gain = audioContext.createGain()
+
+          oscillator.type = 'sine'
+          oscillator.frequency.setValueAtTime(tone.frequency, now + tone.start)
+
+          gain.gain.setValueAtTime(0.0001, now + tone.start)
+          gain.gain.exponentialRampToValueAtTime(0.2, now + tone.start + 0.02)
+          gain.gain.exponentialRampToValueAtTime(
+            0.0001,
+            now + tone.start + tone.duration
+          )
+
+          oscillator.connect(gain)
+          gain.connect(audioContext.destination)
+
+          oscillator.start(now + tone.start)
+          oscillator.stop(now + tone.start + tone.duration + 0.03)
+        })
+      }
+
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().then(playTone).catch(() => {})
+      } else {
+        playTone()
+      }
+    } catch (err) {
+      console.error('Notification sound failed:', err)
+    }
+  }
+
+  async function enableSound() {
+    soundEnabledRef.current = true
+    setSoundEnabled(true)
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('notiva_inbox_sound_enabled', '1')
+    }
+
+    playNotificationSound(true)
+  }
+
+  function disableSound() {
+    soundEnabledRef.current = false
+    setSoundEnabled(false)
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('notiva_inbox_sound_enabled')
     }
   }
 
@@ -242,6 +335,7 @@ export default function InboxNotifier() {
     }
 
     showToast(payload)
+    playNotificationSound()
 
     if (!isInboxPage(router.pathname)) {
       showBrowserNotification(payload)
@@ -273,6 +367,10 @@ export default function InboxNotifier() {
 
     originalTitleRef.current = document.title || 'Notiva'
 
+    const savedSound = window.localStorage.getItem('notiva_inbox_sound_enabled') === '1'
+    soundEnabledRef.current = savedSound
+    setSoundEnabled(savedSound)
+
     if ('Notification' in window) {
       setPermission(Notification.permission)
     }
@@ -280,7 +378,10 @@ export default function InboxNotifier() {
     checkInbox()
 
     pollingRef.current = setInterval(() => {
-      if (document.visibilityState === 'visible' || Notification.permission === 'granted') {
+      const browserNotificationGranted =
+        'Notification' in window && Notification.permission === 'granted'
+
+      if (document.visibilityState === 'visible' || browserNotificationGranted) {
         checkInbox()
       }
     }, POLL_INTERVAL_MS)
@@ -385,13 +486,25 @@ export default function InboxNotifier() {
                 )}
               </div>
 
-              <div className="flex items-center justify-between gap-2 border-t border-slate-100 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 p-3">
                 <button
                   type="button"
                   onClick={() => openInbox(latestUnread?.phone)}
                   className="rounded-xl bg-green-600 px-4 py-2 text-xs font-black text-white hover:bg-green-700"
                 >
                   Open Inbox
+                </button>
+
+                <button
+                  type="button"
+                  onClick={soundEnabled ? disableSound : enableSound}
+                  className={`rounded-xl px-4 py-2 text-xs font-black ${
+                    soundEnabled
+                      ? 'bg-orange-50 text-orange-700 hover:bg-orange-100'
+                      : 'bg-orange-600 text-white hover:bg-orange-700'
+                  }`}
+                >
+                  {soundEnabled ? 'Suara Aktif' : 'Aktifkan Suara'}
                 </button>
 
                 {permission !== 'granted' ? (
