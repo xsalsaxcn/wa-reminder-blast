@@ -227,7 +227,7 @@ export default function AnalysisPage() {
                 Analisis otomatis minat customer dari pesan masuk WhatsApp.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Mode unique contact: 1 nomor dihitung 1 status final berdasarkan pesan terbaru.
+                Mode unique contact: 1 nomor dihitung 1 status final. Riwayat berminat tetap dipertahankan sampai customer menyatakan tidak minat / opt-out.
               </p>
             </div>
 
@@ -423,7 +423,7 @@ export default function AnalysisPage() {
                 Analysis Result
               </h2>
               <p className="text-xs text-slate-500">
-                Hasil akhir per kontak unik. Jika customer berubah dari berminat menjadi tidak minat, status final mengikuti pesan terbaru.
+                Hasil akhir per kontak unik. Jika customer pernah berminat lalu lanjut bertanya, tetap masuk Berminat. Jika terbaru tidak minat, otomatis pindah Tidak Minat.
               </p>
             </div>
 
@@ -439,6 +439,7 @@ export default function AnalysisPage() {
                     <Th>Intent</Th>
                     <Th>Score</Th>
                     <Th>Jumlah Chat</Th>
+                    <Th>History</Th>
                     <Th>Job</Th>
                     <Th>Action</Th>
                   </tr>
@@ -447,13 +448,13 @@ export default function AnalysisPage() {
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {loading ? (
                     <tr>
-                      <td colSpan="10" className="p-4 text-slate-500">
+                      <td colSpan="11" className="p-4 text-slate-500">
                         Loading...
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan="10" className="p-4 text-slate-500">
+                      <td colSpan="11" className="p-4 text-slate-500">
                         Belum ada data analysis. Klik Analyze Inbox dulu.
                       </td>
                     </tr>
@@ -485,6 +486,22 @@ export default function AnalysisPage() {
                           <Td>{row.score ?? '-'}</Td>
 
                           <Td>{row.analysis_count || 1}</Td>
+
+                          <Td>
+                            <div className="flex flex-wrap gap-1">
+                              {row.has_interested_history ? (
+                                <span className="rounded-full bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700 ring-1 ring-green-200">
+                                  pernah berminat
+                                </span>
+                              ) : null}
+
+                              {row.has_follow_up_history ? (
+                                <span className="rounded-full bg-yellow-50 px-2 py-1 text-[10px] font-bold text-yellow-700 ring-1 ring-yellow-200">
+                                  ada follow-up
+                                </span>
+                              ) : null}
+                            </div>
+                          </Td>
 
                           <Td>
                             <div
@@ -602,6 +619,20 @@ function MobileAnalysisCard({ row }) {
             {row.analysis_count || 1}
           </div>
         </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-1">
+        {row.has_interested_history ? (
+          <span className="rounded-full bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700 ring-1 ring-green-200">
+            pernah berminat
+          </span>
+        ) : null}
+
+        {row.has_follow_up_history ? (
+          <span className="rounded-full bg-yellow-50 px-2 py-1 text-[10px] font-bold text-yellow-700 ring-1 ring-yellow-200">
+            ada follow-up
+          </span>
+        ) : null}
       </div>
 
       <Link

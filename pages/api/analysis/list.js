@@ -248,6 +248,80 @@ function uniqueKey(row, jobIdFilter) {
   return phone
 }
 
+function chooseFinalFromHistory(history) {
+  const safeHistory = Array.isArray(history) ? history : []
+  const latest = safeHistory[0] || null
+
+  if (!latest) {
+    return {
+      label: 'Netral',
+      intent: 'neutral',
+      score: 40
+    }
+  }
+
+  const latestLabel = cleanText(latest.label).toLowerCase()
+
+  if (latestLabel === 'opt-out') {
+    return {
+      label: 'Opt-out',
+      intent: 'opt_out',
+      score: 0
+    }
+  }
+
+  if (latestLabel === 'tidak berminat' || latestLabel === 'tidak minat') {
+    return {
+      label: 'Tidak berminat',
+      intent: 'not_interested',
+      score: 0
+    }
+  }
+
+  if (latestLabel === 'komplain') {
+    return {
+      label: 'Komplain',
+      intent: 'complaint',
+      score: 20
+    }
+  }
+
+  const everInterested = safeHistory.some((row) => {
+    const label = cleanText(row.label).toLowerCase()
+    return label === 'berminat'
+  })
+
+  if (everInterested) {
+    return {
+      label: 'Berminat',
+      intent: 'interested',
+      score: 100
+    }
+  }
+
+  if (latestLabel === 'follow-up' || latestLabel === 'follow up') {
+    return {
+      label: 'Follow-up',
+      intent: 'follow_up',
+      score: 70
+    }
+  }
+
+  if (latestLabel === 'berminat') {
+    return {
+      label: 'Berminat',
+      intent: 'interested',
+      score: 100
+    }
+  }
+
+  return {
+    label: 'Netral',
+    intent: 'neutral',
+    score: 40
+  }
+}
+
 function makeUniqueFinalRows(rows, jobIdFilter) {
   const sorted = [...rows].sort((a, b) => getDateValue(b.received_at) - getDateValue(a.received_at))
   const map = new Map()
@@ -272,7 +346,34 @@ function makeUniqueFinalRows(rows, jobIdFilter) {
     }
   }
 
-  return Array.from(map.values()).sort((a, b) => getDateValue(b.received_at) - getDateValue(a.received_at))
+  const finalRows = Array.from(map.values()).map((row) => {
+    const history = row.history || [row]
+    const latest = history[0] || row
+    const finalStatus = chooseFinalFromHistory(history)
+
+    return {
+      ...row,
+      body: latest.body,
+      message: latest.body,
+      received_at: latest.received_at,
+      label: finalStatus.label,
+      intent: finalStatus.intent,
+      score: finalStatus.score,
+      latest_message: latest.body,
+      latest_label: latest.label,
+      latest_intent: latest.intent,
+      latest_score: latest.score,
+      has_interested_history: history.some((item) => cleanText(item.label).toLowerCase() === 'berminat'),
+      has_follow_up_history: history.some((item) => {
+        const label = cleanText(item.label).toLowerCase()
+        return label === 'follow-up' || label === 'follow up'
+      }),
+      history_labels: history.map((item) => item.label),
+      history_messages: history.map((item) => item.body)
+    }
+  })
+
+  return finalRows.sort((a, b) => getDateValue(b.received_at) - getDateValue(a.received_at))
 }
 
 async function fetchAllAnalysisRows() {
@@ -409,7 +510,8 @@ export default async function handler(req, res) {
         rows_after_base_filter: rows.length,
         unique_contacts: uniqueRowsBeforeLabelFilter.length,
         rows_after_label_filter: uniqueRows.length,
-        unique_mode: true
+        unique_mode: true,
+        interested_history_preserved: true
       }
     })
   } catch (error) {
