@@ -28,62 +28,105 @@ function getDateValue(value) {
   return date.getTime()
 }
 
+function isNotInterestedText(message) {
+  return (
+    message.includes('tidak berminat') ||
+    message.includes('tidak minat') ||
+    message.includes('tdk minat') ||
+    message.includes('ga minat') ||
+    message.includes('gak minat') ||
+    message.includes('ngga minat') ||
+    message.includes('nggak minat') ||
+    message.includes('tidak tertarik') ||
+    message.includes('belum minat') ||
+    message.includes('maaf tidak') ||
+    message.includes('tidak jadi') ||
+    message.includes('ga jadi') ||
+    message.includes('gak jadi') ||
+    message.includes('batal') ||
+    message.includes('cancel')
+  )
+}
+
+function isOptOutText(message) {
+  return (
+    message.includes('stop') ||
+    message.includes('unsubscribe') ||
+    message.includes('jangan kirim') ||
+    message.includes('jangan chat') ||
+    message.includes('jangan wa') ||
+    message.includes('hapus nomor') ||
+    message.includes('remove')
+  )
+}
+
+function isComplaintText(message) {
+  return (
+    message.includes('komplain') ||
+    message.includes('complain') ||
+    message.includes('kecewa') ||
+    message.includes('marah') ||
+    message.includes('tidak puas')
+  )
+}
+
+function isFollowUpText(message) {
+  return (
+    message.includes('harga') ||
+    message.includes('biaya') ||
+    message.includes('berapa') ||
+    message.includes('info') ||
+    message.includes('minta info') ||
+    message.includes('detail') ||
+    message.includes('jadwal') ||
+    message.includes('schedule') ||
+    message.includes('nanti') ||
+    message.includes('lihat dulu') ||
+    message.includes('liat dulu') ||
+    message.includes('tanya') ||
+    message.includes('apa ada') ||
+    message.includes('apakah ada') ||
+    message.includes('kapan') ||
+    message.includes('dimana') ||
+    message.includes('di mana') ||
+    message.includes('online') ||
+    message.includes('offline') ||
+    message.includes('seminar yg lain') ||
+    message.includes('seminar yang lain') ||
+    message.includes('?')
+  )
+}
+
+function isInterestedText(message) {
+  return (
+    message.includes('berminat') ||
+    message.includes('saya minat') ||
+    message.includes('aku minat') ||
+    message.includes('mau daftar') ||
+    message.includes('ingin daftar') ||
+    message.includes('daftar') ||
+    message.includes('booking') ||
+    message.includes('ikut') ||
+    message.includes('mau ikut') ||
+    message.includes('boleh daftar') ||
+    message.includes('lanjut') ||
+    message === 'ya' ||
+    message === 'iya' ||
+    message === 'ok' ||
+    message === 'oke' ||
+    message === 'yes'
+  )
+}
+
 function normalizeLabel(value, body) {
   const label = cleanText(value)
   const lower = label.toLowerCase()
   const message = cleanText(body).toLowerCase()
 
   if (
-    lower.includes('berminat') ||
-    lower.includes('interested') ||
-    lower.includes('positive') ||
-    lower.includes('positif') ||
-    message.includes('mau vaksin') ||
-    message.includes('vaksin') ||
-    message.includes('berminat') ||
-    message.includes('minat') ||
-    message.includes('mau') ||
-    message.includes('boleh') ||
-    message.includes('daftar') ||
-    message.includes('booking') ||
-    message.includes('jadwal') ||
-    message.includes('ikut')
-  ) {
-    return 'Berminat'
-  }
-
-  if (
-    lower.includes('tidak') ||
-    lower.includes('not') ||
-    lower.includes('negative') ||
-    lower.includes('negatif') ||
-    message.includes('tidak berminat') ||
-    message.includes('tidak minat') ||
-    message.includes('ga minat') ||
-    message.includes('gak minat') ||
-    message.includes('nggak minat') ||
-    message.includes('stop') ||
-    message.includes('jangan kirim')
-  ) {
-    return 'Tidak berminat'
-  }
-
-  if (
-    lower.includes('follow') ||
-    lower.includes('tanya') ||
-    message.includes('harga') ||
-    message.includes('biaya') ||
-    message.includes('berapa') ||
-    message.includes('info') ||
-    message.includes('nanti')
-  ) {
-    return 'Follow-up'
-  }
-
-  if (
     lower.includes('opt') ||
     lower.includes('unsubscribe') ||
-    message.includes('unsubscribe')
+    isOptOutText(message)
   ) {
     return 'Opt-out'
   }
@@ -91,10 +134,37 @@ function normalizeLabel(value, body) {
   if (
     lower.includes('komplain') ||
     lower.includes('complain') ||
-    message.includes('komplain') ||
-    message.includes('kecewa')
+    isComplaintText(message)
   ) {
     return 'Komplain'
+  }
+
+  if (
+    lower.includes('tidak') ||
+    lower.includes('not') ||
+    lower.includes('negative') ||
+    lower.includes('negatif') ||
+    isNotInterestedText(message)
+  ) {
+    return 'Tidak berminat'
+  }
+
+  if (
+    lower.includes('follow') ||
+    lower.includes('tanya') ||
+    isFollowUpText(message)
+  ) {
+    return 'Follow-up'
+  }
+
+  if (
+    lower.includes('berminat') ||
+    lower.includes('interested') ||
+    lower.includes('positive') ||
+    lower.includes('positif') ||
+    isInterestedText(message)
+  ) {
+    return 'Berminat'
   }
 
   return 'Netral'
@@ -129,8 +199,8 @@ function normalizeRow(row) {
   const body = cleanText(row.body || row.message || row.text || row.content || '')
   const rawLabel = cleanText(row.label || row.category || row.intent || row.sentiment || '')
   const label = normalizeLabel(rawLabel, body)
-  const intent = cleanText(row.intent) || normalizeIntent(label)
-  const score = row.score !== undefined && row.score !== null ? Number(row.score) : scoreFromLabel(label)
+  const intent = normalizeIntent(label)
+  const score = scoreFromLabel(label)
 
   return {
     id: row.id,
@@ -142,7 +212,7 @@ function normalizeRow(row) {
     label,
     raw_label: rawLabel,
     intent,
-    score: Number.isFinite(score) ? score : scoreFromLabel(label),
+    score,
     source_job_id: row.source_job_id || row.job_id || null,
     job_id: row.job_id || row.source_job_id || null,
     received_at: row.received_at || row.message_created_at || row.created_at || row.updated_at || null
@@ -155,7 +225,7 @@ function matchLabel(rowLabel, filterLabel) {
 
   if (!target || target === 'all' || target === 'semua') return true
 
-  if (target === 'tidak berminat') {
+  if (target === 'tidak berminat' || target === 'tidak minat') {
     return current === 'tidak berminat' || current === 'tidak minat'
   }
 
@@ -164,6 +234,45 @@ function matchLabel(rowLabel, filterLabel) {
   }
 
   return current === target
+}
+
+function uniqueKey(row, jobIdFilter) {
+  const phone = cleanPhone(row.phone)
+
+  if (!phone) return row.id || Math.random().toString()
+
+  if (jobIdFilter) {
+    return `${cleanText(row.job_id || row.source_job_id)}:${phone}`
+  }
+
+  return phone
+}
+
+function makeUniqueFinalRows(rows, jobIdFilter) {
+  const sorted = [...rows].sort((a, b) => getDateValue(b.received_at) - getDateValue(a.received_at))
+  const map = new Map()
+
+  for (const row of sorted) {
+    const key = uniqueKey(row, jobIdFilter)
+
+    if (!map.has(key)) {
+      map.set(key, {
+        ...row,
+        analysis_count: 1,
+        latest_message: row.body,
+        latest_label: row.label,
+        latest_intent: row.intent,
+        latest_score: row.score,
+        history: [row]
+      })
+    } else {
+      const existing = map.get(key)
+      existing.analysis_count += 1
+      existing.history.push(row)
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => getDateValue(b.received_at) - getDateValue(a.received_at))
 }
 
 async function fetchAllAnalysisRows() {
@@ -222,7 +331,7 @@ export default async function handler(req, res) {
 
     const rawRows = await fetchAllAnalysisRows()
 
-    let rows = rawRows.map(normalizeRow)
+    let rows = rawRows.map(normalizeRow).filter((row) => row.phone)
 
     if (start) {
       const startTime = getDateValue(start)
@@ -232,10 +341,6 @@ export default async function handler(req, res) {
     if (end) {
       const endTime = getDateValue(end) + 24 * 60 * 60 * 1000
       rows = rows.filter((row) => getDateValue(row.received_at) <= endTime)
-    }
-
-    if (label && label !== 'all') {
-      rows = rows.filter((row) => matchLabel(row.label, label))
     }
 
     if (job_id) {
@@ -255,9 +360,9 @@ export default async function handler(req, res) {
       })
     }
 
-    rows.sort((a, b) => getDateValue(b.received_at) - getDateValue(a.received_at))
+    const uniqueRowsBeforeLabelFilter = makeUniqueFinalRows(rows, job_id)
 
-    const summary = rows.reduce(
+    const summary = uniqueRowsBeforeLabelFilter.reduce(
       (acc, row) => {
         acc.total += 1
 
@@ -287,15 +392,24 @@ export default async function handler(req, res) {
     summary.avgScore = summary.total > 0 ? Math.round(summary.totalScore / summary.total) : 0
     delete summary.totalScore
 
+    let uniqueRows = uniqueRowsBeforeLabelFilter
+
+    if (label && label !== 'all') {
+      uniqueRows = uniqueRows.filter((row) => matchLabel(row.label, label))
+    }
+
     return res.status(200).json({
       success: true,
-      rows,
-      items: rows,
-      data: rows,
+      rows: uniqueRows,
+      items: uniqueRows,
+      data: uniqueRows,
       summary,
       debug: {
         raw_rows_loaded: rawRows.length,
-        rows_after_filter: rows.length
+        rows_after_base_filter: rows.length,
+        unique_contacts: uniqueRowsBeforeLabelFilter.length,
+        rows_after_label_filter: uniqueRows.length,
+        unique_mode: true
       }
     })
   } catch (error) {
