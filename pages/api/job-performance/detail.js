@@ -1,23 +1,30 @@
-import { requireRole } from '../../../lib/auth'
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { requireRole } from '../../../lib/auth'
 
 function cleanText(value) {
   return String(value || '').trim()
 }
 
 function cleanPhone(value) {
-  let phone = String(value || '').replace(/\D/g, '')
+  let phone = String(value || '').trim()
+  let result = ''
 
-  if (phone.startsWith('0')) {
-    phone = '62' + phone.slice(1)
+  if (phone.startsWith('="')) phone = phone.slice(2)
+  if (phone.endsWith('"')) phone = phone.slice(0, -1)
+  if (phone.startsWith("'")) phone = phone.slice(1)
+
+  for (const char of phone) {
+    if ('0123456789'.includes(char)) result += char
   }
 
-  return phone
+  if (result.startsWith('0')) result = '62' + result.slice(1)
+
+  return result
 }
 
-function toNumber(value) {
+function toNumber(value, fallback = 0) {
   const number = Number(value)
-  return Number.isFinite(number) ? number : 0
+  return Number.isFinite(number) ? number : fallback
 }
 
 function getTime(value) {
@@ -26,104 +33,190 @@ function getTime(value) {
 }
 
 function secondsToLabel(seconds) {
-  const value = toNumber(seconds)
+  const value = toNumber(seconds, 0)
 
-  if (!value) return '-'
+  if (!value || value <= 0) return '-'
+  if (value < 60) return `${Math.round(value)} detik`
 
-  if (value < 60) return `${value} detik`
+  const minutes = Math.round(value / 60)
 
-  const minutes = Math.floor(value / 60)
-  const remainSeconds = value % 60
+  if (minutes < 60) return `${minutes} menit`
 
-  if (minutes < 60) {
-    return remainSeconds
-      ? `${minutes} menit ${remainSeconds} detik`
-      : `${minutes} menit`
-  }
+  const hours = Math.round(minutes / 60)
 
-  const hours = Math.floor(minutes / 60)
-  const remainMinutes = minutes % 60
+  if (hours < 24) return `${hours} jam`
 
-  return remainMinutes
-    ? `${hours} jam ${remainMinutes} menit`
-    : `${hours} jam`
+  const days = Math.round(hours / 24)
+
+  return `${days} hari`
 }
 
-function normalizeStatus(status) {
-  const text = cleanText(status).toLowerCase()
+function getReplyBody(row) {
+  return (
+    cleanText(row?.body) ||
+    cleanText(row?.message) ||
+    cleanText(row?.text) ||
+    cleanText(row?.content) ||
+    cleanText(row?.media_caption) ||
+    cleanText(row?.caption) ||
+    ''
+  )
+}
 
-  if (text === 'success') return 'sent'
-  if (text === 'done') return 'sent'
-  if (text === 'completed') return 'sent'
-  if (text === 'error') return 'failed'
+function getIncomingPhone(row) {
+  return cleanPhone(row?.phone || row?.from || row?.wa_id || row?.sender_phone || row?.customer_phone || '')
+}
 
-  return text || 'pending'
+function getOutgoingPhone(row) {
+  return cleanPhone(row?.phone || row?.to || row?.wa_id || row?.customer_phone || row?.recipient_phone || '')
+}
+
+function getItemPhone(row) {
+  return cleanPhone(row?.phone || row?.wa_id || row?.customer_phone || row?.recipient_phone || '')
+}
+
+function getIncomingTime(row) {
+  return row?.received_at || row?.message_created_at || row?.created_at || row?.updated_at || ''
+}
+
+function getOutgoingTime(row) {
+  return row?.sent_at || row?.created_at || row?.updated_at || ''
+}
+
+function getItemTime(row) {
+  return row?.sent_at || row?.processed_at || row?.updated_at || row?.created_at || row?.scheduled_at || ''
+}
+
+function getJobTime(row) {
+  return row?.created_at || row?.scheduled_at || row?.updated_at || ''
+}
+
+function normalizeStatus(value) {
+  return cleanText(value).toLowerCase()
+}
+
+function isJobDone(job) {
+  const status = normalizeStatus(job?.status)
+
+  return (
+    status === 'done' ||
+    status === 'completed' ||
+    status === 'complete' ||
+    status === 'finished' ||
+    status === 'success'
+  )
+}
+
+function isSentStatus(value) {
+  const status = normalizeStatus(value)
+
+  return (
+    status === 'sent' ||
+    status === 'success' ||
+    status === 'delivered' ||
+    status === 'read' ||
+    status === 'done' ||
+    status === 'completed' ||
+    status === 'complete'
+  )
+}
+
+function isFailedStatus(value) {
+  const status = normalizeStatus(value)
+
+  return (
+    status === 'failed' ||
+    status === 'error' ||
+    status === 'undelivered' ||
+    status === 'rejected'
+  )
 }
 
 function classifyReply(text) {
   const value = cleanText(text).toLowerCase()
 
-  if (!value) return 'none'
+  if (!value) return 'neutral'
 
   const optOutWords = [
     'stop',
     'unsubscribe',
-    'unsub',
     'jangan kirim',
+    'jangan chat',
     'jangan wa',
     'hapus nomor',
-    'remove',
-    'block',
-    'blokir'
+    'remove'
   ]
 
   const notInterestedWords = [
+    'tidak berminat',
     'tidak minat',
     'tdk minat',
     'ga minat',
     'gak minat',
     'ngga minat',
     'nggak minat',
-    'belum minat',
     'tidak tertarik',
-    'no',
+    'belum minat',
+    'tidak jadi',
+    'ga jadi',
+    'gak jadi',
+    'batal',
+    'cancel',
     'not interested'
   ]
 
   const hotLeadWords = [
-    'minta penawaran',
-    'buatkan penawaran',
-    'proposal',
-    'bisa ka',
-    'bisa kak',
-    'daftar',
     'mau daftar',
-    'ikut'
+    'ingin daftar',
+    'boleh daftar',
+    'daftarkan',
+    'booking',
+    'book',
+    'register',
+    'registrasi',
+    'bayar',
+    'payment',
+    'transfer',
+    'invoice',
+    'link pembayaran'
   ]
 
   const interestedWords = [
     'berminat',
     'minat',
-    'interested',
+    'tertarik',
+    'mau ikut',
+    'ikut',
     'mau',
     'boleh',
-    'oke',
-    'ok',
+    'lanjut',
     'yes',
-    'ya'
+    'ya',
+    'iya',
+    'ok',
+    'oke'
   ]
 
   const followUpWords = [
-    'nanti',
-    'follow up',
-    'follow-up',
-    'hubungi',
-    'info',
-    'minta info',
-    'kirim detail',
-    'jadwal',
+    'harga',
+    'biaya',
     'berapa',
-    'harga'
+    'info',
+    'detail',
+    'jadwal',
+    'schedule',
+    'nanti',
+    'lihat dulu',
+    'liat dulu',
+    'tanya',
+    'apa ada',
+    'apakah ada',
+    'kapan',
+    'dimana',
+    'di mana',
+    'online',
+    'offline',
+    '?'
   ]
 
   if (optOutWords.some((word) => value.includes(word))) return 'opt_out'
@@ -135,215 +228,229 @@ function classifyReply(text) {
   return 'neutral'
 }
 
-function getReplyBody(row) {
-  return cleanText(row?.body || row?.message || row?.media_caption || row?.caption || '')
-}
+async function fetchAll(table, maxRows = 50000) {
+  const pageSize = 1000
+  let from = 0
+  let rows = []
 
-function getItemTime(item, job) {
-  const safeItem = item || {}
-  const safeJob = job || {}
+  while (from < maxRows) {
+    const to = from + pageSize - 1
 
-  return (
-    safeItem.processed_at ||
-    safeItem.sent_at ||
-    safeItem.updated_at ||
-    safeItem.created_at ||
-    safeJob.created_at ||
-    safeJob.updated_at ||
-    null
-  )
-}
+    const result = await supabaseAdmin
+      .from(table)
+      .select('*')
+      .range(from, to)
 
-function isSentStatus(status) {
-  const text = normalizeStatus(status)
-  return ['sent', 'delivered', 'read'].includes(text)
-}
+    if (result.error) {
+      throw new Error(result.error.message)
+    }
 
-function isFailedStatus(status) {
-  const text = normalizeStatus(status)
-  return ['failed', 'cancelled'].includes(text)
-}
+    const batch = Array.isArray(result.data) ? result.data : []
+    rows = rows.concat(batch)
 
-function bucketMatches(bucket, detail) {
-  const selected = cleanText(bucket).toLowerCase()
+    if (batch.length < pageSize) break
 
-  if (selected === 'target') return true
-  if (selected === 'sent') return detail.sent
-  if (selected === 'failed') return detail.failed
-  if (selected === 'replies') return detail.hasReply
-  if (selected === 'no_response') return detail.sent && !detail.hasReply
-  if (selected === 'need_response') return detail.hasReply && !detail.hasAgentReply
-  if (selected === 'interested') {
-    return detail.replyBucket === 'interested' || detail.replyBucket === 'hot_lead'
+    from += pageSize
   }
-  if (selected === 'follow_up') return detail.replyBucket === 'follow_up'
-  if (selected === 'not_interested') return detail.replyBucket === 'not_interested'
-  if (selected === 'opt_out') return detail.replyBucket === 'opt_out'
-  if (selected === 'hot_lead') return detail.replyBucket === 'hot_lead'
-  if (selected === 'score') return detail.hasReply || detail.sent || detail.failed
 
-  return true
+  return rows
 }
 
-async function safeSelect(table, queryBuilder) {
+async function safeFetchAll(table, maxRows = 50000) {
   try {
-    const result = await queryBuilder(supabaseAdmin.from(table))
-
-    if (result.error) return []
-
-    return result.data || []
+    return await fetchAll(table, maxRows)
   } catch (error) {
     return []
   }
 }
 
-async function getJob(jobId) {
-  const { data, error } = await supabaseAdmin
-    .from('send_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .maybeSingle()
-
-  if (error) throw error
-
-  return data || null
-}
-
-async function getJobItems(jobId) {
-  const { data, error } = await supabaseAdmin
-    .from('send_job_items')
-    .select('*')
-    .eq('job_id', jobId)
-    .order('created_at', { ascending: true })
-    .limit(50000)
-
-  if (error) throw error
-
-  return data || []
-}
-
-async function getIncomingByPhones(phones, since) {
-  const safePhones = Array.from(new Set(phones.map(cleanPhone).filter(Boolean)))
-
-  if (!safePhones.length) return []
-
-  return safeSelect('wa_incoming_messages', (query) => {
-    let builder = query
-      .select('*')
-      .in('phone', safePhones)
-      .order('received_at', { ascending: true })
-      .limit(50000)
-
-    if (since) {
-      builder = builder.gte('received_at', since)
-    }
-
-    return builder
-  })
-}
-
-async function getOutgoingByPhones(phones, since) {
-  const safePhones = Array.from(new Set(phones.map(cleanPhone).filter(Boolean)))
-
-  if (!safePhones.length) return []
-
-  return safeSelect('wa_outgoing_messages', (query) => {
-    let builder = query
-      .select('*')
-      .in('phone', safePhones)
-      .order('sent_at', { ascending: true })
-      .limit(50000)
-
-    if (since) {
-      builder = builder.gte('sent_at', since)
-    }
-
-    return builder
-  })
-}
-
-async function getContactsByPhones(phones) {
-  const safePhones = Array.from(new Set(phones.map(cleanPhone).filter(Boolean)))
-
-  if (!safePhones.length) return []
-
-  return safeSelect('contacts', (query) =>
-    query
-      .select('*')
-      .in('phone', safePhones)
-      .limit(50000)
-  )
-}
-
-function groupIncomingByPhone(messages) {
+function groupByPhone(rows, phoneGetter, timeGetter) {
   const map = new Map()
 
-  for (const message of messages || []) {
-    const phone = cleanPhone(message.phone)
+  for (const row of rows || []) {
+    const phone = phoneGetter(row)
     if (!phone) continue
 
-    const list = map.get(phone) || []
-    list.push(message)
-    map.set(phone, list)
+    if (!map.has(phone)) map.set(phone, [])
+
+    map.get(phone).push(row)
+  }
+
+  for (const list of map.values()) {
+    list.sort((a, b) => getTime(timeGetter(a)) - getTime(timeGetter(b)))
   }
 
   return map
 }
 
-function groupOutgoingByPhone(messages) {
-  const map = new Map()
+function getFirstIncomingAfter({ phone, startAt, incomingByPhone }) {
+  const startTime = getTime(startAt)
+  const list = incomingByPhone.get(phone) || []
 
-  for (const message of messages || []) {
-    const phone = cleanPhone(message.phone)
-    if (!phone) continue
-
-    const list = map.get(phone) || []
-    list.push(message)
-    map.set(phone, list)
+  for (const item of list) {
+    if (getTime(getIncomingTime(item)) >= startTime) return item
   }
 
-  return map
+  return null
 }
 
-function getFirstReplyForContact({ phone, item, job, incomingByPhone }) {
-  const messages = incomingByPhone.get(phone) || []
-  const startTime = getTime(getItemTime(item, job))
+function getFirstOutgoingAfter({ phone, startAt, outgoingByPhone }) {
+  const startTime = getTime(startAt)
+  const list = outgoingByPhone.get(phone) || []
 
-  for (const message of messages) {
-    const messageTime = getTime(message.received_at)
-
-    if (messageTime >= startTime) {
-      return message
-    }
+  for (const item of list) {
+    if (getTime(getOutgoingTime(item)) >= startTime) return item
   }
 
   return null
 }
 
 function getFirstAgentReplyAfterCustomer({ phone, firstReplyAt, outgoingByPhone }) {
-  const outgoing = outgoingByPhone.get(phone) || []
+  if (!firstReplyAt) return null
+
   const startTime = getTime(firstReplyAt)
+  const list = outgoingByPhone.get(phone) || []
 
-  if (!startTime) return null
-
-  for (const message of outgoing) {
-    const messageTime = getTime(message.sent_at || message.created_at)
-
-    if (messageTime > startTime) {
-      return message
-    }
+  for (const item of list) {
+    if (getTime(getOutgoingTime(item)) > startTime) return item
   }
 
   return null
 }
 
-function getName(contact, fallback) {
+function hasOutgoingAfter({ phone, startAt, outgoingByPhone }) {
+  return Boolean(getFirstOutgoingAfter({ phone, startAt, outgoingByPhone }))
+}
+
+function isItemFailed(item) {
+  return isFailedStatus(item?.status)
+}
+
+function isItemSent({ item, job, outgoingByPhone }) {
+  const phone = getItemPhone(item)
+  const startAt = getItemTime(item) || getJobTime(job)
+
+  if (isItemFailed(item)) return false
+  if (isSentStatus(item?.status)) return true
+  if (cleanText(item?.sent_at)) return true
+  if (cleanText(item?.delivered_at)) return true
+  if (cleanText(item?.read_at)) return true
+  if (hasOutgoingAfter({ phone, startAt, outgoingByPhone })) return true
+  if (isJobDone(job)) return true
+
+  return false
+}
+
+function getContactName(phone, contactsByPhone, item) {
+  const contact = contactsByPhone.get(phone)
+
   return (
+    cleanText(item?.name) ||
+    cleanText(item?.profile_name) ||
+    cleanText(item?.contact_name) ||
     cleanText(contact?.name) ||
     cleanText(contact?.profile_name) ||
-    cleanText(contact?.full_name) ||
-    fallback
+    '-'
   )
+}
+
+function shouldIncludeDetail(detail, selected) {
+  const filter = cleanText(selected).toLowerCase()
+
+  if (!filter || filter === 'all' || filter === 'semua') return true
+  if (filter === 'target') return true
+  if (filter === 'sent') return detail.sent
+  if (filter === 'failed') return detail.failed
+  if (filter === 'replies' || filter === 'reply') return detail.hasReply
+  if (filter === 'no_response') return !detail.hasReply
+  if (filter === 'need_response') return detail.hasReply && !detail.hasAgentReply
+  if (filter === 'interested') return detail.replyBucket === 'interested' || detail.replyBucket === 'hot_lead'
+  if (filter === 'follow_up' || filter === 'follow-up') return detail.replyBucket === 'follow_up'
+  if (filter === 'not_interested' || filter === 'not-int') return detail.replyBucket === 'not_interested'
+  if (filter === 'opt_out' || filter === 'opt-out') return detail.replyBucket === 'opt_out'
+  if (filter === 'hot_lead' || filter === 'hot-lead') return detail.replyBucket === 'hot_lead'
+  if (filter === 'score') return true
+
+  return true
+}
+
+function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contactsByPhone }) {
+  const rows = []
+
+  for (const item of items || []) {
+    const phone = getItemPhone(item)
+    if (!phone) continue
+
+    const startAt = getItemTime(item) || getJobTime(job)
+    const firstReply = getFirstIncomingAfter({
+      phone,
+      startAt,
+      incomingByPhone
+    })
+
+    const firstReplyAt = firstReply ? getIncomingTime(firstReply) : null
+
+    const firstAgentReply = firstReply
+      ? getFirstAgentReplyAfterCustomer({
+          phone,
+          firstReplyAt,
+          outgoingByPhone
+        })
+      : null
+
+    const agentReplyAt = firstAgentReply ? getOutgoingTime(firstAgentReply) : null
+    const responseSeconds =
+      firstReplyAt && agentReplyAt
+        ? Math.max(0, Math.round((getTime(agentReplyAt) - getTime(firstReplyAt)) / 1000))
+        : 0
+
+    const replyText = getReplyBody(firstReply)
+    const replyBucket = classifyReply(replyText)
+    const failed = isItemFailed(item)
+    const sent = isItemSent({ item, job, outgoingByPhone })
+
+    rows.push({
+      id: item.id || `${job.id}-${phone}`,
+      item_id: item.id || null,
+      job_id: job.id,
+      phone,
+      name: getContactName(phone, contactsByPhone, item),
+      profile_name: getContactName(phone, contactsByPhone, item),
+
+      status: item.status || '-',
+      sent,
+      failed,
+      pending: !sent && !failed,
+
+      message: item.message || '',
+      template_name: item.template_name || null,
+      template_language: item.template_language || null,
+
+      processedAt: item.processed_at || item.updated_at || item.created_at || null,
+      sentAt: item.sent_at || item.processed_at || item.updated_at || item.created_at || null,
+      scheduledAt: item.scheduled_at || null,
+
+      hasReply: Boolean(firstReply),
+      hasAgentReply: Boolean(firstAgentReply),
+      replyCount: firstReply ? 1 : 0,
+      replyBucket,
+      lastReply: replyText,
+      lastReplyAt: firstReplyAt,
+      agentReply: getReplyBody(firstAgentReply),
+      agentReplyAt,
+      responseSeconds,
+      responseTime: secondsToLabel(responseSeconds),
+
+      errorMessage: item.error_message || item.error || null,
+      error_message: item.error_message || item.error || null
+    })
+  }
+
+  return rows.sort((a, b) => {
+    const bTime = getTime(b.lastReplyAt || b.sentAt || b.processedAt)
+    const aTime = getTime(a.lastReplyAt || a.sentAt || a.processedAt)
+    return bTime - aTime
+  })
 }
 
 export default async function handler(req, res) {
@@ -352,7 +459,8 @@ export default async function handler(req, res) {
   res.setHeader('Expires', '0')
 
   try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    if (!authUser) return
 
     if (req.method !== 'GET') {
       return res.status(405).json({
@@ -361,8 +469,8 @@ export default async function handler(req, res) {
       })
     }
 
-    const jobId = cleanText(req.query.job_id || req.query.jobId || req.query.id)
-    const bucket = cleanText(req.query.bucket || 'replies').toLowerCase()
+    const jobId = cleanText(req.query.job_id || req.query.id || '')
+    const selected = cleanText(req.query.bucket || req.query.metric || req.query.type || 'all')
 
     if (!jobId) {
       return res.status(400).json({
@@ -371,122 +479,126 @@ export default async function handler(req, res) {
       })
     }
 
-    const job = await getJob(jobId)
+    const jobResult = await supabaseAdmin
+      .from('send_jobs')
+      .select('*')
+      .eq('id', jobId)
+      .single()
 
-    if (!job) {
+    if (jobResult.error || !jobResult.data) {
       return res.status(404).json({
         success: false,
-        message: 'Job tidak ditemukan.'
+        message: jobResult.error?.message || 'Job tidak ditemukan.'
       })
     }
 
-    const jobItems = await getJobItems(jobId)
+    const job = jobResult.data
 
-    const phoneMap = new Map()
+    const itemsResult = await supabaseAdmin
+      .from('send_job_items')
+      .select('*')
+      .eq('job_id', jobId)
+      .limit(50000)
 
-    for (const item of jobItems || []) {
-      const phone = cleanPhone(item.phone)
-      if (!phone) continue
+    if (itemsResult.error) {
+      return res.status(500).json({
+        success: false,
+        message: itemsResult.error.message
+      })
+    }
 
-      const existing = phoneMap.get(phone)
-      const itemTime = getTime(getItemTime(item, job))
-      const existingTime = getTime(getItemTime(existing, job))
+    const items = Array.isArray(itemsResult.data) ? itemsResult.data : []
 
-      if (!existing || itemTime >= existingTime) {
-        phoneMap.set(phone, item)
+    const incomingRows = await safeFetchAll('wa_incoming_messages', 50000)
+    const outgoingRows = await safeFetchAll('wa_outgoing_messages', 50000)
+
+    let contacts = []
+
+    if (job.database_id) {
+      const contactsResult = await supabaseAdmin
+        .from('contacts')
+        .select('*')
+        .eq('database_id', job.database_id)
+        .limit(50000)
+
+      if (!contactsResult.error) {
+        contacts = contactsResult.data || []
       }
     }
 
-    const phones = Array.from(phoneMap.keys())
-    const earliestTime = job.created_at || job.updated_at || null
-
-    const incomingMessages = await getIncomingByPhones(phones, earliestTime)
-    const outgoingMessages = await getOutgoingByPhones(phones, earliestTime)
-
-    const incomingByPhone = groupIncomingByPhone(incomingMessages)
-    const outgoingByPhone = groupOutgoingByPhone(outgoingMessages)
-
-    const contacts = await getContactsByPhones(phones)
-
-    const contactMap = new Map()
+    const contactsByPhone = new Map()
 
     for (const contact of contacts || []) {
       const phone = cleanPhone(contact.phone)
-      if (!phone) continue
-      contactMap.set(phone, contact)
+      if (phone) contactsByPhone.set(phone, contact)
     }
 
-    const rows = []
+    const incomingByPhone = groupByPhone(incomingRows, getIncomingPhone, getIncomingTime)
+    const outgoingByPhone = groupByPhone(outgoingRows, getOutgoingPhone, getOutgoingTime)
 
-    for (const [phone, item] of phoneMap.entries()) {
-      const firstReply = getFirstReplyForContact({
-        phone,
-        item,
-        job,
-        incomingByPhone
-      })
-
-      const firstAgentReply = firstReply
-        ? getFirstAgentReplyAfterCustomer({
-            phone,
-            firstReplyAt: firstReply.received_at,
-            outgoingByPhone
-          })
-        : null
-
-      const responseSeconds = firstReply && firstAgentReply
-        ? Math.max(
-            0,
-            Math.round(
-              (getTime(firstAgentReply.sent_at || firstAgentReply.created_at) - getTime(firstReply.received_at)) / 1000
-            )
-          )
-        : 0
-
-      const replyText = getReplyBody(firstReply)
-      const replyBucket = classifyReply(replyText)
-      const status = normalizeStatus(item.status)
-      const contact = contactMap.get(phone)
-
-      const detail = {
-        phone,
-        name: getName(contact, phone),
-        status,
-        sent: isSentStatus(status),
-        failed: isFailedStatus(status),
-        hasReply: Boolean(firstReply),
-        hasAgentReply: Boolean(firstAgentReply),
-        replyCount: firstReply ? 1 : 0,
-        replyBucket,
-        lastReply: replyText,
-        lastReplyAt: firstReply?.received_at || null,
-        agentReply: cleanText(firstAgentReply?.message || firstAgentReply?.media_caption || ''),
-        agentReplyAt: firstAgentReply?.sent_at || firstAgentReply?.created_at || null,
-        responseSeconds,
-        responseTime: secondsToLabel(responseSeconds),
-        lastMessage: item.message || '',
-        processedAt: getItemTime(item, job),
-        metaMessageId: item.meta_message_id || null,
-        inboxUrl: `/inbox?phone=${encodeURIComponent(phone)}`
-      }
-
-      if (bucketMatches(bucket, detail)) {
-        rows.push(detail)
-      }
-    }
-
-    rows.sort((a, b) => {
-      const bTime = getTime(b.lastReplyAt || b.processedAt)
-      const aTime = getTime(a.lastReplyAt || a.processedAt)
-      return bTime - aTime
+    const allDetails = buildDetailRows({
+      job,
+      items,
+      incomingByPhone,
+      outgoingByPhone,
+      contactsByPhone
     })
+
+    const filteredDetails = allDetails.filter((detail) => shouldIncludeDetail(detail, selected))
+
+    const summary = allDetails.reduce(
+      (acc, item) => {
+        acc.target += 1
+        if (item.sent) acc.sent += 1
+        if (item.failed) acc.failed += 1
+        if (item.hasReply) acc.replies += 1
+        if (!item.hasReply) acc.no_response += 1
+        if (item.hasReply && !item.hasAgentReply) acc.need_response += 1
+        if (item.replyBucket === 'interested' || item.replyBucket === 'hot_lead') acc.interested += 1
+        if (item.replyBucket === 'follow_up') acc.follow_up += 1
+        if (item.replyBucket === 'not_interested') acc.not_interested += 1
+        if (item.replyBucket === 'opt_out') acc.opt_out += 1
+        if (item.replyBucket === 'hot_lead') acc.hot_lead += 1
+        return acc
+      },
+      {
+        target: 0,
+        sent: 0,
+        failed: 0,
+        replies: 0,
+        no_response: 0,
+        need_response: 0,
+        interested: 0,
+        follow_up: 0,
+        not_interested: 0,
+        opt_out: 0,
+        hot_lead: 0
+      }
+    )
+
+    summary.target = Math.max(
+      summary.target,
+      toNumber(job.total_items, 0),
+      toNumber(job.target, 0),
+      toNumber(job.target_count, 0)
+    )
 
     return res.status(200).json({
       success: true,
       job,
-      bucket,
-      total: rows.length,
-      rows
+      rows: filteredDetails,
+      items: filteredDetails,
+      details: filteredDetails,
+      data: filteredDetails,
+      summary,
+      debug: {
+        job_id: jobId,
+        selected,
+        job_total_items: job.total_items || null,
+        items_loaded: items.length,
+        detail_rows: filteredDetails.length,
+        target_fallback_enabled: true
+      }
     })
   } catch (error) {
     return res.status(500).json({
