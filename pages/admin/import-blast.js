@@ -53,15 +53,52 @@ function normalizePhone(value) {
 function parseTemplateParams(row) {
   const params = []
 
-  for (let i = 1; i <= 20; i += 1) {
-    const value = getValue(row, [
-      `param_${i}`,
-      `parameter_${i}`,
-      `template_param_${i}`,
-      `body_param_${i}`
-    ])
+  function addParam(value) {
+    const text = cleanText(value)
+    if (text) params.push(text)
+  }
 
-    if (value) params.push(value)
+  function addDirectParams(value) {
+    if (!value) return
+
+    if (Array.isArray(value)) {
+      value.forEach(addParam)
+      return
+    }
+
+    const text = cleanText(value)
+    if (!text) return
+
+    try {
+      const parsed = JSON.parse(text)
+
+      if (Array.isArray(parsed)) {
+        parsed.forEach(addParam)
+        return
+      }
+    } catch (error) {
+      // lanjut pakai separator pipe
+    }
+
+    text.split('|').forEach(addParam)
+  }
+
+  addDirectParams(
+    row.template_params ||
+      row.templateParams ||
+      row.params ||
+      row.body_params ||
+      row.bodyParams
+  )
+
+  for (let i = 1; i <= 20; i += 1) {
+    const value =
+      row[`param_${i}`] ||
+      row[`parameter_${i}`] ||
+      row[`template_param_${i}`] ||
+      row[`body_param_${i}`]
+
+    addParam(value)
   }
 
   return params
@@ -223,6 +260,143 @@ function guessAttachmentType(url) {
   }
 
   return 'document'
+}
+
+function downloadTemplateBlastMultiParams() {
+  downloadCsvFile(
+    'template_blast_multi_param.csv',
+    [
+      'name',
+      'phone',
+      'param_1',
+      'param_2',
+      'param_3',
+      'param_4',
+      'param_5'
+    ],
+    [
+      {
+        name: 'Susi Salwa',
+        phone: '628568032191',
+        param_1: 'Susi Salwa',
+        param_2: 'Suntikan ke-2',
+        param_3: '31 Juli 2026',
+        param_4: '10.00 WIB',
+        param_5: 'inHARMONY Clinic'
+      },
+      {
+        name: 'Budi Santoso',
+        phone: '6285137908391',
+        param_1: 'Budi Santoso',
+        param_2: 'Suntikan ke-2',
+        param_3: '1 Agustus 2026',
+        param_4: '14.00 WIB',
+        param_5: 'inHARMONY Clinic'
+      }
+    ]
+  )
+}
+
+function downloadReminderMultiParams() {
+  downloadCsvFile(
+    'template_reminder_multi_param.csv',
+    [
+      'name',
+      'phone',
+      'param_1',
+      'param_2',
+      'param_3',
+      'param_4',
+      'param_5'
+    ],
+    [
+      {
+        name: 'Susi Salwa',
+        phone: '628568032191',
+        param_1: 'Susi Salwa',
+        param_2: 'Suntikan ke-2',
+        param_3: '31 Juli 2026',
+        param_4: '10.00 WIB',
+        param_5: 'inHARMONY Clinic'
+      },
+      {
+        name: 'Budi Santoso',
+        phone: '6285137908391',
+        param_1: 'Budi Santoso',
+        param_2: 'Suntikan ke-2',
+        param_3: '1 Agustus 2026',
+        param_4: '14.00 WIB',
+        param_5: 'inHARMONY Clinic'
+      }
+    ]
+  )
+}
+
+function downloadReminderMultiParamsWithAttachment() {
+  downloadCsvFile(
+    'template_reminder_multi_param_attachment.csv',
+    [
+      'name',
+      'phone',
+      'param_1',
+      'param_2',
+      'param_3',
+      'param_4',
+      'param_5',
+      'attachment_url',
+      'attachment_type',
+      'attachment_filename'
+    ],
+    [
+      {
+        name: 'Susi Salwa',
+        phone: '628568032191',
+        param_1: 'Susi Salwa',
+        param_2: 'Suntikan ke-2',
+        param_3: '31 Juli 2026',
+        param_4: '10.00 WIB',
+        param_5: 'inHARMONY Clinic',
+        attachment_url: 'https://example.com/reminder.jpg',
+        attachment_type: 'image',
+        attachment_filename: 'Reminder.jpg'
+      },
+      {
+        name: 'Budi Santoso',
+        phone: '6285137908391',
+        param_1: 'Budi Santoso',
+        param_2: 'Suntikan ke-2',
+        param_3: '1 Agustus 2026',
+        param_4: '14.00 WIB',
+        param_5: 'inHARMONY Clinic',
+        attachment_url: 'https://example.com/reminder.jpg',
+        attachment_type: 'image',
+        attachment_filename: 'Reminder.jpg'
+      }
+    ]
+  )
+}
+
+function downloadTemplateParamsPipe() {
+  downloadCsvFile(
+    'template_params_pipe.csv',
+    [
+      'name',
+      'phone',
+      'template_params'
+    ],
+    [
+      {
+        name: 'Susi Salwa',
+        phone: '628568032191',
+        template_params: 'Susi Salwa|Suntikan ke-2|31 Juli 2026|10.00 WIB|inHARMONY Clinic'
+      },
+      {
+        name: 'Budi Santoso',
+        phone: '6285137908391',
+        template_params: 'Budi Santoso|Suntikan ke-2|1 Agustus 2026|14.00 WIB|inHARMONY Clinic'
+      }
+    ]
+  )
 }
 
 function guessFileName(url) {
@@ -565,7 +739,40 @@ export default function ImportBlastPage() {
               Template Blast + Param
             </button>
 
-            <button
+            
+              <button
+                type="button"
+                onClick={downloadTemplateBlastMultiParams}
+                className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm ring-1 ring-slate-200"
+              >
+                Template Multi Param
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadReminderMultiParams}
+                className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm"
+              >
+                Reminder Multi Param
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadReminderMultiParamsWithAttachment}
+                className="rounded-2xl bg-purple-600 px-5 py-3 text-sm font-bold text-white shadow-sm"
+              >
+                Reminder + Attachment
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadTemplateParamsPipe}
+                className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm ring-1 ring-slate-200"
+              >
+                Template Params Pipe
+              </button>
+
+<button
               type="button"
               onClick={downloadBlastTemplateWithAttachment}
               disabled={loading}
@@ -611,7 +818,7 @@ export default function ImportBlastPage() {
                 </p>
               ) : null}
               <p className="mt-2 text-xs text-slate-400">
-                Untuk Template Blast, CSV minimal cukup: name, phone.
+                Untuk Template Blast, CSV minimal cukup: name, phone. Untuk banyak variable Meta, gunakan param_1, param_2, param_3, dst sesuai urutan {'{{1}}'}, {'{{2}}'}, {'{{3}}'}.
               </p>
             </div>
 

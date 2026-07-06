@@ -69,14 +69,52 @@ function getRows(body) {
 function parseTemplateParams(row) {
   const params = []
 
+  function addParam(value) {
+    const text = cleanText(value)
+    if (text) params.push(text)
+  }
+
+  function addDirectParams(value) {
+    if (!value) return
+
+    if (Array.isArray(value)) {
+      value.forEach(addParam)
+      return
+    }
+
+    const text = cleanText(value)
+    if (!text) return
+
+    try {
+      const parsed = JSON.parse(text)
+
+      if (Array.isArray(parsed)) {
+        parsed.forEach(addParam)
+        return
+      }
+    } catch (error) {
+      // lanjut pakai separator pipe
+    }
+
+    text.split('|').forEach(addParam)
+  }
+
+  addDirectParams(
+    row.template_params ||
+      row.templateParams ||
+      row.params ||
+      row.body_params ||
+      row.bodyParams
+  )
+
   for (let i = 1; i <= 20; i += 1) {
-    const value = cleanText(
+    const value =
       row[`param_${i}`] ||
       row[`parameter_${i}`] ||
-      row[`template_param_${i}`]
-    )
+      row[`template_param_${i}`] ||
+      row[`body_param_${i}`]
 
-    if (value) params.push(value)
+    addParam(value)
   }
 
   return params
