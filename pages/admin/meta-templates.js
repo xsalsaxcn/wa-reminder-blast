@@ -91,6 +91,9 @@ export default function MetaTemplatesPage() {
     name: '',
     category: 'MARKETING',
     language: 'id',
+    campaign_type: 'Event',
+    project_name: '',
+    batch_name: '',
     header_type: 'NONE',
     sample_url: '',
     sample_filename: '',
@@ -140,7 +143,9 @@ export default function MetaTemplatesPage() {
     setMessage('')
 
     try {
-      const response = await fetch(`/api/meta/templates/list?sync=${sync ? '1' : '0'}`)
+      const response = await fetch(`/api/meta/templates/list?sync=${sync ? '1' : '0'}&t=${Date.now()}`, {
+        cache: 'no-store'
+      })
       const data = await readResponse(response)
 
       if (!response.ok || !data.success) {
@@ -286,7 +291,14 @@ export default function MetaTemplatesPage() {
                     </label>
                     <select
                       value={form.category}
-                      onChange={(event) => updateForm('category', event.target.value)}
+                      onChange={(event) => {
+                        const nextCategory = event.target.value
+                        updateForm('category', nextCategory)
+
+                        if (nextCategory === 'UTILITY' && form.campaign_type === 'Event') {
+                          updateForm('campaign_type', 'Reminder')
+                        }
+                      }}
                       className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400"
                     >
                       <option value="MARKETING">MARKETING</option>
@@ -305,6 +317,58 @@ export default function MetaTemplatesPage() {
                       placeholder="id"
                       className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400"
                     />
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                  <p className="text-sm font-black text-blue-900">
+                    Default Campaign untuk Inbox Filter
+                  </p>
+                  <p className="mt-1 text-xs text-blue-700">
+                    Ini tidak dikirim ke Meta. Dipakai Notiva untuk mengelompokkan reply di Inbox.
+                  </p>
+
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wide text-blue-800">
+                        Default Campaign Type
+                      </label>
+                      <select
+                        value={form.campaign_type}
+                        onChange={(event) => updateForm('campaign_type', event.target.value)}
+                        className="mt-2 w-full rounded-2xl border border-blue-200 px-4 py-3 text-sm outline-none focus:border-blue-400"
+                      >
+                        <option value="Event">Event</option>
+                        <option value="Reminder">Reminder</option>
+                        <option value="Promo">Promo</option>
+                        <option value="Follow-up">Follow-up</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wide text-blue-800">
+                        Default Project Name
+                      </label>
+                      <input
+                        value={form.project_name}
+                        onChange={(event) => updateForm('project_name', event.target.value)}
+                        placeholder="Contoh: OMNI Vaccinology 2026 / Reminder Suntikan ke-2"
+                        className="mt-2 w-full rounded-2xl border border-blue-200 px-4 py-3 text-sm outline-none focus:border-blue-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wide text-blue-800">
+                        Default Batch Name Optional
+                      </label>
+                      <input
+                        value={form.batch_name}
+                        onChange={(event) => updateForm('batch_name', event.target.value)}
+                        placeholder="Contoh: Batch 1 / H-1 / Follow-up 1"
+                        className="mt-2 w-full rounded-2xl border border-blue-200 px-4 py-3 text-sm outline-none focus:border-blue-400"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -491,6 +555,7 @@ export default function MetaTemplatesPage() {
                     <thead>
                       <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-500">
                         <th className="px-3 py-3">Name</th>
+                        <th className="px-3 py-3">Campaign</th>
                         <th className="px-3 py-3">Header</th>
                         <th className="px-3 py-3">Category</th>
                         <th className="px-3 py-3">Lang</th>
@@ -512,6 +577,23 @@ export default function MetaTemplatesPage() {
                               </div>
                             ) : null}
                           </td>
+
+                          <td className="max-w-xs px-3 py-4 text-slate-600">
+                            <div className="inline-flex rounded-full bg-blue-50 px-2 py-1 text-[11px] font-bold text-blue-700 ring-1 ring-blue-100">
+                              {template.campaign_type || '-'}
+                            </div>
+                            {template.project_name ? (
+                              <div className="mt-2 text-xs font-semibold text-slate-700">
+                                {template.project_name}
+                              </div>
+                            ) : null}
+                            {template.batch_name ? (
+                              <div className="mt-1 text-xs text-slate-400">
+                                {template.batch_name}
+                              </div>
+                            ) : null}
+                          </td>
+
                           <td className="px-3 py-4">
                             {template.header_type || 'NONE'}
                           </td>
@@ -540,7 +622,7 @@ export default function MetaTemplatesPage() {
 
                       {!templates.length ? (
                         <tr>
-                          <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                          <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                             Belum ada template.
                           </td>
                         </tr>

@@ -69,6 +69,25 @@ function normalizeHeaderType(value) {
   return 'NONE'
 }
 
+function normalizeCampaignType(value, category) {
+  const text = cleanText(value)
+
+  if (!text) {
+    if (normalizeCategory(category) === 'UTILITY') return 'Reminder'
+    return 'Event'
+  }
+
+  const lower = text.toLowerCase()
+
+  if (lower === 'event') return 'Event'
+  if (lower === 'reminder') return 'Reminder'
+  if (lower === 'promo') return 'Promo'
+  if (lower === 'follow-up' || lower === 'follow up') return 'Follow-up'
+  if (lower === 'other') return 'Other'
+
+  return text
+}
+
 function normalizeMimeType(headerType, value) {
   const text = cleanText(value)
 
@@ -81,15 +100,49 @@ function normalizeMimeType(headerType, value) {
   return ''
 }
 
+function sanitizeUploadFilename(value, fallback = 'sample-file') {
+  let text = cleanText(value)
+
+  if (!text) text = fallback
+
+  try {
+    if (text.startsWith('http://') || text.startsWith('https://')) {
+      const parsed = new URL(text)
+      text = parsed.pathname.split('/').filter(Boolean).pop() || fallback
+    }
+  } catch (error) {
+    // ignore
+  }
+
+  try {
+    text = decodeURIComponent(text)
+  } catch (error) {
+    // ignore
+  }
+
+  text = text
+    .replace(/[\\/<@%]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
+  if (!text) text = fallback
+
+  return text
+}
+
 function guessFilename(url, fallback) {
   const provided = cleanText(fallback)
-  if (provided) return provided
+
+  if (provided) {
+    return sanitizeUploadFilename(provided, 'sample-file')
+  }
 
   try {
     const parsed = new URL(url)
     const last = parsed.pathname.split('/').filter(Boolean).pop()
 
-    if (last) return decodeURIComponent(last)
+    if (last) return sanitizeUploadFilename(last, 'sample-file')
   } catch (error) {
     // ignore
   }
@@ -146,9 +199,9 @@ function parseBodyExamples(value, expectedCount) {
   return arr.slice(0, Math.max(expectedCount, arr.length))
 }
 
-function parseButtons(value) {
+function parseSimpleList(value, max = 3) {
   if (Array.isArray(value)) {
-    return value.map(cleanText).filter(Boolean).slice(0, 3)
+    return value.map(cleanText).filter(Boolean).slice(0, max)
   }
 
   const text = cleanText(value)
@@ -159,7 +212,94 @@ function parseButtons(value) {
     .split('|')
     .map(cleanText)
     .filter(Boolean)
-    .slice(0, 3)
+    .slice(0, max)
+}
+
+function parseKeyValueButtons(value, max = 2) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'object') {
+          return {
+            text: cleanText(item.text || item.label || item.title),
+            value: cleanText(item.url || item.phone || item.value)
+          }
+        }
+
+        return null
+      })
+      .filter((item) => item?.text && item?.value)
+      .slice(0, max)
+  }
+
+  const text = cleanText(value)
+
+  if (!text) return []
+
+  return text
+    .split('|')
+    .map(cleanText)
+    .filter(Boolean)
+    .map((item) => {
+      const separatorIndex = item.indexOf('=')
+
+      if (separatorIndex < 0) return null
+
+      return {
+        text: cleanText(item.slice(0, separatorIndex)),
+        value: cleanText(item.slice(separatorIndex + 1))
+      }
+    })
+    .filter((item) => item?.text && item?.value)
+    .slice(0, max)
+}
+
+function normalizePhoneButtonNumber(value) {
+  let phone = cleanText(value)
+
+  if (phone.startsWith('+')) {
+    return '+' + phone.replace(/\D/g, '')
+  }
+
+  phone = phone.replace(/\D/g, '')
+
+  if (phone.startsWith('0')) {
+    phone = '62' + phone.slice(1)
+  }
+
+  return `+${phone}`
+}
+
+function buildButtons({ quickReplyButtons, urlButtons, phoneButtons }) {
+  const buttons = []
+
+  const quickReplies = parseSimpleList(quickReplyButtons, 3)
+  for (const text of quickReplies) {
+    buttons.push({
+      type: 'QUICK_REPLY',
+      text
+    })
+  }
+
+  const urls = parseKeyValueButtons(urlButtons, 2)
+  for (const item of urls) {
+    buttons.push({
+      type: 'URL',
+      text: item.text,
+      url: item.value
+    })
+  }
+
+  const phones = parseKeyValueButtons(phoneButtons, 1)
+  for (const item of phones) {
+    buttons.push({
+      type: 'PHONE_NUMBER',
+      text: item.text,
+      phone_number: normalizePhoneButtonNumber(item.value)
+    })
+  }
+
+  return buttons
 }
 
 async function readJson(response) {
@@ -238,7 +378,9 @@ function buildComponents({
   body,
   bodyExamples,
   footer,
-  buttons
+  quickReplyButtons,
+  urlButtons,
+  phoneButtons
 }) {
   const components = []
 
@@ -276,15 +418,16 @@ function buildComponents({
     })
   }
 
-  const buttonTexts = parseButtons(buttons)
+  const buttons = buildButtons({
+    quickReplyButtons,
+    urlButtons,
+    phoneButtons
+  })
 
-  if (buttonTexts.length) {
+  if (buttons.length) {
     components.push({
       type: 'BUTTONS',
-      buttons: buttonTexts.map((buttonText) => ({
-        type: 'QUICK_REPLY',
-        text: buttonText
-      }))
+      buttons
     })
   }
 
@@ -343,10 +486,25 @@ export default async function handler(req, res) {
     const name = sanitizeTemplateName(bodyPayload.name)
     const language = normalizeLanguage(bodyPayload.language)
     const category = normalizeCategory(bodyPayload.category)
+    const campaignType = normalizeCampaignType(bodyPayload.campaign_type || bodyPayload.campaignType, category)
+    const projectName = cleanText(bodyPayload.project_name || bodyPayload.projectName)
+    const batchName = cleanText(bodyPayload.batch_name || bodyPayload.batchName)
     const headerType = normalizeHeaderType(bodyPayload.header_type || bodyPayload.headerType)
     const body = cleanText(bodyPayload.body)
     const footer = cleanText(bodyPayload.footer)
-    const buttons = bodyPayload.buttons || bodyPayload.quick_reply_buttons || bodyPayload.quickReplyButtons
+
+    const quickReplyButtons =
+      bodyPayload.quick_reply_buttons ||
+      bodyPayload.quickReplyButtons ||
+      bodyPayload.buttons
+
+    const urlButtons =
+      bodyPayload.url_buttons ||
+      bodyPayload.urlButtons
+
+    const phoneButtons =
+      bodyPayload.phone_buttons ||
+      bodyPayload.phoneButtons
 
     const sampleUrl = cleanText(bodyPayload.sample_url || bodyPayload.sampleUrl)
     const sampleFilename = guessFilename(sampleUrl, bodyPayload.sample_filename || bodyPayload.sampleFilename)
@@ -408,7 +566,9 @@ export default async function handler(req, res) {
       body,
       bodyExamples,
       footer,
-      buttons
+      quickReplyButtons,
+      urlButtons,
+      phoneButtons
     })
 
     const metaPayload = {
@@ -434,6 +594,9 @@ export default async function handler(req, res) {
       name,
       language,
       category,
+      campaign_type: campaignType || null,
+      project_name: projectName || null,
+      batch_name: batchName || null,
       status: metaData.status || (response.ok ? 'PENDING' : 'FAILED'),
       rejected_reason: metaData.rejected_reason || metaData.error?.message || null,
       quality_score: metaData.quality_score
