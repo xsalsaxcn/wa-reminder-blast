@@ -75,6 +75,132 @@ function normalizeCampaignType(value) {
   return text
 }
 
+function inferProjectFromText(text) {
+  const lower = cleanText(text).toLowerCase()
+
+  if (
+    lower.includes('suntikan ke-2') ||
+    lower.includes('suntikan kedua') ||
+    lower.includes('dosis ke-2') ||
+    lower.includes('dosis kedua')
+  ) {
+    return 'Reminder Suntikan ke-2'
+  }
+
+  if (
+    lower.includes('jadwal vaksin') ||
+    lower.includes('vaksinasi') ||
+    lower.includes('vaksin')
+  ) {
+    return 'Reminder Jadwal Vaksin'
+  }
+
+  if (
+    lower.includes('omni') ||
+    lower.includes('vaccinology') ||
+    lower.includes('cv2026')
+  ) {
+    return 'OMNI Vaccinology 2026'
+  }
+
+  if (
+    lower.includes('seminar') ||
+    lower.includes('webinar') ||
+    lower.includes('workshop')
+  ) {
+    return 'Event Seminar / Workshop'
+  }
+
+  if (lower.includes('promo')) {
+    return 'Promo Campaign'
+  }
+
+  if (lower.includes('follow')) {
+    return 'Follow-up Campaign'
+  }
+
+  return ''
+}
+
+function inferCampaignFromText(text) {
+  const lower = cleanText(text).toLowerCase()
+
+  if (!lower) {
+    return {
+      campaign_type: '',
+      project_name: '',
+      batch_name: ''
+    }
+  }
+
+  if (
+    lower.includes('reminder') ||
+    lower.includes('pengingat') ||
+    lower.includes('jadwal vaksin') ||
+    lower.includes('jadwal anda') ||
+    lower.includes('jadwal layanan') ||
+    lower.includes('suntikan ke-2') ||
+    lower.includes('suntikan kedua') ||
+    lower.includes('dosis ke-2') ||
+    lower.includes('dosis kedua') ||
+    lower.includes('abaikan pesan ini jika') ||
+    lower.includes('sudah melakukan vaksinasi') ||
+    lower.includes('mau jadwalkan')
+  ) {
+    return {
+      campaign_type: 'Reminder',
+      project_name: inferProjectFromText(text) || 'Reminder Jadwal Layanan',
+      batch_name: ''
+    }
+  }
+
+  if (
+    lower.includes('follow up') ||
+    lower.includes('follow-up') ||
+    lower.includes('followup')
+  ) {
+    return {
+      campaign_type: 'Follow-up',
+      project_name: inferProjectFromText(text) || 'Follow-up Campaign',
+      batch_name: ''
+    }
+  }
+
+  if (
+    lower.includes('promo') ||
+    lower.includes('diskon') ||
+    lower.includes('special price')
+  ) {
+    return {
+      campaign_type: 'Promo',
+      project_name: inferProjectFromText(text) || 'Promo Campaign',
+      batch_name: ''
+    }
+  }
+
+  if (
+    lower.includes('event') ||
+    lower.includes('seminar') ||
+    lower.includes('webinar') ||
+    lower.includes('workshop') ||
+    lower.includes('omni') ||
+    lower.includes('vaccinology') ||
+    lower.includes('cv2026')
+  ) {
+    return {
+      campaign_type: 'Event',
+      project_name: inferProjectFromText(text) || 'Event Campaign',
+      batch_name: ''
+    }
+  }
+
+  return {
+    campaign_type: '',
+    project_name: '',
+    batch_name: ''
+  }
+}
+
 function inferCampaignType({ job, template, item }) {
   const jobCampaign = normalizeCampaignType(job?.campaign_type)
   if (jobCampaign) return jobCampaign
@@ -161,7 +287,7 @@ async function getOutgoingMessages() {
       .from('wa_outgoing_messages')
       .select('*')
       .order('sent_at', { ascending: false })
-      .limit(500)
+      .limit(2000)
 
     if (error) return []
 
@@ -177,7 +303,7 @@ async function getDeliveryLogs() {
       .from('send_delivery_logs')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(1000)
+      .limit(3000)
 
     if (error) return []
 
@@ -222,7 +348,7 @@ async function getJobsMap(jobIds) {
   try {
     const { data, error } = await supabaseAdmin
       .from('send_jobs')
-      .select('id, name, title, type, send_mode, mode, category, campaign_type, project_name, batch_name, created_at, updated_at')
+      .select('*')
       .in('id', ids)
 
     if (error) return new Map()
@@ -245,9 +371,9 @@ async function getLatestCampaignByPhone(phones) {
   try {
     const { data: items, error: itemError } = await supabaseAdmin
       .from('send_job_items')
-      .select('id, job_id, phone, template_name, template_language, created_at, updated_at, processed_at, sent_at, scheduled_at')
+      .select('*')
       .order('created_at', { ascending: false })
-      .limit(20000)
+      .limit(30000)
 
     if (itemError) return new Map()
 
@@ -327,6 +453,7 @@ function mergeLastMessage(mergedMap, payload) {
   const phone = cleanPhone(payload.phone)
   const message = cleanText(payload.message)
   const messageAt = payload.message_at
+  const direction = cleanText(payload.direction).toLowerCase()
 
   if (!phone || !message || !messageAt) return
 
@@ -344,19 +471,74 @@ function mergeLastMessage(mergedMap, payload) {
       unread_count: 0,
       status: 'open',
       created_at: messageAt,
-      updated_at: messageAt
+      updated_at: messageAt,
+      last_outgoing_message: direction === 'outgoing' ? message : '',
+      last_outgoing_at: direction === 'outgoing' ? messageAt : null
     })
 
     return
   }
 
+  const next = { ...existing }
+
   if (messageTime >= existingTime) {
-    mergedMap.set(phone, {
-      ...existing,
-      last_message: message,
-      last_message_at: messageAt,
-      updated_at: messageAt
-    })
+    next.last_message = message
+    next.last_message_at = messageAt
+    next.updated_at = messageAt
+  }
+
+  if (direction === 'outgoing') {
+    const currentOutgoingTime = getTime(existing.last_outgoing_at)
+
+    if (!existing.last_outgoing_at || messageTime >= currentOutgoingTime) {
+      next.last_outgoing_message = message
+      next.last_outgoing_at = messageAt
+    }
+  }
+
+  mergedMap.set(phone, next)
+}
+
+function applyCampaignFallback(item, campaign) {
+  const outgoingText = cleanText(item.last_outgoing_message)
+  const lastText = cleanText(item.last_message)
+  const combinedText = `${outgoingText}\n${lastText}`
+  const inferred = inferCampaignFromText(combinedText)
+
+  let campaignType = cleanText(campaign.campaign_type)
+  let projectName = cleanText(campaign.project_name)
+  let batchName = cleanText(campaign.batch_name)
+
+  if (
+    inferred.campaign_type &&
+    (!campaignType ||
+      campaignType === 'Organic' ||
+      (campaignType === 'Event' && inferred.campaign_type === 'Reminder'))
+  ) {
+    campaignType = inferred.campaign_type
+  }
+
+  if (!projectName && inferred.project_name) {
+    projectName = inferred.project_name
+  }
+
+  if (!batchName && inferred.batch_name) {
+    batchName = inferred.batch_name
+  }
+
+  if (!campaignType) campaignType = 'Organic'
+
+  return {
+    campaign_type: campaignType,
+    project_name: projectName,
+    batch_name: batchName,
+    campaign_label:
+      campaignType === 'Organic'
+        ? 'Organic / Manual Chat'
+        : makeCampaignLabel(campaignType, projectName, batchName),
+    campaign_job_id: campaign.campaign_job_id || null,
+    campaign_template_name: campaign.campaign_template_name || null,
+    campaign_last_sent_at: campaign.campaign_last_sent_at || null
   }
 }
 
@@ -391,7 +573,7 @@ export default async function handler(req, res) {
       .from('wa_incoming_messages')
       .select('*')
       .order('received_at', { ascending: false })
-      .limit(300)
+      .limit(500)
 
     if (incomingError) {
       return res.status(500).json({
@@ -418,7 +600,9 @@ export default async function handler(req, res) {
         unread_count: Math.max(0, toNumber(conv.unread_count, 0)),
         status: conv.status || 'open',
         created_at: conv.created_at,
-        updated_at: conv.updated_at
+        updated_at: conv.updated_at,
+        last_outgoing_message: '',
+        last_outgoing_at: null
       })
     }
 
@@ -440,7 +624,9 @@ export default async function handler(req, res) {
           unread_count: 1,
           status: 'open',
           created_at: msg.received_at,
-          updated_at: msg.received_at
+          updated_at: msg.received_at,
+          last_outgoing_message: '',
+          last_outgoing_at: null
         })
       } else if (msgTime >= existingTime) {
         mergedMap.set(phone, {
@@ -456,7 +642,8 @@ export default async function handler(req, res) {
       mergeLastMessage(mergedMap, {
         phone: item.phone,
         message: item.message || item.media_caption || '',
-        message_at: item.sent_at || item.created_at
+        message_at: item.sent_at || item.created_at,
+        direction: 'outgoing'
       })
     }
 
@@ -468,7 +655,8 @@ export default async function handler(req, res) {
       mergeLastMessage(mergedMap, {
         phone: item.phone,
         message: getLogMessage(item),
-        message_at: getLogTime(item)
+        message_at: getLogTime(item),
+        direction: 'outgoing'
       })
     }
 
@@ -476,7 +664,8 @@ export default async function handler(req, res) {
 
     const mergedConversations = Array.from(mergedMap.values())
       .map((item) => {
-        const campaign = campaignMap.get(cleanPhone(item.phone)) || {}
+        const rawCampaign = campaignMap.get(cleanPhone(item.phone)) || {}
+        const campaign = applyCampaignFallback(item, rawCampaign)
 
         return {
           ...item,
