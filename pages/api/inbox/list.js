@@ -5,6 +5,24 @@ function cleanText(value) {
   return String(value || '').trim()
 }
 
+function cleanPhone(value) {
+  let phone = String(value || '').trim()
+  let result = ''
+
+  if (phone.startsWith('="')) phone = phone.slice(2)
+  if (phone.endsWith('"')) phone = phone.slice(0, -1)
+  if (phone.startsWith("'")) phone = phone.slice(1)
+  if (phone.startsWith('+')) phone = phone.slice(1)
+
+  for (const char of phone) {
+    if ('0123456789'.includes(char)) result += char
+  }
+
+  if (result.startsWith('0')) result = '62' + result.slice(1)
+
+  return result
+}
+
 function toNumber(value, fallback = 0) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
@@ -50,24 +68,61 @@ function normalizeCampaignType(value) {
   if (lower === 'event') return 'Event'
   if (lower === 'reminder') return 'Reminder'
   if (lower === 'promo') return 'Promo'
-  if (lower === 'follow-up' || lower === 'follow up') return 'Follow-up'
+  if (lower === 'follow-up' || lower === 'follow up' || lower === 'followup') return 'Follow-up'
   if (lower === 'other') return 'Other'
+  if (lower === 'organic') return 'Organic'
 
   return text
 }
 
-function getFallbackCampaignType(job) {
-  const type = cleanText(job?.type).toLowerCase()
-  const name = cleanText(job?.name || job?.title).toLowerCase()
+function inferCampaignType({ job, template, item }) {
+  const jobCampaign = normalizeCampaignType(job?.campaign_type)
+  if (jobCampaign) return jobCampaign
 
-  if (type.includes('reminder') || name.includes('reminder') || name.includes('pengingat')) {
+  const templateCampaign = normalizeCampaignType(template?.campaign_type)
+  if (templateCampaign) return templateCampaign
+
+  const jobCategory = cleanText(job?.category).toLowerCase()
+  const templateCategory = cleanText(template?.category).toLowerCase()
+  const jobType = cleanText(job?.type).toLowerCase()
+  const jobMode = cleanText(job?.send_mode || job?.mode).toLowerCase()
+  const jobName = cleanText(job?.name || job?.title).toLowerCase()
+  const templateName = cleanText(item?.template_name || template?.name).toLowerCase()
+
+  if (
+    jobCategory === 'utility' ||
+    templateCategory === 'utility' ||
+    jobType.includes('reminder') ||
+    jobName.includes('reminder') ||
+    jobName.includes('pengingat') ||
+    templateName.includes('reminder') ||
+    templateName.includes('pengingat')
+  ) {
     return 'Reminder'
   }
 
-  if (name.includes('follow')) return 'Follow-up'
-  if (name.includes('promo')) return 'Promo'
+  if (
+    jobName.includes('follow') ||
+    templateName.includes('follow')
+  ) {
+    return 'Follow-up'
+  }
 
-  return 'Event'
+  if (
+    jobName.includes('promo') ||
+    templateName.includes('promo')
+  ) {
+    return 'Promo'
+  }
+
+  if (
+    jobMode === 'template' ||
+    cleanText(item?.template_name)
+  ) {
+    return 'Event'
+  }
+
+  return ''
 }
 
 function makeCampaignLabel(campaignType, projectName, batchName) {
@@ -78,6 +133,26 @@ function makeCampaignLabel(campaignType, projectName, batchName) {
   ].filter(Boolean)
 
   return parts.join(' - ')
+}
+
+function getProjectName({ job, template, item }) {
+  return (
+    cleanText(job?.project_name) ||
+    cleanText(template?.project_name) ||
+    cleanText(job?.name) ||
+    cleanText(job?.title) ||
+    cleanText(item?.template_name) ||
+    cleanText(template?.name) ||
+    ''
+  )
+}
+
+function getBatchName({ job, template }) {
+  return (
+    cleanText(job?.batch_name) ||
+    cleanText(template?.batch_name) ||
+    ''
+  )
 }
 
 async function getOutgoingMessages() {
@@ -112,26 +187,76 @@ async function getDeliveryLogs() {
   }
 }
 
-async function getLatestCampaignByPhone(phones) {
-  const safePhones = Array.from(new Set((phones || []).map(cleanText).filter(Boolean)))
+async function getTemplateMap() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wa_templates')
+      .select('*')
+      .limit(1000)
 
-  if (!safePhones.length) return new Map()
+    if (error) return new Map()
+
+    const map = new Map()
+
+    for (const template of data || []) {
+      const name = cleanText(template.name)
+      const language = cleanText(template.language) || 'id'
+
+      if (name) {
+        map.set(name, template)
+        map.set(`${name}::${language}`, template)
+      }
+    }
+
+    return map
+  } catch (error) {
+    return new Map()
+  }
+}
+
+async function getJobsMap(jobIds) {
+  const ids = Array.from(new Set((jobIds || []).map(cleanText).filter(Boolean)))
+
+  if (!ids.length) return new Map()
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('send_jobs')
+      .select('id, name, title, type, send_mode, mode, category, campaign_type, project_name, batch_name, created_at, updated_at')
+      .in('id', ids)
+
+    if (error) return new Map()
+
+    return new Map((data || []).map((job) => [job.id, job]))
+  } catch (error) {
+    return new Map()
+  }
+}
+
+async function getLatestCampaignByPhone(phones) {
+  const targetPhones = new Set(
+    (phones || [])
+      .map(cleanPhone)
+      .filter(Boolean)
+  )
+
+  if (!targetPhones.size) return new Map()
 
   try {
     const { data: items, error: itemError } = await supabaseAdmin
       .from('send_job_items')
-      .select('id, job_id, phone, template_name, created_at, updated_at, processed_at, sent_at, scheduled_at')
-      .in('phone', safePhones)
+      .select('id, job_id, phone, template_name, template_language, created_at, updated_at, processed_at, sent_at, scheduled_at')
       .order('created_at', { ascending: false })
-      .limit(5000)
+      .limit(20000)
 
     if (itemError) return new Map()
 
     const latestItemByPhone = new Map()
 
     for (const item of items || []) {
-      const phone = cleanText(item.phone)
+      const phone = cleanPhone(item.phone)
       if (!phone) continue
+      if (!targetPhones.has(phone)) continue
 
       const current = latestItemByPhone.get(phone)
       const itemTime = getTime(getItemTime(item))
@@ -150,42 +275,42 @@ async function getLatestCampaignByPhone(phones) {
       )
     )
 
-    let jobsMap = new Map()
-
-    if (jobIds.length) {
-      const { data: jobs, error: jobError } = await supabaseAdmin
-        .from('send_jobs')
-        .select('id, name, title, type, send_mode, campaign_type, project_name, batch_name, created_at')
-        .in('id', jobIds)
-
-      if (!jobError) {
-        jobsMap = new Map((jobs || []).map((job) => [job.id, job]))
-      }
-    }
-
+    const jobsMap = await getJobsMap(jobIds)
+    const templateMap = await getTemplateMap()
     const result = new Map()
 
     for (const [phone, item] of latestItemByPhone.entries()) {
       const job = jobsMap.get(item.job_id) || {}
+      const templateName = cleanText(item.template_name)
+      const templateLanguage = cleanText(item.template_language) || 'id'
 
-      const campaignType =
-        normalizeCampaignType(job.campaign_type) ||
-        getFallbackCampaignType(job)
+      const template =
+        templateMap.get(`${templateName}::${templateLanguage}`) ||
+        templateMap.get(templateName) ||
+        {}
 
-      const projectName =
-        cleanText(job.project_name) ||
-        cleanText(job.name) ||
-        cleanText(job.title) ||
-        cleanText(item.template_name) ||
-        ''
+      const campaignType = inferCampaignType({
+        job,
+        template,
+        item
+      })
 
-      const batchName = cleanText(job.batch_name)
+      const projectName = getProjectName({
+        job,
+        template,
+        item
+      })
+
+      const batchName = getBatchName({
+        job,
+        template
+      })
 
       result.set(phone, {
-        campaign_type: campaignType,
+        campaign_type: campaignType || 'Event',
         project_name: projectName,
         batch_name: batchName,
-        campaign_label: makeCampaignLabel(campaignType, projectName, batchName),
+        campaign_label: makeCampaignLabel(campaignType || 'Event', projectName, batchName),
         campaign_job_id: item.job_id || null,
         campaign_template_name: item.template_name || null,
         campaign_last_sent_at: getItemTime(item) || null
@@ -199,7 +324,7 @@ async function getLatestCampaignByPhone(phones) {
 }
 
 function mergeLastMessage(mergedMap, payload) {
-  const phone = cleanText(payload.phone)
+  const phone = cleanPhone(payload.phone)
   const message = cleanText(payload.message)
   const messageAt = payload.message_at
 
@@ -281,12 +406,13 @@ export default async function handler(req, res) {
     const mergedMap = new Map()
 
     for (const conv of conversations || []) {
-      if (!conv.phone) continue
+      const phone = cleanPhone(conv.phone)
+      if (!phone) continue
 
-      mergedMap.set(conv.phone, {
-        id: conv.id || conv.phone,
-        phone: conv.phone,
-        profile_name: cleanText(conv.profile_name) || conv.phone,
+      mergedMap.set(phone, {
+        id: conv.id || phone,
+        phone,
+        profile_name: cleanText(conv.profile_name) || phone,
         last_message: conv.last_message || '',
         last_message_at: conv.last_message_at || conv.updated_at || conv.created_at,
         unread_count: Math.max(0, toNumber(conv.unread_count, 0)),
@@ -297,17 +423,18 @@ export default async function handler(req, res) {
     }
 
     for (const msg of incomingMessages || []) {
-      if (!msg.phone) continue
+      const phone = cleanPhone(msg.phone)
+      if (!phone) continue
 
-      const existing = mergedMap.get(msg.phone)
+      const existing = mergedMap.get(phone)
       const msgTime = getTime(msg.received_at)
       const existingTime = getTime(existing?.last_message_at)
 
       if (!existing) {
-        mergedMap.set(msg.phone, {
-          id: msg.phone,
-          phone: msg.phone,
-          profile_name: cleanText(msg.profile_name) || msg.phone,
+        mergedMap.set(phone, {
+          id: phone,
+          phone,
+          profile_name: cleanText(msg.profile_name) || phone,
           last_message: msg.body || msg.media_caption || '',
           last_message_at: msg.received_at,
           unread_count: 1,
@@ -316,9 +443,9 @@ export default async function handler(req, res) {
           updated_at: msg.received_at
         })
       } else if (msgTime >= existingTime) {
-        mergedMap.set(msg.phone, {
+        mergedMap.set(phone, {
           ...existing,
-          profile_name: cleanText(msg.profile_name) || existing.profile_name || msg.phone,
+          profile_name: cleanText(msg.profile_name) || existing.profile_name || phone,
           last_message: msg.body || msg.media_caption || existing.last_message || '',
           last_message_at: msg.received_at || existing.last_message_at
         })
@@ -349,7 +476,7 @@ export default async function handler(req, res) {
 
     const mergedConversations = Array.from(mergedMap.values())
       .map((item) => {
-        const campaign = campaignMap.get(item.phone) || {}
+        const campaign = campaignMap.get(cleanPhone(item.phone)) || {}
 
         return {
           ...item,
@@ -368,7 +495,12 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      conversations: mergedConversations
+      conversations: mergedConversations,
+      debug: {
+        conversations: mergedConversations.length,
+        campaign_matched: mergedConversations.filter((item) => item.campaign_type !== 'Organic').length,
+        campaign_unmatched: mergedConversations.filter((item) => item.campaign_type === 'Organic').length
+      }
     })
   } catch (error) {
     return res.status(401).json({
