@@ -22,6 +22,8 @@ export default function InboxPage() {
   const [error, setError] = useState('')
   const [lastUpdated, setLastUpdated] = useState(null)
   const [mobileView, setMobileView] = useState('list')
+  const [campaignTypeFilter, setCampaignTypeFilter] = useState('all')
+  const [projectFilter, setProjectFilter] = useState('all')
 
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
@@ -29,23 +31,58 @@ export default function InboxPage() {
   const messagesScrollRef = useRef(null)
   const fileInputRef = useRef(null)
 
+  const campaignTypeOptions = useMemo(() => {
+    const set = new Set()
+
+    for (const item of conversations || []) {
+      if (item.campaign_type) set.add(item.campaign_type)
+    }
+
+    return Array.from(set).sort()
+  }, [conversations])
+
+  const projectOptions = useMemo(() => {
+    const set = new Set()
+
+    for (const item of conversations || []) {
+      if (campaignTypeFilter !== 'all' && item.campaign_type !== campaignTypeFilter) continue
+      if (item.project_name) set.add(item.project_name)
+    }
+
+    return Array.from(set).sort()
+  }, [conversations, campaignTypeFilter])
+
   const filteredConversations = useMemo(() => {
     const q = searchText.trim().toLowerCase()
-
-    if (!q) return conversations
 
     return conversations.filter((item) => {
       const profileName = String(item.profile_name || '').toLowerCase()
       const phone = String(item.phone || '').toLowerCase()
       const lastMessage = String(item.last_message || '').toLowerCase()
+      const campaignType = String(item.campaign_type || '').toLowerCase()
+      const projectName = String(item.project_name || '').toLowerCase()
+      const batchName = String(item.batch_name || '').toLowerCase()
+      const campaignLabel = String(item.campaign_label || '').toLowerCase()
 
-      return (
+      const matchSearch =
+        !q ||
         profileName.includes(q) ||
         phone.includes(q) ||
-        lastMessage.includes(q)
-      )
+        lastMessage.includes(q) ||
+        campaignType.includes(q) ||
+        projectName.includes(q) ||
+        batchName.includes(q) ||
+        campaignLabel.includes(q)
+
+      const matchCampaignType =
+        campaignTypeFilter === 'all' || item.campaign_type === campaignTypeFilter
+
+      const matchProject =
+        projectFilter === 'all' || item.project_name === projectFilter
+
+      return matchSearch && matchCampaignType && matchProject
     })
-  }, [conversations, searchText])
+  }, [conversations, searchText, campaignTypeFilter, projectFilter])
 
   const filteredMessages = useMemo(() => {
     const q = messageSearchText.trim().toLowerCase()
@@ -550,8 +587,7 @@ export default function InboxPage() {
                   <div>
                     <h2 className="font-semibold text-slate-900">Conversations</h2>
                     <p className="text-xs text-slate-500">
-                      Total: {conversations.length}
-                      {searchText.trim() ? ` - Hasil: ${filteredConversations.length}` : ''}
+                      Total: {conversations.length} - Tampil: {filteredConversations.length}
                     </p>
                   </div>
 
@@ -560,18 +596,53 @@ export default function InboxPage() {
                   </span>
                 </div>
 
+                <div className="mt-3 grid grid-cols-1 gap-2">
+                  <select
+                    value={campaignTypeFilter}
+                    onChange={(event) => {
+                      setCampaignTypeFilter(event.target.value)
+                      setProjectFilter('all')
+                    }}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                  >
+                    <option value="all">Semua Campaign</option>
+                    {campaignTypeOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={projectFilter}
+                    onChange={(event) => setProjectFilter(event.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                  >
+                    <option value="all">Semua Project</option>
+                    {projectOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="mt-3 flex gap-2">
                   <input
                     type="text"
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
-                    placeholder="Cari nama, nomor, pesan..."
+                    placeholder="Cari nama, nomor, pesan, campaign..."
                     className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
                   />
 
-                  {searchText ? (
+                  {searchText || campaignTypeFilter !== 'all' || projectFilter !== 'all' ? (
                     <button
-                      onClick={() => setSearchText('')}
+                      onClick={() => {
+                        setSearchText('')
+                        setCampaignTypeFilter('all')
+                        setProjectFilter('all')
+                      }}
                       className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200"
                     >
                       Clear
@@ -608,6 +679,26 @@ export default function InboxPage() {
                             <div className="mt-1 text-xs text-slate-500">
                               {item.phone}
                             </div>
+
+                            {item.campaign_label ? (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100">
+                                  {item.campaign_type || 'Campaign'}
+                                </span>
+
+                                {item.project_name ? (
+                                  <span className="max-w-[180px] truncate rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">
+                                    {item.project_name}
+                                  </span>
+                                ) : null}
+
+                                {item.batch_name ? (
+                                  <span className="max-w-[140px] truncate rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
+                                    {item.batch_name}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </div>
 
                           {item.unread_count > 0 ? (
@@ -658,6 +749,26 @@ export default function InboxPage() {
                       <p className="truncate text-xs text-slate-500">
                         {selectedConversation ? selectedConversation.phone : 'Pilih conversation'}
                       </p>
+
+                      {selectedConversation?.campaign_label ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100">
+                            {selectedConversation.campaign_type || 'Campaign'}
+                          </span>
+
+                          {selectedConversation.project_name ? (
+                            <span className="max-w-[260px] truncate rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">
+                              {selectedConversation.project_name}
+                            </span>
+                          ) : null}
+
+                          {selectedConversation.batch_name ? (
+                            <span className="max-w-[180px] truncate rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
+                              {selectedConversation.batch_name}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 

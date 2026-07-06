@@ -29,6 +29,57 @@ function getLogTime(item) {
   return item?.created_at || item?.sent_at || item?.updated_at || new Date().toISOString()
 }
 
+function getItemTime(item) {
+  return (
+    item?.processed_at ||
+    item?.sent_at ||
+    item?.updated_at ||
+    item?.created_at ||
+    item?.scheduled_at ||
+    ''
+  )
+}
+
+function normalizeCampaignType(value) {
+  const text = cleanText(value)
+
+  if (!text) return ''
+
+  const lower = text.toLowerCase()
+
+  if (lower === 'event') return 'Event'
+  if (lower === 'reminder') return 'Reminder'
+  if (lower === 'promo') return 'Promo'
+  if (lower === 'follow-up' || lower === 'follow up') return 'Follow-up'
+  if (lower === 'other') return 'Other'
+
+  return text
+}
+
+function getFallbackCampaignType(job) {
+  const type = cleanText(job?.type).toLowerCase()
+  const name = cleanText(job?.name || job?.title).toLowerCase()
+
+  if (type.includes('reminder') || name.includes('reminder') || name.includes('pengingat')) {
+    return 'Reminder'
+  }
+
+  if (name.includes('follow')) return 'Follow-up'
+  if (name.includes('promo')) return 'Promo'
+
+  return 'Event'
+}
+
+function makeCampaignLabel(campaignType, projectName, batchName) {
+  const parts = [
+    cleanText(campaignType),
+    cleanText(projectName),
+    cleanText(batchName)
+  ].filter(Boolean)
+
+  return parts.join(' - ')
+}
+
 async function getOutgoingMessages() {
   try {
     const { data, error } = await supabaseAdmin
@@ -58,6 +109,92 @@ async function getDeliveryLogs() {
     return data || []
   } catch (error) {
     return []
+  }
+}
+
+async function getLatestCampaignByPhone(phones) {
+  const safePhones = Array.from(new Set((phones || []).map(cleanText).filter(Boolean)))
+
+  if (!safePhones.length) return new Map()
+
+  try {
+    const { data: items, error: itemError } = await supabaseAdmin
+      .from('send_job_items')
+      .select('id, job_id, phone, template_name, created_at, updated_at, processed_at, sent_at, scheduled_at')
+      .in('phone', safePhones)
+      .order('created_at', { ascending: false })
+      .limit(5000)
+
+    if (itemError) return new Map()
+
+    const latestItemByPhone = new Map()
+
+    for (const item of items || []) {
+      const phone = cleanText(item.phone)
+      if (!phone) continue
+
+      const current = latestItemByPhone.get(phone)
+      const itemTime = getTime(getItemTime(item))
+      const currentTime = getTime(getItemTime(current))
+
+      if (!current || itemTime >= currentTime) {
+        latestItemByPhone.set(phone, item)
+      }
+    }
+
+    const jobIds = Array.from(
+      new Set(
+        Array.from(latestItemByPhone.values())
+          .map((item) => item.job_id)
+          .filter(Boolean)
+      )
+    )
+
+    let jobsMap = new Map()
+
+    if (jobIds.length) {
+      const { data: jobs, error: jobError } = await supabaseAdmin
+        .from('send_jobs')
+        .select('id, name, title, type, send_mode, campaign_type, project_name, batch_name, created_at')
+        .in('id', jobIds)
+
+      if (!jobError) {
+        jobsMap = new Map((jobs || []).map((job) => [job.id, job]))
+      }
+    }
+
+    const result = new Map()
+
+    for (const [phone, item] of latestItemByPhone.entries()) {
+      const job = jobsMap.get(item.job_id) || {}
+
+      const campaignType =
+        normalizeCampaignType(job.campaign_type) ||
+        getFallbackCampaignType(job)
+
+      const projectName =
+        cleanText(job.project_name) ||
+        cleanText(job.name) ||
+        cleanText(job.title) ||
+        cleanText(item.template_name) ||
+        ''
+
+      const batchName = cleanText(job.batch_name)
+
+      result.set(phone, {
+        campaign_type: campaignType,
+        project_name: projectName,
+        batch_name: batchName,
+        campaign_label: makeCampaignLabel(campaignType, projectName, batchName),
+        campaign_job_id: item.job_id || null,
+        campaign_template_name: item.template_name || null,
+        campaign_last_sent_at: getItemTime(item) || null
+      })
+    }
+
+    return result
+  } catch (error) {
+    return new Map()
   }
 }
 
@@ -208,9 +345,26 @@ export default async function handler(req, res) {
       })
     }
 
-    const mergedConversations = Array.from(mergedMap.values()).sort((a, b) => {
-      return getTime(b.last_message_at) - getTime(a.last_message_at)
-    })
+    const campaignMap = await getLatestCampaignByPhone(Array.from(mergedMap.keys()))
+
+    const mergedConversations = Array.from(mergedMap.values())
+      .map((item) => {
+        const campaign = campaignMap.get(item.phone) || {}
+
+        return {
+          ...item,
+          campaign_type: campaign.campaign_type || 'Organic',
+          project_name: campaign.project_name || '',
+          batch_name: campaign.batch_name || '',
+          campaign_label: campaign.campaign_label || 'Organic / Manual Chat',
+          campaign_job_id: campaign.campaign_job_id || null,
+          campaign_template_name: campaign.campaign_template_name || null,
+          campaign_last_sent_at: campaign.campaign_last_sent_at || null
+        }
+      })
+      .sort((a, b) => {
+        return getTime(b.last_message_at) - getTime(a.last_message_at)
+      })
 
     return res.status(200).json({
       success: true,
