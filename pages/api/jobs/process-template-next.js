@@ -245,8 +245,9 @@ export default async function handler(req, res) {
           templateName: item.template_name,
           language: item.template_language || 'id',
           headerType: item.template_header_type || 'NONE',
+          headerMediaId: item.header_media_id || '',
           attachmentUrl: item.attachment_url || '',
-          attachmentFilename: item.attachment_filename || '',
+          attachmentFilename: item.header_media_filename || item.attachment_filename || '',
           params
         })
 
