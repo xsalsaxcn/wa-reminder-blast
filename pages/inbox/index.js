@@ -648,6 +648,8 @@ export default function InboxPage() {
     }
   }, [router.isReady, router.query.phone])
 
+  const selectedWindowBadge = getWindowBadge(selectedConversation)
+
   return (
     <div className="min-h-[100dvh] bg-slate-100 md:flex md:h-[100dvh] md:overflow-hidden">
       <Sidebar />
