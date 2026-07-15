@@ -310,6 +310,20 @@ async function getDeliveryLogs() {
   )
 }
 
+
+async function getTemplateBlastItems() {
+  return safeQuery(
+    () =>
+      supabaseAdmin
+        .from('send_job_items')
+        .select('id, job_id, phone, message, status, template_name, template_language, template_header_type, created_at, updated_at, processed_at, sent_at, scheduled_at, error_message')
+        .not('template_name', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(50000),
+    []
+  )
+}
+
 async function getTemplateMap() {
   const data = await safeQuery(
     () => supabaseAdmin.from('wa_templates').select('*').limit(1000),
@@ -542,6 +556,7 @@ export default async function handler(req, res) {
 
     const outgoingMessages = await getOutgoingMessages()
     const deliveryLogs = await getDeliveryLogs()
+    const blastHistoryItems = await getTemplateBlastItems()
     const mergedMap = new Map()
 
     for (const conv of conversations || []) {
@@ -602,6 +617,25 @@ export default async function handler(req, res) {
       })
     }
 
+    for (const item of blastHistoryItems || []) {
+      const displayMessage =
+        cleanText(item.message) ||
+        (cleanText(item.template_name) ? 'Template Blast: ' + cleanText(item.template_name) : '[Template Blast]')
+
+      const displayTime =
+        getItemTime(item) ||
+        item.created_at ||
+        item.updated_at ||
+        new Date().toISOString()
+
+      mergeLastMessage(mergedMap, {
+        phone: item.phone,
+        message: displayMessage,
+        message_at: displayTime,
+        direction: 'outgoing'
+      })
+    }
+
     const campaignMap = await getLatestCampaignByPhone(Array.from(mergedMap.keys()))
 
     const mergedConversations = Array.from(mergedMap.values())
@@ -631,7 +665,8 @@ export default async function handler(req, res) {
         conversations: mergedConversations.length,
         campaign_matched: mergedConversations.filter((item) => item.campaign_type !== 'Organic').length,
         campaign_unmatched: mergedConversations.filter((item) => item.campaign_type === 'Organic').length,
-        expired_24h: mergedConversations.filter((item) => item.is_expired_24h).length
+        expired_24h: mergedConversations.filter((item) => item.is_expired_24h).length,
+        blast_history_items: blastHistoryItems.length
       }
     })
   } catch (error) {
