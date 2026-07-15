@@ -56,6 +56,12 @@ const OPERATIONAL_MENUS = [
     roles: ['master', 'admin', 'user', 'agent']
   },
   {
+    label: 'Blast History',
+    href: '/blast-history',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+
+  {
     label: 'Import Reminder',
     href: '/admin/import-reminder',
     roles: ['master', 'admin', 'user', 'agent']
