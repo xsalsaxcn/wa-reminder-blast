@@ -46,9 +46,17 @@ function getPageNumber(value, fallback) {
 function getPageLimit(value) {
   const number = Number(value)
 
-  if (!Number.isFinite(number) || number <= 0) return 50
+  if (!Number.isFinite(number) || number <= 0) return 350
 
-  return Math.min(200, Math.max(10, Math.floor(number)))
+  return Math.min(1000, Math.max(50, Math.floor(number)))
+}
+
+function getPageOffset(value) {
+  const number = Number(value)
+
+  if (!Number.isFinite(number) || number < 0) return 0
+
+  return Math.floor(number)
 }
 
 function getHoursSince(value) {
@@ -692,6 +700,8 @@ export default async function handler(req, res) {
       },
       debug: {
         conversations: mergedConversations.length,
+        total_all: totalConversations,
+        returned_page: pagedConversations.length,
         campaign_matched: mergedConversations.filter((item) => item.campaign_type !== 'Organic').length,
         campaign_unmatched: mergedConversations.filter((item) => item.campaign_type === 'Organic').length,
         expired_24h: mergedConversations.filter((item) => item.is_expired_24h).length,
