@@ -277,9 +277,18 @@ export default function InboxPage() {
       const shouldKeepBottom = isNearBottom()
       const params = new URLSearchParams()
 
+      const focusJobItemId =
+        router?.query?.job_item_id && typeof router.query.job_item_id === 'string'
+          ? router.query.job_item_id
+          : ''
+
       params.set('phone', phone)
       params.set('limit', appendOlder ? '50' : '50')
       params.set('t', String(Date.now()))
+
+      if (focusJobItemId) {
+        params.set('job_item_id', focusJobItemId)
+      }
 
       if (before) params.set('before', before)
 

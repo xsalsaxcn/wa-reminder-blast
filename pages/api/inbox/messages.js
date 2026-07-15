@@ -269,6 +269,7 @@ export default async function handler(req, res) {
     const phone = cleanPhone(req.query.phone)
     const limit = toLimit(req.query.limit)
     const before = cleanText(req.query.before)
+    const focusItemId = cleanText(req.query.job_item_id || req.query.item_id)
     const beforeTime = before ? getTime(before) : 0
 
     if (!phone) {
@@ -434,6 +435,7 @@ export default async function handler(req, res) {
           error_message: latest?.error_message || item.error_message || item.error || null,
           source: 'send_job_items',
           job_id: item.job_id || null,
+          job_item_id: item.id || null,
           template_name: item.template_name || null
         })
       })
@@ -451,8 +453,25 @@ export default async function handler(req, res) {
       ? allMessages.filter((item) => getTime(item.created_at) < beforeTime)
       : allMessages
 
-    const pageMessages = filteredByCursor.slice(-limit)
-    const hasMore = filteredByCursor.length > limit
+    let pageMessages = filteredByCursor.slice(-limit)
+    let hasMore = filteredByCursor.length > limit
+
+    if (focusItemId && !beforeTime) {
+      const focusIndex = allMessages.findIndex((item) => {
+        return (
+          cleanText(item.job_item_id) === focusItemId ||
+          cleanText(item.id) === 'job-item-' + focusItemId
+        )
+      })
+
+      if (focusIndex >= 0) {
+        const start = Math.max(0, focusIndex - 20)
+        const end = Math.min(allMessages.length, focusIndex + 31)
+        pageMessages = allMessages.slice(start, end)
+        hasMore = start > 0
+      }
+    }
+
     const oldestCursor = pageMessages[0]?.created_at || null
 
     return res.status(200).json({

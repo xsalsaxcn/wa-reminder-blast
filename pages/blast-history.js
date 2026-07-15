@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
 
 function cleanText(value) {
@@ -16,7 +15,7 @@ function formatDate(value) {
   }
 }
 
-function shortText(value, max = 120) {
+function shortText(value, max = 180) {
   const text = cleanText(value)
   if (text.length <= max) return text
   return text.slice(0, max) + '...'
@@ -42,6 +41,17 @@ function statusClass(status) {
   }
 
   return 'bg-slate-100 text-slate-600 ring-slate-200'
+}
+
+function blastFooterLabel(row) {
+  const parts = []
+
+  if (row.project_name) parts.push('Project: ' + row.project_name)
+  if (row.campaign_type) parts.push('Event/Campaign: ' + row.campaign_type)
+  if (row.batch_name) parts.push('Batch: ' + row.batch_name)
+  if (row.job_name) parts.push('Blast: ' + row.job_name)
+
+  return parts.filter(Boolean).join(' | ')
 }
 
 export default function BlastHistoryPage() {
@@ -144,9 +154,7 @@ export default function BlastHistoryPage() {
       'job_name'
     ]
 
-    const lines = [
-      headers.join(',')
-    ]
+    const lines = [headers.join(',')]
 
     for (const row of rows) {
       const line = headers.map((key) => {
@@ -335,7 +343,7 @@ export default function BlastHistoryPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="min-w-[1300px] w-full text-left text-sm">
+              <table className="min-w-[1650px] w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-4 py-3">Waktu</th>
@@ -344,7 +352,7 @@ export default function BlastHistoryPage() {
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Reason Failed</th>
                     <th className="px-4 py-3">Message</th>
-                    <th className="px-4 py-3">Action</th>
+                    <th className="w-[170px] min-w-[170px] px-4 py-3">Action</th>
                   </tr>
                 </thead>
 
@@ -384,6 +392,7 @@ export default function BlastHistoryPage() {
                           <div className="mt-1 text-xs text-slate-500">
                             {row.job_name || '-'}
                           </div>
+
                           <div className="mt-2 flex flex-wrap gap-1">
                             {row.campaign_type ? (
                               <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100">
@@ -403,6 +412,12 @@ export default function BlastHistoryPage() {
                               </span>
                             ) : null}
                           </div>
+
+                          {blastFooterLabel(row) ? (
+                            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-slate-600">
+                              {blastFooterLabel(row)}
+                            </div>
+                          ) : null}
                         </td>
 
                         <td className="px-4 py-4">
@@ -422,7 +437,7 @@ export default function BlastHistoryPage() {
 
                         <td className="max-w-sm px-4 py-4 text-slate-700">
                           <div className="whitespace-pre-wrap">
-                            {shortText(row.message, 220) || '-'}
+                            {shortText(row.message, 240) || '-'}
                           </div>
 
                           {row.header_media_id ? (
@@ -436,13 +451,15 @@ export default function BlastHistoryPage() {
                           ) : null}
                         </td>
 
-                        <td className="px-4 py-4">
-                          <Link
-                            href={`/inbox?phone=${encodeURIComponent(row.phone)}`}
-                            className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                        <td className="w-[170px] min-w-[170px] px-4 py-4">
+                          <a
+                            href={`/inbox?phone=${encodeURIComponent(row.phone)}&job_item_id=${encodeURIComponent(row.id)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex w-[135px] items-center justify-center rounded-xl bg-cyan-600 px-4 py-3 text-xs font-black text-white shadow-sm hover:bg-cyan-700"
                           >
                             Open Inbox
-                          </Link>
+                          </a>
                         </td>
                       </tr>
                     ))
