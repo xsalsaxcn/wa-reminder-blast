@@ -31,7 +31,7 @@ export default function InboxPage() {
   const [hasMoreConversations, setHasMoreConversations] = useState(false)
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
 
-  const CONVERSATION_PAGE_SIZE = 50
+  const CONVERSATION_PAGE_SIZE = 10000
 
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
@@ -346,11 +346,11 @@ export default function InboxPage() {
     setError('')
 
     try {
-      const offset = append ? conversations.length : 0
+      const offset = 0
       const params = new URLSearchParams()
 
       params.set('limit', String(CONVERSATION_PAGE_SIZE))
-      params.set('offset', String(offset))
+      params.set('offset', '0')
       params.set('t', String(Date.now()))
 
       const response = await fetch('/api/inbox/list?' + params.toString(), {
@@ -376,24 +376,11 @@ export default function InboxPage() {
       )
 
       setConversationTotal(Number(data.page?.total || list.length))
-      setHasMoreConversations(Boolean(data.page?.has_more))
+      setHasMoreConversations(false)
       setLastUpdated(new Date())
 
       if (append) {
-        setConversations((current) => {
-          const map = new Map()
-
-          for (const item of current || []) {
-            if (item.phone) map.set(item.phone, item)
-          }
-
-          for (const item of list || []) {
-            if (item.phone) map.set(item.phone, item)
-          }
-
-          return Array.from(map.values())
-        })
-
+        setConversations(list)
         return
       }
 
@@ -895,7 +882,7 @@ export default function InboxPage() {
                         disabled={loadingMoreConversations}
                         className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-60"
                       >
-                        {loadingMoreConversations ? 'Loading...' : 'Muat chat lainnya'}
+                        {loadingMoreConversations ? 'Loading...' : 'Load semua chat'}
                       </button>
                       <p className="mt-2 text-center text-xs text-slate-400">
                         Loaded {conversations.length} dari {conversationTotal || conversations.length} conversation

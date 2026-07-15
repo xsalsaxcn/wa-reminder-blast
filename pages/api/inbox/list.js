@@ -46,9 +46,9 @@ function getPageNumber(value, fallback) {
 function getPageLimit(value) {
   const number = Number(value)
 
-  if (!Number.isFinite(number) || number <= 0) return 350
+  if (!Number.isFinite(number) || number <= 0) return 10000
 
-  return Math.min(1000, Math.max(50, Math.floor(number)))
+  return Math.min(20000, Math.max(50, Math.floor(number)))
 }
 
 function getPageOffset(value) {
@@ -335,7 +335,32 @@ async function getDeliveryLogs() {
 }
 
 
-async function getTemplateBlastItems() {
+async function getTemplateBlastItemsPaged() {
+  const all = []
+  const pageSize = 1000
+
+  for (let from = 0; from < 100000; from += pageSize) {
+    const to = from + pageSize - 1
+
+    const result = await supabaseAdmin
+      .from('send_job_items')
+      .select('id, job_id, phone, message, status, template_name, template_language, template_header_type, created_at, updated_at, processed_at, sent_at, scheduled_at, error_message')
+      .not('template_name', 'is', null)
+      .order('created_at', { ascending: false })
+      .range(from, to)
+
+    if (result.error) break
+
+    const rows = result.data || []
+    all.push(...rows)
+
+    if (rows.length < pageSize) break
+  }
+
+  return all
+}
+
+async function getTemplateBlastItemsOld() {
   return safeQuery(
     () =>
       supabaseAdmin
@@ -580,7 +605,7 @@ export default async function handler(req, res) {
 
     const outgoingMessages = await getOutgoingMessages()
     const deliveryLogs = await getDeliveryLogs()
-    const blastHistoryItems = await getTemplateBlastItems()
+    const blastHistoryItems = await getTemplateBlastItemsPaged()
     const mergedMap = new Map()
 
     for (const conv of conversations || []) {
@@ -683,7 +708,7 @@ export default async function handler(req, res) {
       .sort((a, b) => getTime(b.last_message_at) - getTime(a.last_message_at))
 
     const pageLimit = getPageLimit(req.query.limit)
-    const pageOffset = getPageNumber(req.query.offset, 0)
+    const pageOffset = getPageOffset(req.query.offset)
     const totalConversations = mergedConversations.length
     const pagedConversations = mergedConversations.slice(pageOffset, pageOffset + pageLimit)
 
