@@ -15,7 +15,7 @@ function formatDate(value) {
   }
 }
 
-function shortText(value, max = 180) {
+function shortText(value, max = 210) {
   const text = cleanText(value)
   if (text.length <= max) return text
   return text.slice(0, max) + '...'
@@ -43,19 +43,26 @@ function statusClass(status) {
   return 'bg-slate-100 text-slate-600 ring-slate-200'
 }
 
-function blastFooterLabel(row) {
+function footerText(row) {
   const parts = []
 
   if (row.project_name) parts.push('Project: ' + row.project_name)
-  if (row.campaign_type) parts.push('Event/Campaign: ' + row.campaign_type)
+  if (row.campaign_type) parts.push('Campaign: ' + row.campaign_type)
   if (row.batch_name) parts.push('Batch: ' + row.batch_name)
   if (row.job_name) parts.push('Blast: ' + row.job_name)
 
-  return parts.filter(Boolean).join(' | ')
+  return parts.join(' | ')
 }
 
 export default function BlastHistoryPage() {
   const [rows, setRows] = useState([])
+  const [options, setOptions] = useState({
+    campaign_types: [],
+    project_names: [],
+    batch_names: [],
+    templates: []
+  })
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [lastUpdated, setLastUpdated] = useState(null)
@@ -63,8 +70,11 @@ export default function BlastHistoryPage() {
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
-  const [template, setTemplate] = useState('')
+  const [campaignType, setCampaignType] = useState('all')
+  const [projectName, setProjectName] = useState('all')
+  const [template, setTemplate] = useState('all')
   const [page, setPage] = useState(1)
+
   const [pageInfo, setPageInfo] = useState({
     page: 1,
     limit: 500,
@@ -77,16 +87,10 @@ export default function BlastHistoryPage() {
   const limit = 500
 
   const summary = useMemo(() => {
-    const sent = rows.filter((row) => row.status === 'sent').length
-    const failed = rows.filter((row) => row.status === 'failed').length
-    const pending = rows.filter((row) => ['pending', 'queued'].includes(row.status)).length
-    const processing = rows.filter((row) => row.status === 'processing').length
-
     return {
-      sent,
-      failed,
-      pending,
-      processing
+      sent: rows.filter((row) => row.status === 'sent').length,
+      failed: rows.filter((row) => row.status === 'failed').length,
+      pending: rows.filter((row) => ['pending', 'queued', 'processing'].includes(row.status)).length
     }
   }, [rows])
 
@@ -102,7 +106,9 @@ export default function BlastHistoryPage() {
 
       if (search) params.set('q', search)
       if (status !== 'all') params.set('status', status)
-      if (template) params.set('template', template)
+      if (campaignType !== 'all') params.set('campaign_type', campaignType)
+      if (projectName !== 'all') params.set('project_name', projectName)
+      if (template !== 'all') params.set('template', template)
 
       const response = await fetch('/api/blast-history/list?' + params.toString(), {
         cache: 'no-store'
@@ -115,6 +121,12 @@ export default function BlastHistoryPage() {
       }
 
       setRows(data.rows || [])
+      setOptions(data.options || {
+        campaign_types: [],
+        project_names: [],
+        batch_names: [],
+        templates: []
+      })
       setPageInfo(data.page || {})
       setPage(targetPage)
       setLastUpdated(new Date())
@@ -135,7 +147,9 @@ export default function BlastHistoryPage() {
     setSearchInput('')
     setSearch('')
     setStatus('all')
-    setTemplate('')
+    setCampaignType('all')
+    setProjectName('all')
+    setTemplate('all')
     setPage(1)
   }
 
@@ -179,7 +193,7 @@ export default function BlastHistoryPage() {
 
   useEffect(() => {
     loadRows(1)
-  }, [search, status, template])
+  }, [search, status, campaignType, projectName, template])
 
   return (
     <div className="min-h-screen bg-slate-50 lg:flex">
@@ -255,20 +269,60 @@ export default function BlastHistoryPage() {
 
             <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm">
               <p className="text-xs font-bold text-amber-700">Pending Page</p>
-              <p className="mt-1 text-2xl font-black text-amber-800">
-                {summary.pending + summary.processing}
-              </p>
+              <p className="mt-1 text-2xl font-black text-amber-800">{summary.pending}</p>
             </div>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-            <form onSubmit={applySearch} className="grid gap-3 lg:grid-cols-[1fr_180px_180px_auto_auto]">
+            <form onSubmit={applySearch} className="grid gap-3 lg:grid-cols-[1fr_170px_190px_230px_190px_auto_auto]">
               <input
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Cari nomor, pesan, template, status..."
+                placeholder="Cari nomor / nama / pesan..."
                 className="rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-500"
               />
+
+              <select
+                value={campaignType}
+                onChange={(event) => {
+                  setCampaignType(event.target.value)
+                  setPage(1)
+                }}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-500"
+              >
+                <option value="all">Semua Campaign</option>
+                {options.campaign_types.map((item) => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
+              </select>
+
+              <select
+                value={projectName}
+                onChange={(event) => {
+                  setProjectName(event.target.value)
+                  setPage(1)
+                }}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-500"
+              >
+                <option value="all">Semua Project</option>
+                {options.project_names.map((item) => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
+              </select>
+
+              <select
+                value={template}
+                onChange={(event) => {
+                  setTemplate(event.target.value)
+                  setPage(1)
+                }}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-500"
+              >
+                <option value="all">Semua Template</option>
+                {options.templates.map((item) => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
+              </select>
 
               <select
                 value={status}
@@ -284,16 +338,6 @@ export default function BlastHistoryPage() {
                 <option value="pending">Pending</option>
                 <option value="processing">Processing</option>
               </select>
-
-              <input
-                value={template}
-                onChange={(event) => {
-                  setTemplate(event.target.value)
-                  setPage(1)
-                }}
-                placeholder="Template name"
-                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-500"
-              />
 
               <button
                 type="submit"
@@ -312,7 +356,7 @@ export default function BlastHistoryPage() {
             </form>
           </div>
 
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-col gap-2 border-b border-slate-100 p-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="font-black text-slate-950">Sent Message Log</h2>
@@ -342,130 +386,100 @@ export default function BlastHistoryPage() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-[1650px] w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                    <th className="px-4 py-3">Waktu</th>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3">Template / Campaign</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Reason Failed</th>
-                    <th className="px-4 py-3">Message</th>
-                    <th className="w-[170px] min-w-[170px] px-4 py-3">Action</th>
-                  </tr>
-                </thead>
+            <div className="divide-y divide-slate-100">
+              {loading ? (
+                <div className="p-10 text-center text-sm text-slate-500">
+                  Loading blast history...
+                </div>
+              ) : rows.length === 0 ? (
+                <div className="p-10 text-center text-sm text-slate-500">
+                  Tidak ada data sesuai filter.
+                </div>
+              ) : (
+                rows.map((row) => (
+                  <div key={row.id} className="grid gap-4 p-4 hover:bg-slate-50 lg:grid-cols-[160px_210px_1fr_150px_145px]">
+                    <div className="text-xs text-slate-500">
+                      <div className="font-bold text-slate-700">{formatDate(row.display_time)}</div>
+                      <div className="mt-2 text-slate-400">Row ID:</div>
+                      <div className="break-all text-[10px]">{row.id}</div>
+                    </div>
 
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                        Loading blast history...
-                      </td>
-                    </tr>
-                  ) : rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                        Belum ada data blast history.
-                      </td>
-                    </tr>
-                  ) : (
-                    rows.map((row) => (
-                      <tr key={row.id} className="border-b border-slate-50 align-top hover:bg-slate-50">
-                        <td className="whitespace-nowrap px-4 py-4 text-xs text-slate-500">
-                          {formatDate(row.display_time)}
-                        </td>
+                    <div>
+                      <div className="font-black text-slate-950">{row.name || '-'}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.phone}</div>
+                      <a
+                        href={`/inbox?phone=${encodeURIComponent(row.phone)}&job_item_id=${encodeURIComponent(row.id)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-3 inline-flex rounded-xl bg-cyan-600 px-4 py-2 text-xs font-black text-white hover:bg-cyan-700"
+                      >
+                        Open Inbox
+                      </a>
+                    </div>
 
-                        <td className="px-4 py-4">
-                          <div className="font-bold text-slate-900">
-                            {row.name || '-'}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {row.phone}
-                          </div>
-                        </td>
+                    <div>
+                      <div className="font-black text-slate-950">{row.template_name || '-'}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.job_name || '-'}</div>
 
-                        <td className="px-4 py-4">
-                          <div className="font-bold text-slate-900">
-                            {row.template_name || '-'}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {row.job_name || '-'}
-                          </div>
-
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {row.campaign_type ? (
-                              <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100">
-                                {row.campaign_type}
-                              </span>
-                            ) : null}
-
-                            {row.project_name ? (
-                              <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">
-                                {row.project_name}
-                              </span>
-                            ) : null}
-
-                            {row.batch_name ? (
-                              <span className="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
-                                {row.batch_name}
-                              </span>
-                            ) : null}
-                          </div>
-
-                          {blastFooterLabel(row) ? (
-                            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-slate-600">
-                              {blastFooterLabel(row)}
-                            </div>
-                          ) : null}
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ring-1 ${statusClass(row.status)}`}>
-                            {row.status || '-'}
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {row.campaign_type ? (
+                          <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100">
+                            {row.campaign_type}
                           </span>
-                          {row.raw_status && row.raw_status !== row.status ? (
-                            <div className="mt-1 text-[10px] text-slate-400">
-                              raw: {row.raw_status}
-                            </div>
-                          ) : null}
-                        </td>
+                        ) : null}
 
-                        <td className="max-w-xs px-4 py-4 text-xs text-rose-700">
-                          {row.failed_reason || '-'}
-                        </td>
+                        {row.project_name ? (
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">
+                            {row.project_name}
+                          </span>
+                        ) : null}
 
-                        <td className="max-w-sm px-4 py-4 text-slate-700">
-                          <div className="whitespace-pre-wrap">
-                            {shortText(row.message, 240) || '-'}
-                          </div>
+                        {row.batch_name ? (
+                          <span className="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
+                            {row.batch_name}
+                          </span>
+                        ) : null}
+                      </div>
 
-                          {row.header_media_id ? (
-                            <div className="mt-2 rounded-lg bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
-                              Meta Media ID: {row.header_media_id}
-                            </div>
-                          ) : row.attachment_url ? (
-                            <div className="mt-2 rounded-lg bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700">
-                              URL Attachment
-                            </div>
-                          ) : null}
-                        </td>
+                      {footerText(row) ? (
+                        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-slate-600">
+                          {footerText(row)}
+                        </div>
+                      ) : null}
 
-                        <td className="w-[170px] min-w-[170px] px-4 py-4">
-                          <a
-                            href={`/inbox?phone=${encodeURIComponent(row.phone)}&job_item_id=${encodeURIComponent(row.id)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex w-[135px] items-center justify-center rounded-xl bg-cyan-600 px-4 py-3 text-xs font-black text-white shadow-sm hover:bg-cyan-700"
-                          >
-                            Open Inbox
-                          </a>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                      <div className="mt-3 whitespace-pre-wrap text-sm text-slate-700">
+                        {shortText(row.message, 260) || '-'}
+                      </div>
+
+                      {row.header_media_id ? (
+                        <div className="mt-2 rounded-lg bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
+                          Meta Media ID: {row.header_media_id}
+                        </div>
+                      ) : row.attachment_url ? (
+                        <div className="mt-2 rounded-lg bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700">
+                          URL Attachment
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div>
+                      <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ring-1 ${statusClass(row.status)}`}>
+                        {row.status || '-'}
+                      </span>
+
+                      {row.raw_status && row.raw_status !== row.status ? (
+                        <div className="mt-2 text-[10px] text-slate-400">
+                          raw: {row.raw_status}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="text-xs text-rose-700">
+                      {row.failed_reason || '-'}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="flex flex-col gap-3 border-t border-slate-100 p-4 md:flex-row md:items-center md:justify-between">

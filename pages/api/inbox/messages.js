@@ -306,7 +306,19 @@ export default async function handler(req, res) {
     )
 
     const deliveryLogs = await getDeliveryLogs(phone)
-    const jobItems = await getJobItems(phone)
+    let jobItems = await getJobItems(phone)
+
+    if (focusItemId && !jobItems.some((item) => cleanText(item.id) === focusItemId)) {
+      const focusItemResult = await supabaseAdmin
+        .from('send_job_items')
+        .select('*')
+        .eq('id', focusItemId)
+        .single()
+
+      if (!focusItemResult.error && focusItemResult.data) {
+        jobItems = [...jobItems, focusItemResult.data]
+      }
+    }
 
     const outgoingMetaIds = new Set(
       (outgoing || [])

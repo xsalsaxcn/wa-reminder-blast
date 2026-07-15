@@ -35,15 +35,18 @@ function toLimit(value) {
   return Math.min(1000, Math.max(50, Math.floor(number)))
 }
 
-function getItemTime(item) {
-  return (
-    item.sent_at ||
-    item.processed_at ||
-    item.updated_at ||
-    item.created_at ||
-    item.scheduled_at ||
-    null
-  )
+function normalizeStatus(value) {
+  const text = cleanText(value).toLowerCase()
+
+  if (['sent', 'success', 'delivered', 'read', 'done', 'completed'].includes(text)) return 'sent'
+  if (['failed', 'error', 'undelivered', 'rejected', 'cancelled'].includes(text)) return 'failed'
+  if (['pending', 'queued', 'processing'].includes(text)) return text
+
+  return text || 'unknown'
+}
+
+function getDisplayTime(item) {
+  return item.sent_at || item.processed_at || item.updated_at || item.created_at || item.scheduled_at || null
 }
 
 function getFailedReason(item) {
@@ -57,66 +60,56 @@ function getFailedReason(item) {
   )
 }
 
-function normalizeStatus(value) {
-  const text = cleanText(value).toLowerCase()
-
-  if (['sent', 'success', 'delivered', 'read', 'done', 'completed'].includes(text)) {
-    return 'sent'
-  }
-
-  if (['failed', 'error', 'undelivered', 'rejected', 'cancelled'].includes(text)) {
-    return 'failed'
-  }
-
-  if (['pending', 'queued', 'processing'].includes(text)) {
-    return text
-  }
-
-  return text || 'unknown'
+function uniqueValues(rows, key) {
+  return Array.from(
+    new Set(
+      (rows || [])
+        .map((row) => cleanText(row[key]))
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b))
 }
 
-function makeJobMap(rows) {
-  return new Map((rows || []).map((job) => [job.id, job]))
-}
-
-function makeContactKey(databaseId, phone) {
-  return `${cleanText(databaseId)}::${cleanPhone(phone)}`
-}
-
-async function fetchJobs(jobIds) {
-  const ids = Array.from(new Set((jobIds || []).map(cleanText).filter(Boolean)))
-
-  if (!ids.length) return new Map()
-
+async function getJobs() {
   const result = await supabaseAdmin
     .from('send_jobs')
-    .select('*')
-    .in('id', ids)
+    .select('id, name, title, campaign_type, project_name, batch_name, database_id, created_at')
+    .order('created_at', { ascending: false })
+    .limit(5000)
 
-  if (result.error) return new Map()
+  if (result.error) return []
 
-  return makeJobMap(result.data || [])
+  return result.data || []
 }
 
-async function fetchContacts(databaseIds, phones) {
-  const dbIds = Array.from(new Set((databaseIds || []).map(cleanText).filter(Boolean)))
+async function getTemplates() {
+  const result = await supabaseAdmin
+    .from('send_job_items')
+    .select('template_name')
+    .not('template_name', 'is', null)
+    .limit(50000)
+
+  if (result.error) return []
+
+  return uniqueValues(result.data || [], 'template_name')
+}
+
+async function getContacts(phones) {
   const cleanPhones = Array.from(new Set((phones || []).map(cleanPhone).filter(Boolean)))
 
-  if (!dbIds.length || !cleanPhones.length) return new Map()
+  if (!cleanPhones.length) return new Map()
 
   const result = await supabaseAdmin
     .from('contacts')
-    .select('id, database_id, name, phone')
-    .in('database_id', dbIds)
+    .select('id, name, phone')
     .in('phone', cleanPhones)
-    .limit(5000)
+    .limit(10000)
 
   if (result.error) return new Map()
 
   const map = new Map()
 
   for (const contact of result.data || []) {
-    map.set(makeContactKey(contact.database_id, contact.phone), contact)
     map.set(cleanPhone(contact.phone), contact)
   }
 
@@ -126,22 +119,15 @@ async function fetchContacts(databaseIds, phones) {
 function decorateItem(item, jobMap, contactMap) {
   const job = jobMap.get(item.job_id) || {}
   const phone = cleanPhone(item.phone)
-  const contact =
-    contactMap.get(makeContactKey(job.database_id, phone)) ||
-    contactMap.get(phone) ||
-    {}
-
-  const status = normalizeStatus(item.status)
-  const failedReason = getFailedReason(item)
+  const contact = contactMap.get(phone) || {}
 
   return {
     id: item.id,
     job_id: item.job_id || null,
     job_name: job.name || job.title || '',
-    database_id: job.database_id || null,
-
     phone,
     name: contact.name || item.name || '',
+
     template_name: item.template_name || '',
     template_language: item.template_language || 'id',
     template_header_type: item.template_header_type || '',
@@ -150,9 +136,9 @@ function decorateItem(item, jobMap, contactMap) {
     project_name: job.project_name || '',
     batch_name: job.batch_name || '',
 
-    status,
+    status: normalizeStatus(item.status),
     raw_status: item.status || '',
-    failed_reason: failedReason,
+    failed_reason: getFailedReason(item),
 
     message: item.message || '',
     scheduled_at: item.scheduled_at || null,
@@ -160,7 +146,7 @@ function decorateItem(item, jobMap, contactMap) {
     sent_at: item.sent_at || null,
     created_at: item.created_at || null,
     updated_at: item.updated_at || null,
-    display_time: getItemTime(item),
+    display_time: getDisplayTime(item),
 
     attachment_url: item.attachment_url || null,
     attachment_filename: item.attachment_filename || null,
@@ -192,7 +178,62 @@ export default async function handler(req, res) {
     const q = cleanText(req.query.q)
     const status = cleanText(req.query.status).toLowerCase()
     const template = cleanText(req.query.template)
-    const jobId = cleanText(req.query.job_id || req.query.jobId)
+    const campaignType = cleanText(req.query.campaign_type || req.query.campaignType)
+    const projectName = cleanText(req.query.project_name || req.query.projectName)
+    const batchName = cleanText(req.query.batch_name || req.query.batchName)
+
+    const jobs = await getJobs()
+    const templates = await getTemplates()
+
+    let filteredJobs = jobs
+
+    if (campaignType && campaignType !== 'all') {
+      filteredJobs = filteredJobs.filter((job) => cleanText(job.campaign_type) === campaignType)
+    }
+
+    if (projectName && projectName !== 'all') {
+      filteredJobs = filteredJobs.filter((job) => cleanText(job.project_name || job.name || job.title) === projectName)
+    }
+
+    if (batchName && batchName !== 'all') {
+      filteredJobs = filteredJobs.filter((job) => cleanText(job.batch_name) === batchName)
+    }
+
+    const needJobFilter =
+      (campaignType && campaignType !== 'all') ||
+      (projectName && projectName !== 'all') ||
+      (batchName && batchName !== 'all')
+
+    const filteredJobIds = filteredJobs.map((job) => job.id).filter(Boolean)
+
+    if (needJobFilter && !filteredJobIds.length) {
+      return res.status(200).json({
+        success: true,
+        rows: [],
+        page: {
+          page,
+          limit,
+          offset,
+          returned: 0,
+          total: 0,
+          total_pages: 1,
+          has_next: false,
+          has_prev: false
+        },
+        options: {
+          campaign_types: uniqueValues(jobs, 'campaign_type'),
+          project_names: Array.from(
+            new Set(
+              jobs
+                .map((job) => cleanText(job.project_name || job.name || job.title))
+                .filter(Boolean)
+            )
+          ).sort((a, b) => a.localeCompare(b)),
+          batch_names: uniqueValues(jobs, 'batch_name'),
+          templates
+        }
+      })
+    }
 
     let query = supabaseAdmin
       .from('send_job_items')
@@ -201,11 +242,11 @@ export default async function handler(req, res) {
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1)
 
-    if (jobId) {
-      query = query.eq('job_id', jobId)
+    if (needJobFilter) {
+      query = query.in('job_id', filteredJobIds)
     }
 
-    if (template) {
+    if (template && template !== 'all') {
       query = query.eq('template_name', template)
     }
 
@@ -237,14 +278,12 @@ export default async function handler(req, res) {
 
     const items = result.data || []
     const total = result.count || 0
+    const jobIds = Array.from(new Set(items.map((item) => item.job_id).filter(Boolean)))
 
-    const jobIds = items.map((item) => item.job_id).filter(Boolean)
-    const jobMap = await fetchJobs(jobIds)
+    const pageJobs = jobs.filter((job) => jobIds.includes(job.id))
+    const jobMap = new Map(pageJobs.map((job) => [job.id, job]))
 
-    const databaseIds = Array.from(jobMap.values()).map((job) => job.database_id).filter(Boolean)
-    const phones = items.map((item) => item.phone).filter(Boolean)
-    const contactMap = await fetchContacts(databaseIds, phones)
-
+    const contactMap = await getContacts(items.map((item) => item.phone))
     const rows = items.map((item) => decorateItem(item, jobMap, contactMap))
 
     return res.status(200).json({
@@ -260,11 +299,25 @@ export default async function handler(req, res) {
         has_next: offset + limit < total,
         has_prev: page > 1
       },
+      options: {
+        campaign_types: uniqueValues(jobs, 'campaign_type'),
+        project_names: Array.from(
+          new Set(
+            jobs
+              .map((job) => cleanText(job.project_name || job.name || job.title))
+              .filter(Boolean)
+          )
+        ).sort((a, b) => a.localeCompare(b)),
+        batch_names: uniqueValues(jobs, 'batch_name'),
+        templates
+      },
       filters: {
         q,
         status,
         template,
-        job_id: jobId
+        campaign_type: campaignType,
+        project_name: projectName,
+        batch_name: batchName
       }
     })
   } catch (error) {
