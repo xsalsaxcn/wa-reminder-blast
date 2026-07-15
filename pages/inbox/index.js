@@ -27,6 +27,11 @@ export default function InboxPage() {
   const [mobileView, setMobileView] = useState('list')
   const [campaignTypeFilter, setCampaignTypeFilter] = useState('all')
   const [projectFilter, setProjectFilter] = useState('all')
+  const [conversationTotal, setConversationTotal] = useState(0)
+  const [hasMoreConversations, setHasMoreConversations] = useState(false)
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
+
+  const CONVERSATION_PAGE_SIZE = 50
 
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
@@ -334,12 +339,21 @@ export default function InboxPage() {
     await loadMessages(selectedConversation.phone, true, false, oldestCursor)
   }
 
-  async function loadConversations(silent = false) {
-    if (!silent) setLoading(true)
+  async function loadConversations(silent = false, append = false) {
+    if (append) setLoadingMoreConversations(true)
+    else if (!silent) setLoading(true)
+
     setError('')
 
     try {
-      const response = await fetch('/api/inbox/list?t=' + Date.now(), {
+      const offset = append ? conversations.length : 0
+      const params = new URLSearchParams()
+
+      params.set('limit', String(CONVERSATION_PAGE_SIZE))
+      params.set('offset', String(offset))
+      params.set('t', String(Date.now()))
+
+      const response = await fetch('/api/inbox/list?' + params.toString(), {
         cache: 'no-store'
       })
 
@@ -361,8 +375,29 @@ export default function InboxPage() {
           : item
       )
 
-      setConversations(list)
+      setConversationTotal(Number(data.page?.total || list.length))
+      setHasMoreConversations(Boolean(data.page?.has_more))
       setLastUpdated(new Date())
+
+      if (append) {
+        setConversations((current) => {
+          const map = new Map()
+
+          for (const item of current || []) {
+            if (item.phone) map.set(item.phone, item)
+          }
+
+          for (const item of list || []) {
+            if (item.phone) map.set(item.phone, item)
+          }
+
+          return Array.from(map.values())
+        })
+
+        return
+      }
+
+      setConversations(list)
 
       if (list.length === 0) {
         setSelectedConversation(null)
@@ -395,8 +430,15 @@ export default function InboxPage() {
     } catch (err) {
       setError(err.message || 'Gagal memuat inbox')
     } finally {
-      if (!silent) setLoading(false)
+      if (append) setLoadingMoreConversations(false)
+      else if (!silent) setLoading(false)
     }
+  }
+
+  async function loadMoreConversations() {
+    if (loadingMoreConversations || !hasMoreConversations) return
+
+    await loadConversations(true, true)
   }
 
   async function selectConversation(conversation) {
@@ -709,7 +751,7 @@ export default function InboxPage() {
                   <div>
                     <h2 className="font-semibold text-slate-900">Conversations</h2>
                     <p className="text-xs text-slate-500">
-                      Total: {conversations.length} - Tampil: {filteredConversations.length}
+                      Total: {conversationTotal || conversations.length} - Loaded: {conversations.length} - Tampil: {filteredConversations.length}
                     </p>
                   </div>
 
@@ -781,7 +823,8 @@ export default function InboxPage() {
                 ) : filteredConversations.length === 0 ? (
                   <div className="p-4 text-sm text-slate-500">Tidak ada conversation yang cocok.</div>
                 ) : (
-                  filteredConversations.map((item) => {
+                  <>
+                  {filteredConversations.map((item) => {
                     const active = selectedConversation?.phone === item.phone
                     const windowBadge = getWindowBadge(item)
 
@@ -842,7 +885,24 @@ export default function InboxPage() {
                         </div>
                       </button>
                     )
-                  })
+                  })}
+
+                  {hasMoreConversations ? (
+                    <div className="p-4">
+                      <button
+                        type="button"
+                        onClick={loadMoreConversations}
+                        disabled={loadingMoreConversations}
+                        className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-60"
+                      >
+                        {loadingMoreConversations ? 'Loading...' : 'Muat chat lainnya'}
+                      </button>
+                      <p className="mt-2 text-center text-xs text-slate-400">
+                        Loaded {conversations.length} dari {conversationTotal || conversations.length} conversation
+                      </p>
+                    </div>
+                  ) : null}
+                  </>
                 )}
               </div>
             </section>

@@ -35,6 +35,22 @@ function getTime(value) {
   return Number.isFinite(time) ? time : 0
 }
 
+function getPageNumber(value, fallback) {
+  const number = Number(value)
+
+  if (!Number.isFinite(number)) return fallback
+
+  return Math.max(0, Math.floor(number))
+}
+
+function getPageLimit(value) {
+  const number = Number(value)
+
+  if (!Number.isFinite(number) || number <= 0) return 50
+
+  return Math.min(200, Math.max(10, Math.floor(number)))
+}
+
 function getHoursSince(value) {
   const time = getTime(value)
   if (!time) return null
@@ -658,9 +674,22 @@ export default async function handler(req, res) {
       })
       .sort((a, b) => getTime(b.last_message_at) - getTime(a.last_message_at))
 
+    const pageLimit = getPageLimit(req.query.limit)
+    const pageOffset = getPageNumber(req.query.offset, 0)
+    const totalConversations = mergedConversations.length
+    const pagedConversations = mergedConversations.slice(pageOffset, pageOffset + pageLimit)
+
     return res.status(200).json({
       success: true,
-      conversations: mergedConversations,
+      conversations: pagedConversations,
+      page: {
+        limit: pageLimit,
+        offset: pageOffset,
+        returned: pagedConversations.length,
+        total: totalConversations,
+        has_more: pageOffset + pageLimit < totalConversations,
+        next_offset: pageOffset + pageLimit < totalConversations ? pageOffset + pageLimit : null
+      },
       debug: {
         conversations: mergedConversations.length,
         campaign_matched: mergedConversations.filter((item) => item.campaign_type !== 'Organic').length,
