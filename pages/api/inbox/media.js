@@ -12,6 +12,14 @@ function getMetaConfig() {
   }
 }
 
+function cleanText(value) {
+  return String(value || '').trim()
+}
+
+function cleanFilename(value) {
+  return cleanText(value || 'attachment').replace(/"/g, '').replace(/[\\/]/g, '_')
+}
+
 export default async function handler(req, res) {
   try {
     await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
@@ -23,8 +31,8 @@ export default async function handler(req, res) {
       })
     }
 
-    const mediaId = String(req.query.media_id || '').trim()
-    const filename = String(req.query.filename || 'attachment').trim()
+    const mediaId = cleanText(req.query.media_id)
+    const filename = cleanFilename(req.query.filename || 'attachment')
 
     if (!mediaId) {
       return res.status(400).json({
@@ -45,7 +53,7 @@ export default async function handler(req, res) {
       }
     )
 
-    const metaData = await metaResponse.json()
+    const metaData = await metaResponse.json().catch(() => ({}))
 
     if (!metaResponse.ok || !metaData?.url) {
       return res.status(metaResponse.status || 500).json({
@@ -76,9 +84,9 @@ export default async function handler(req, res) {
       metaData.mime_type ||
       'application/octet-stream'
 
-    res.setHeader('Cache-Control', 'private, max-age=120')
+    res.setHeader('Cache-Control', 'private, max-age=3600, stale-while-revalidate=86400')
     res.setHeader('Content-Type', contentType)
-    res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`)
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`)
 
     return res.status(200).send(buffer)
   } catch (error) {

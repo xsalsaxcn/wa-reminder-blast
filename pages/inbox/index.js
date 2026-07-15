@@ -9,6 +9,9 @@ export default function InboxPage() {
   const [conversations, setConversations] = useState([])
   const [selectedConversation, setSelectedConversation] = useState(null)
   const [messages, setMessages] = useState([])
+  const [hasMoreMessages, setHasMoreMessages] = useState(false)
+  const [oldestCursor, setOldestCursor] = useState('')
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [replyText, setReplyText] = useState('')
   const [searchText, setSearchText] = useState('')
   const [messageSearchText, setMessageSearchText] = useState('')
@@ -104,6 +107,76 @@ export default function InboxPage() {
     })
   }, [messages, messageSearchText])
 
+  function getWindowBadge(conversation) {
+    if (!conversation) {
+      return {
+        label: '',
+        className: '',
+        note: ''
+      }
+    }
+
+    if (conversation.window_status === 'open' || conversation.can_send_free_text) {
+      const hours = conversation.hours_since_last_incoming
+      const label = hours === null ? 'Open 24j' : 'Open 24j - ' + hours + 'j'
+
+      return {
+        label,
+        className: 'bg-green-50 text-green-700 ring-green-100',
+        note: conversation.window_note || 'Masih dalam window 24 jam.'
+      }
+    }
+
+    if (conversation.window_status === 'no_inbound' || !conversation.has_customer_inbound) {
+      return {
+        label: 'No inbound',
+        className: 'bg-slate-100 text-slate-600 ring-slate-200',
+        note: conversation.window_note || 'Belum ada pesan masuk dari customer. Gunakan template untuk memulai chat.'
+      }
+    }
+
+    return {
+      label: 'Expired >24j',
+      className: 'bg-red-50 text-red-700 ring-red-100',
+      note: conversation.window_note || 'Expired >24 jam. Free text berisiko gagal, gunakan template untuk follow-up.'
+    }
+  }
+
+  function getDirectMediaUrl(msg) {
+    return (
+      msg.media_url ||
+      msg.attachment_url ||
+      msg.image_url ||
+      msg.file_url ||
+      msg.document_url ||
+      ''
+    )
+  }
+
+  function isImageMessage(msg) {
+    const type = String(msg.message_type || '').toLowerCase()
+    const mime = String(msg.media_mime_type || '').toLowerCase()
+    const url = String(getDirectMediaUrl(msg) || '').toLowerCase()
+
+    return (
+      type === 'image' ||
+      mime.startsWith('image/') ||
+      /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(url)
+    )
+  }
+
+  function isVideoMessage(msg) {
+    const type = String(msg.message_type || '').toLowerCase()
+    const mime = String(msg.media_mime_type || '').toLowerCase()
+    const url = String(getDirectMediaUrl(msg) || '').toLowerCase()
+
+    return (
+      type === 'video' ||
+      mime.startsWith('video/') ||
+      /\.(mp4|mov|webm)(\?|$)/.test(url)
+    )
+  }
+
   function isNearBottom() {
     const el = messagesScrollRef.current
 
@@ -183,19 +256,31 @@ export default function InboxPage() {
     }
   }
 
-  async function loadMessages(phone, silent = false, forceScroll = false) {
+  async function loadMessages(phone, silent = false, forceScroll = false, before = '') {
     if (!phone) return
 
-    if (!silent) setLoadingMessages(true)
+    const appendOlder = Boolean(before)
+    const scrollEl = messagesScrollRef.current
+    const previousScrollHeight = scrollEl ? scrollEl.scrollHeight : 0
+
+    if (appendOlder) setLoadingOlder(true)
+    else if (!silent) setLoadingMessages(true)
+
     setError('')
 
     try {
       const shouldKeepBottom = isNearBottom()
+      const params = new URLSearchParams()
 
-      const response = await fetch(
-        '/api/inbox/messages?phone=' + encodeURIComponent(phone) + '&t=' + Date.now(),
-        { cache: 'no-store' }
-      )
+      params.set('phone', phone)
+      params.set('limit', appendOlder ? '50' : '50')
+      params.set('t', String(Date.now()))
+
+      if (before) params.set('before', before)
+
+      const response = await fetch('/api/inbox/messages?' + params.toString(), {
+        cache: 'no-store'
+      })
 
       const data = await response.json()
 
@@ -203,17 +288,50 @@ export default function InboxPage() {
         throw new Error(data.message || 'Gagal memuat pesan')
       }
 
-      setMessages(data.messages || [])
-      markLocalConversationRead(phone)
+      const nextMessages = data.messages || []
 
-      if (forceScroll || shouldKeepBottom) {
-        scrollToBottom(forceScroll)
+      setHasMoreMessages(Boolean(data.page?.has_more))
+      setOldestCursor(data.page?.oldest_cursor || '')
+
+      if (appendOlder) {
+        setMessages((current) => {
+          const existingKeys = new Set(
+            current.map((item) => String(item.direction || '') + '-' + String(item.id || '') + '-' + String(item.created_at || ''))
+          )
+
+          const older = nextMessages.filter((item) => {
+            const key = String(item.direction || '') + '-' + String(item.id || '') + '-' + String(item.created_at || '')
+            return !existingKeys.has(key)
+          })
+
+          return [...older, ...current]
+        })
+
+        setTimeout(() => {
+          const el = messagesScrollRef.current
+          if (!el) return
+          el.scrollTop = el.scrollHeight - previousScrollHeight
+        }, 50)
+      } else {
+        setMessages(nextMessages)
+        markLocalConversationRead(phone)
+
+        if (forceScroll || shouldKeepBottom) {
+          scrollToBottom(forceScroll)
+        }
       }
     } catch (err) {
       setError(err.message || 'Gagal memuat pesan')
     } finally {
-      if (!silent) setLoadingMessages(false)
+      if (appendOlder) setLoadingOlder(false)
+      else if (!silent) setLoadingMessages(false)
     }
+  }
+
+  async function loadOlderMessages() {
+    if (!selectedConversation?.phone || !oldestCursor || loadingOlder) return
+
+    await loadMessages(selectedConversation.phone, true, false, oldestCursor)
   }
 
   async function loadConversations(silent = false) {
@@ -250,6 +368,8 @@ export default function InboxPage() {
         setSelectedConversation(null)
         selectedPhoneRef.current = null
         setMessages([])
+        setHasMoreMessages(false)
+        setOldestCursor('')
         return
       }
 
@@ -661,6 +781,7 @@ export default function InboxPage() {
                 ) : (
                   filteredConversations.map((item) => {
                     const active = selectedConversation?.phone === item.phone
+                    const windowBadge = getWindowBadge(item)
 
                     return (
                       <button
@@ -880,6 +1001,11 @@ export default function InboxPage() {
               </div>
 
               <form onSubmit={sendReply} className="shrink-0 border-t border-slate-200 bg-white p-3 md:p-4">
+                {selectedConversation && selectedWindowBadge.note ? (
+                  <div className={selectedConversation.can_send_free_text ? 'mb-3 rounded-xl border border-green-100 bg-green-50 p-3 text-xs font-semibold text-green-700' : 'mb-3 rounded-xl border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700'}>
+                    {selectedWindowBadge.note}
+                  </div>
+                ) : null}
                 {selectedConversation ? (
                   <div className="mb-3">
                     <div className="mb-2 flex items-center justify-between gap-2">

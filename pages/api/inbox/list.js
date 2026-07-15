@@ -1,5 +1,7 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+
+const FREE_TEXT_WINDOW_MS = 24 * 60 * 60 * 1000
 
 function cleanText(value) {
   return String(value || '').trim()
@@ -33,6 +35,41 @@ function getTime(value) {
   return Number.isFinite(time) ? time : 0
 }
 
+function getHoursSince(value) {
+  const time = getTime(value)
+  if (!time) return null
+  return Math.max(0, Math.floor((Date.now() - time) / (60 * 60 * 1000)))
+}
+
+function buildWindowInfo(lastIncomingAt) {
+  const time = getTime(lastIncomingAt)
+
+  if (!time) {
+    return {
+      has_customer_inbound: false,
+      can_send_free_text: false,
+      is_expired_24h: true,
+      hours_since_last_incoming: null,
+      window_status: 'no_inbound',
+      window_note: 'Belum ada pesan masuk dari customer. Gunakan template untuk memulai chat.'
+    }
+  }
+
+  const expired = Date.now() - time > FREE_TEXT_WINDOW_MS
+  const hours = getHoursSince(lastIncomingAt)
+
+  return {
+    has_customer_inbound: true,
+    can_send_free_text: !expired,
+    is_expired_24h: expired,
+    hours_since_last_incoming: hours,
+    window_status: expired ? 'expired' : 'open',
+    window_note: expired
+      ? 'Expired >24 jam. Free text berisiko gagal, gunakan template untuk follow-up.'
+      : 'Masih dalam window 24 jam. Free text masih bisa digunakan.'
+  }
+}
+
 function getLogMessage(item) {
   return (
     cleanText(item?.message) ||
@@ -60,7 +97,6 @@ function getItemTime(item) {
 
 function normalizeCampaignType(value) {
   const text = cleanText(value)
-
   if (!text) return ''
 
   const lower = text.toLowerCase()
@@ -83,41 +119,28 @@ function inferProjectFromText(text) {
     lower.includes('suntikan kedua') ||
     lower.includes('dosis ke-2') ||
     lower.includes('dosis kedua')
-  ) {
-    return 'Reminder Suntikan ke-2'
-  }
+  ) return 'Reminder Suntikan ke-2'
 
   if (
     lower.includes('jadwal vaksin') ||
     lower.includes('vaksinasi') ||
     lower.includes('vaksin')
-  ) {
-    return 'Reminder Jadwal Vaksin'
-  }
+  ) return 'Reminder Jadwal Vaksin'
 
   if (
     lower.includes('omni') ||
     lower.includes('vaccinology') ||
     lower.includes('cv2026')
-  ) {
-    return 'OMNI Vaccinology 2026'
-  }
+  ) return 'OMNI Vaccinology 2026'
 
   if (
     lower.includes('seminar') ||
     lower.includes('webinar') ||
     lower.includes('workshop')
-  ) {
-    return 'Event Seminar / Workshop'
-  }
+  ) return 'Event Seminar / Workshop'
 
-  if (lower.includes('promo')) {
-    return 'Promo Campaign'
-  }
-
-  if (lower.includes('follow')) {
-    return 'Follow-up Campaign'
-  }
+  if (lower.includes('promo')) return 'Promo Campaign'
+  if (lower.includes('follow')) return 'Follow-up Campaign'
 
   return ''
 }
@@ -223,42 +246,18 @@ function inferCampaignType({ job, template, item }) {
     jobName.includes('pengingat') ||
     templateName.includes('reminder') ||
     templateName.includes('pengingat')
-  ) {
-    return 'Reminder'
-  }
+  ) return 'Reminder'
 
-  if (
-    jobName.includes('follow') ||
-    templateName.includes('follow')
-  ) {
-    return 'Follow-up'
-  }
+  if (jobName.includes('follow') || templateName.includes('follow')) return 'Follow-up'
+  if (jobName.includes('promo') || templateName.includes('promo')) return 'Promo'
 
-  if (
-    jobName.includes('promo') ||
-    templateName.includes('promo')
-  ) {
-    return 'Promo'
-  }
-
-  if (
-    jobMode === 'template' ||
-    cleanText(item?.template_name)
-  ) {
-    return 'Event'
-  }
+  if (jobMode === 'template' || cleanText(item?.template_name)) return 'Event'
 
   return ''
 }
 
 function makeCampaignLabel(campaignType, projectName, batchName) {
-  const parts = [
-    cleanText(campaignType),
-    cleanText(projectName),
-    cleanText(batchName)
-  ].filter(Boolean)
-
-  return parts.join(' - ')
+  return [campaignType, projectName, batchName].map(cleanText).filter(Boolean).join(' - ')
 }
 
 function getProjectName({ job, template, item }) {
@@ -274,179 +273,141 @@ function getProjectName({ job, template, item }) {
 }
 
 function getBatchName({ job, template }) {
-  return (
-    cleanText(job?.batch_name) ||
-    cleanText(template?.batch_name) ||
-    ''
-  )
+  return cleanText(job?.batch_name) || cleanText(template?.batch_name) || ''
+}
+
+async function safeQuery(callback, fallback) {
+  try {
+    const result = await callback()
+    if (result.error) return fallback
+    return result.data || fallback
+  } catch (error) {
+    return fallback
+  }
 }
 
 async function getOutgoingMessages() {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('wa_outgoing_messages')
-      .select('*')
-      .order('sent_at', { ascending: false })
-      .limit(2000)
-
-    if (error) return []
-
-    return data || []
-  } catch (error) {
-    return []
-  }
+  return safeQuery(
+    () =>
+      supabaseAdmin
+        .from('wa_outgoing_messages')
+        .select('*')
+        .order('sent_at', { ascending: false })
+        .limit(3000),
+    []
+  )
 }
 
 async function getDeliveryLogs() {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('send_delivery_logs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(3000)
-
-    if (error) return []
-
-    return data || []
-  } catch (error) {
-    return []
-  }
+  return safeQuery(
+    () =>
+      supabaseAdmin
+        .from('send_delivery_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5000),
+    []
+  )
 }
 
 async function getTemplateMap() {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('wa_templates')
-      .select('*')
-      .limit(1000)
+  const data = await safeQuery(
+    () => supabaseAdmin.from('wa_templates').select('*').limit(1000),
+    []
+  )
 
-    if (error) return new Map()
+  const map = new Map()
 
-    const map = new Map()
+  for (const template of data || []) {
+    const name = cleanText(template.name)
+    const language = cleanText(template.language) || 'id'
 
-    for (const template of data || []) {
-      const name = cleanText(template.name)
-      const language = cleanText(template.language) || 'id'
-
-      if (name) {
-        map.set(name, template)
-        map.set(`${name}::${language}`, template)
-      }
+    if (name) {
+      map.set(name, template)
+      map.set(`${name}::${language}`, template)
     }
-
-    return map
-  } catch (error) {
-    return new Map()
   }
+
+  return map
 }
 
 async function getJobsMap(jobIds) {
   const ids = Array.from(new Set((jobIds || []).map(cleanText).filter(Boolean)))
-
   if (!ids.length) return new Map()
 
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('send_jobs')
-      .select('*')
-      .in('id', ids)
+  const data = await safeQuery(
+    () => supabaseAdmin.from('send_jobs').select('*').in('id', ids),
+    []
+  )
 
-    if (error) return new Map()
-
-    return new Map((data || []).map((job) => [job.id, job]))
-  } catch (error) {
-    return new Map()
-  }
+  return new Map((data || []).map((job) => [job.id, job]))
 }
 
 async function getLatestCampaignByPhone(phones) {
-  const targetPhones = new Set(
-    (phones || [])
-      .map(cleanPhone)
-      .filter(Boolean)
-  )
-
+  const targetPhones = new Set((phones || []).map(cleanPhone).filter(Boolean))
   if (!targetPhones.size) return new Map()
 
-  try {
-    const { data: items, error: itemError } = await supabaseAdmin
-      .from('send_job_items')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(30000)
+  const items = await safeQuery(
+    () =>
+      supabaseAdmin
+        .from('send_job_items')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(30000),
+    []
+  )
 
-    if (itemError) return new Map()
+  const latestItemByPhone = new Map()
 
-    const latestItemByPhone = new Map()
+  for (const item of items || []) {
+    const phone = cleanPhone(item.phone)
+    if (!phone || !targetPhones.has(phone)) continue
 
-    for (const item of items || []) {
-      const phone = cleanPhone(item.phone)
-      if (!phone) continue
-      if (!targetPhones.has(phone)) continue
+    const current = latestItemByPhone.get(phone)
+    const itemTime = getTime(getItemTime(item))
+    const currentTime = getTime(getItemTime(current))
 
-      const current = latestItemByPhone.get(phone)
-      const itemTime = getTime(getItemTime(item))
-      const currentTime = getTime(getItemTime(current))
-
-      if (!current || itemTime >= currentTime) {
-        latestItemByPhone.set(phone, item)
-      }
-    }
-
-    const jobIds = Array.from(
-      new Set(
-        Array.from(latestItemByPhone.values())
-          .map((item) => item.job_id)
-          .filter(Boolean)
-      )
-    )
-
-    const jobsMap = await getJobsMap(jobIds)
-    const templateMap = await getTemplateMap()
-    const result = new Map()
-
-    for (const [phone, item] of latestItemByPhone.entries()) {
-      const job = jobsMap.get(item.job_id) || {}
-      const templateName = cleanText(item.template_name)
-      const templateLanguage = cleanText(item.template_language) || 'id'
-
-      const template =
-        templateMap.get(`${templateName}::${templateLanguage}`) ||
-        templateMap.get(templateName) ||
-        {}
-
-      const campaignType = inferCampaignType({
-        job,
-        template,
-        item
-      })
-
-      const projectName = getProjectName({
-        job,
-        template,
-        item
-      })
-
-      const batchName = getBatchName({
-        job,
-        template
-      })
-
-      result.set(phone, {
-        campaign_type: campaignType || 'Event',
-        project_name: projectName,
-        batch_name: batchName,
-        campaign_label: makeCampaignLabel(campaignType || 'Event', projectName, batchName),
-        campaign_job_id: item.job_id || null,
-        campaign_template_name: item.template_name || null,
-        campaign_last_sent_at: getItemTime(item) || null
-      })
-    }
-
-    return result
-  } catch (error) {
-    return new Map()
+    if (!current || itemTime >= currentTime) latestItemByPhone.set(phone, item)
   }
+
+  const jobIds = Array.from(
+    new Set(
+      Array.from(latestItemByPhone.values())
+        .map((item) => item.job_id)
+        .filter(Boolean)
+    )
+  )
+
+  const jobsMap = await getJobsMap(jobIds)
+  const templateMap = await getTemplateMap()
+  const result = new Map()
+
+  for (const [phone, item] of latestItemByPhone.entries()) {
+    const job = jobsMap.get(item.job_id) || {}
+    const templateName = cleanText(item.template_name)
+    const templateLanguage = cleanText(item.template_language) || 'id'
+
+    const template =
+      templateMap.get(`${templateName}::${templateLanguage}`) ||
+      templateMap.get(templateName) ||
+      {}
+
+    const campaignType = inferCampaignType({ job, template, item })
+    const projectName = getProjectName({ job, template, item })
+    const batchName = getBatchName({ job, template })
+
+    result.set(phone, {
+      campaign_type: campaignType || 'Event',
+      project_name: projectName,
+      batch_name: batchName,
+      campaign_label: makeCampaignLabel(campaignType || 'Event', projectName, batchName),
+      campaign_job_id: item.job_id || null,
+      campaign_template_name: item.template_name || null,
+      campaign_last_sent_at: getItemTime(item) || null
+    })
+  }
+
+  return result
 }
 
 function mergeLastMessage(mergedMap, payload) {
@@ -472,10 +433,10 @@ function mergeLastMessage(mergedMap, payload) {
       status: 'open',
       created_at: messageAt,
       updated_at: messageAt,
+      last_incoming_at: direction === 'incoming' ? messageAt : null,
       last_outgoing_message: direction === 'outgoing' ? message : '',
       last_outgoing_at: direction === 'outgoing' ? messageAt : null
     })
-
     return
   }
 
@@ -487,9 +448,15 @@ function mergeLastMessage(mergedMap, payload) {
     next.updated_at = messageAt
   }
 
+  if (direction === 'incoming') {
+    const currentIncomingTime = getTime(existing.last_incoming_at)
+    if (!existing.last_incoming_at || messageTime >= currentIncomingTime) {
+      next.last_incoming_at = messageAt
+    }
+  }
+
   if (direction === 'outgoing') {
     const currentOutgoingTime = getTime(existing.last_outgoing_at)
-
     if (!existing.last_outgoing_at || messageTime >= currentOutgoingTime) {
       next.last_outgoing_message = message
       next.last_outgoing_at = messageAt
@@ -502,8 +469,7 @@ function mergeLastMessage(mergedMap, payload) {
 function applyCampaignFallback(item, campaign) {
   const outgoingText = cleanText(item.last_outgoing_message)
   const lastText = cleanText(item.last_message)
-  const combinedText = `${outgoingText}\n${lastText}`
-  const inferred = inferCampaignFromText(combinedText)
+  const inferred = inferCampaignFromText(`${outgoingText}\n${lastText}`)
 
   let campaignType = cleanText(campaign.campaign_type)
   let projectName = cleanText(campaign.project_name)
@@ -514,18 +480,10 @@ function applyCampaignFallback(item, campaign) {
     (!campaignType ||
       campaignType === 'Organic' ||
       (campaignType === 'Event' && inferred.campaign_type === 'Reminder'))
-  ) {
-    campaignType = inferred.campaign_type
-  }
+  ) campaignType = inferred.campaign_type
 
-  if (!projectName && inferred.project_name) {
-    projectName = inferred.project_name
-  }
-
-  if (!batchName && inferred.batch_name) {
-    batchName = inferred.batch_name
-  }
-
+  if (!projectName && inferred.project_name) projectName = inferred.project_name
+  if (!batchName && inferred.batch_name) batchName = inferred.batch_name
   if (!campaignType) campaignType = 'Organic'
 
   return {
@@ -573,7 +531,7 @@ export default async function handler(req, res) {
       .from('wa_incoming_messages')
       .select('*')
       .order('received_at', { ascending: false })
-      .limit(500)
+      .limit(3000)
 
     if (incomingError) {
       return res.status(500).json({
@@ -584,7 +542,6 @@ export default async function handler(req, res) {
 
     const outgoingMessages = await getOutgoingMessages()
     const deliveryLogs = await getDeliveryLogs()
-
     const mergedMap = new Map()
 
     for (const conv of conversations || []) {
@@ -601,40 +558,26 @@ export default async function handler(req, res) {
         status: conv.status || 'open',
         created_at: conv.created_at,
         updated_at: conv.updated_at,
+        last_incoming_at: conv.last_incoming_at || null,
         last_outgoing_message: '',
         last_outgoing_at: null
       })
     }
 
     for (const msg of incomingMessages || []) {
+      mergeLastMessage(mergedMap, {
+        phone: msg.phone,
+        message: msg.body || msg.media_caption || '',
+        message_at: msg.received_at,
+        direction: 'incoming'
+      })
+
       const phone = cleanPhone(msg.phone)
-      if (!phone) continue
-
       const existing = mergedMap.get(phone)
-      const msgTime = getTime(msg.received_at)
-      const existingTime = getTime(existing?.last_message_at)
 
-      if (!existing) {
-        mergedMap.set(phone, {
-          id: phone,
-          phone,
-          profile_name: cleanText(msg.profile_name) || phone,
-          last_message: msg.body || msg.media_caption || '',
-          last_message_at: msg.received_at,
-          unread_count: 1,
-          status: 'open',
-          created_at: msg.received_at,
-          updated_at: msg.received_at,
-          last_outgoing_message: '',
-          last_outgoing_at: null
-        })
-      } else if (msgTime >= existingTime) {
-        mergedMap.set(phone, {
-          ...existing,
-          profile_name: cleanText(msg.profile_name) || existing.profile_name || phone,
-          last_message: msg.body || msg.media_caption || existing.last_message || '',
-          last_message_at: msg.received_at || existing.last_message_at
-        })
+      if (existing) {
+        existing.profile_name = cleanText(msg.profile_name) || existing.profile_name || phone
+        mergedMap.set(phone, existing)
       }
     }
 
@@ -649,7 +592,6 @@ export default async function handler(req, res) {
 
     for (const item of deliveryLogs || []) {
       const mode = cleanText(item.mode).toLowerCase()
-
       if (mode === 'webhook_status') continue
 
       mergeLastMessage(mergedMap, {
@@ -666,9 +608,11 @@ export default async function handler(req, res) {
       .map((item) => {
         const rawCampaign = campaignMap.get(cleanPhone(item.phone)) || {}
         const campaign = applyCampaignFallback(item, rawCampaign)
+        const windowInfo = buildWindowInfo(item.last_incoming_at)
 
         return {
           ...item,
+          ...windowInfo,
           campaign_type: campaign.campaign_type || 'Organic',
           project_name: campaign.project_name || '',
           batch_name: campaign.batch_name || '',
@@ -678,9 +622,7 @@ export default async function handler(req, res) {
           campaign_last_sent_at: campaign.campaign_last_sent_at || null
         }
       })
-      .sort((a, b) => {
-        return getTime(b.last_message_at) - getTime(a.last_message_at)
-      })
+      .sort((a, b) => getTime(b.last_message_at) - getTime(a.last_message_at))
 
     return res.status(200).json({
       success: true,
@@ -688,7 +630,8 @@ export default async function handler(req, res) {
       debug: {
         conversations: mergedConversations.length,
         campaign_matched: mergedConversations.filter((item) => item.campaign_type !== 'Organic').length,
-        campaign_unmatched: mergedConversations.filter((item) => item.campaign_type === 'Organic').length
+        campaign_unmatched: mergedConversations.filter((item) => item.campaign_type === 'Organic').length,
+        expired_24h: mergedConversations.filter((item) => item.is_expired_24h).length
       }
     })
   } catch (error) {
