@@ -31,9 +31,21 @@ function getTime(value) {
 function toLimit(value) {
   const number = Number(value)
 
-  if (!Number.isFinite(number) || number <= 0) return 50
+  if (!Number.isFinite(number) || number <= 0) return 80
 
-  return Math.min(200, Math.max(20, Math.floor(number)))
+  return Math.min(300, Math.max(20, Math.floor(number)))
+}
+
+function parseRaw(value) {
+  if (!value) return {}
+
+  if (typeof value === 'object') return value
+
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    return {}
+  }
 }
 
 function getIncomingPhone(row) {
@@ -44,7 +56,13 @@ function getOutgoingPhone(row) {
   return cleanPhone(row?.phone || row?.to || row?.wa_id || row?.recipient_phone || row?.customer_phone || '')
 }
 
+function getDeliveryPhone(row) {
+  return cleanPhone(row?.phone || row?.to || row?.wa_id || row?.recipient_phone || row?.customer_phone || '')
+}
+
 function getBody(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.body) ||
     cleanText(row?.message) ||
@@ -53,6 +71,10 @@ function getBody(row) {
     cleanText(row?.caption) ||
     cleanText(row?.media_caption) ||
     cleanText(row?.template_name) ||
+    cleanText(raw?.body) ||
+    cleanText(raw?.message) ||
+    cleanText(raw?.text?.body) ||
+    cleanText(raw?.template?.name) ||
     ''
   )
 }
@@ -69,7 +91,13 @@ function getJobItemTime(row) {
   return row?.sent_at || row?.processed_at || row?.scheduled_at || row?.created_at || row?.updated_at || ''
 }
 
+function getDeliveryTime(row) {
+  return row?.sent_at || row?.processed_at || row?.created_at || row?.updated_at || row?.scheduled_at || row?.timestamp || ''
+}
+
 function getMediaUrl(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.media_url) ||
     cleanText(row?.attachment_url) ||
@@ -77,27 +105,51 @@ function getMediaUrl(row) {
     cleanText(row?.url) ||
     cleanText(row?.image_url) ||
     cleanText(row?.document_url) ||
+    cleanText(raw?.media_url) ||
+    cleanText(raw?.attachment_url) ||
     ''
   )
 }
 
 function getMediaType(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.media_type) ||
     cleanText(row?.attachment_type) ||
+    cleanText(row?.message_type) ||
     cleanText(row?.type) ||
+    cleanText(raw?.type) ||
     ''
   )
 }
 
 function getFilename(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.filename) ||
     cleanText(row?.file_name) ||
     cleanText(row?.attachment_filename) ||
     cleanText(row?.media_filename) ||
+    cleanText(raw?.filename) ||
+    cleanText(raw?.attachment_filename) ||
     ''
   )
+}
+
+function getMetaMessageId(row) {
+  return (
+    cleanText(row?.meta_message_id) ||
+    cleanText(row?.whatsapp_message_id) ||
+    cleanText(row?.message_id) ||
+    cleanText(row?.wamid) ||
+    ''
+  )
+}
+
+function getDeliveryMode(row) {
+  return cleanText(row?.mode || row?.event || row?.type || row?.status_type || '').toLowerCase()
 }
 
 async function fetchAll(table, maxRows = 50000) {
@@ -190,7 +242,7 @@ function buildOutgoingMessage(row) {
     attachment_filename: getFilename(row) || null,
     filename: getFilename(row) || null,
     status: row.status || '',
-    meta_message_id: row.meta_message_id || row.whatsapp_message_id || null,
+    meta_message_id: getMetaMessageId(row) || null,
     raw: row
   }
 }
@@ -223,16 +275,74 @@ function buildJobItemMessage(row) {
     template_language: row.template_language || '',
     template_header_type: row.template_header_type || '',
     header_media_id: row.header_media_id || null,
+    meta_message_id: getMetaMessageId(row) || null,
     is_blast_history: true,
     raw: row
   }
+}
+
+function buildDeliveryMessage(row) {
+  const createdAt = getDeliveryTime(row)
+  const mediaUrl = getMediaUrl(row)
+  const mediaType = getMediaType(row)
+  const templateName = cleanText(row.template_name || row.template || row.templateName)
+  const body = getBody(row)
+
+  return {
+    id: row.id ? 'delivery-' + row.id : 'delivery-' + createdAt,
+    source_id: row.id || null,
+    job_id: row.job_id || row.send_job_id || null,
+    job_item_id: row.job_item_id || null,
+    direction: 'outgoing',
+    type: mediaType || (mediaUrl ? 'image' : 'template'),
+    message: body || (templateName ? 'Template Blast: ' + templateName : '[Template Blast / Delivery Log]'),
+    body: body || (templateName ? 'Template Blast: ' + templateName : '[Template Blast / Delivery Log]'),
+    text: body || (templateName ? 'Template Blast: ' + templateName : '[Template Blast / Delivery Log]'),
+    created_at: createdAt,
+    timestamp: createdAt,
+    phone: getDeliveryPhone(row),
+    media_url: mediaUrl || null,
+    attachment_url: mediaUrl || null,
+    attachment_type: mediaType || null,
+    attachment_filename: getFilename(row) || null,
+    filename: getFilename(row) || null,
+    status: row.status || '',
+    template_name: templateName,
+    meta_message_id: getMetaMessageId(row) || null,
+    is_delivery_log: true,
+    raw: row
+  }
+}
+
+function shouldUseDeliveryRow(row) {
+  const mode = getDeliveryMode(row)
+
+  if (mode === 'webhook_status') return false
+  if (mode === 'status') return false
+
+  const phone = getDeliveryPhone(row)
+  if (!phone) return false
+
+  const createdAt = getDeliveryTime(row)
+  if (!createdAt) return false
+
+  const body = getBody(row)
+  const templateName = cleanText(row.template_name || row.template || row.templateName)
+  const mediaUrl = getMediaUrl(row)
+
+  return Boolean(body || templateName || mediaUrl)
 }
 
 function dedupeMessages(messages) {
   const map = new Map()
 
   for (const message of messages || []) {
-    const key = message.id || [message.direction, message.phone, message.created_at, message.message].join('::')
+    const metaId = cleanText(message.meta_message_id)
+
+    const key = metaId
+      ? 'meta::' + metaId
+      : message.id || [message.direction, message.phone, message.created_at, message.message].join('::')
+
     map.set(key, message)
   }
 
@@ -268,10 +378,11 @@ export default async function handler(req, res) {
       })
     }
 
-    const [incomingRows, outgoingRows, jobItemRows, focusItem] = await Promise.all([
+    const [incomingRows, outgoingRows, jobItemRows, deliveryRows, focusItem] = await Promise.all([
       safeFetchAll('wa_incoming_messages', 50000),
       safeFetchAll('wa_outgoing_messages', 50000),
       safeFetchAll('send_job_items', 50000),
+      safeFetchAll('send_delivery_logs', 50000),
       fetchFocusItem(focusItemId)
     ])
 
@@ -295,10 +406,16 @@ export default async function handler(req, res) {
 
     const blastOutgoing = relevantJobItems.map(buildJobItemMessage)
 
+    const deliveryOutgoing = (deliveryRows || [])
+      .filter((row) => getDeliveryPhone(row) === targetPhone)
+      .filter(shouldUseDeliveryRow)
+      .map(buildDeliveryMessage)
+
     let allMessages = dedupeMessages([
       ...incoming,
       ...outgoing,
-      ...blastOutgoing
+      ...blastOutgoing,
+      ...deliveryOutgoing
     ])
       .filter((item) => item.created_at)
       .sort((a, b) => getTime(a.created_at) - getTime(b.created_at))
@@ -344,6 +461,7 @@ export default async function handler(req, res) {
         incoming_total: incoming.length,
         outgoing_total: outgoing.length,
         blast_history_total: blastOutgoing.length,
+        delivery_log_total: deliveryOutgoing.length,
         focus_item_id: focusItemId || null,
         focus_item_found: Boolean(focusItem)
       }
