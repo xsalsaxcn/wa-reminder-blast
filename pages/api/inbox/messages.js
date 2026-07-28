@@ -1,33 +1,26 @@
-import { requireRole } from '../../../lib/auth'
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
-
-const DEFAULT_LIMIT = 50
-const MAX_LIMIT = 200
-
-function cleanPhone(phone) {
-  let value = String(phone || '').replace(/\D/g, '')
-  if (value.startsWith('0')) value = '62' + value.slice(1)
-  return value
-}
-
-function phoneVariants(phone) {
-  const clean = cleanPhone(phone)
-  const variants = [clean]
-
-  if (clean.startsWith('62')) variants.push('0' + clean.slice(2))
-  if (clean) variants.push('+' + clean)
-
-  return Array.from(new Set(variants.filter(Boolean)))
-}
+import { requireRole } from '../../../lib/auth'
 
 function cleanText(value) {
   return String(value || '').trim()
 }
 
-function toLimit(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number) || number <= 0) return DEFAULT_LIMIT
-  return Math.min(MAX_LIMIT, Math.max(10, Math.floor(number)))
+function cleanPhone(value) {
+  let phone = String(value || '').trim()
+  let result = ''
+
+  if (phone.startsWith('="')) phone = phone.slice(2)
+  if (phone.endsWith('"')) phone = phone.slice(0, -1)
+  if (phone.startsWith("'")) phone = phone.slice(1)
+  if (phone.startsWith('+')) phone = phone.slice(1)
+
+  for (const char of phone) {
+    if ('0123456789'.includes(char)) result += char
+  }
+
+  if (result.startsWith('0')) result = '62' + result.slice(1)
+
+  return result
 }
 
 function getTime(value) {
@@ -35,220 +28,215 @@ function getTime(value) {
   return Number.isFinite(time) ? time : 0
 }
 
-function normalizeOutgoingStatus(item) {
-  const status = cleanText(item?.status).toLowerCase()
+function toLimit(value) {
+  const number = Number(value)
 
-  if (status === 'read') return 'read'
-  if (status === 'delivered') return 'delivered'
-  if (status === 'failed') return 'failed'
-  if (status === 'error') return 'failed'
-  if (status === 'sent') return 'sent'
-  if (status === 'success') return 'sent'
-  if (status === 'processing') return 'processing'
-  if (status === 'pending') return 'pending'
+  if (!Number.isFinite(number) || number <= 0) return 50
 
-  if (item?.error_message) return 'failed'
-  if (item?.meta_message_id) return 'sent'
-
-  return status || 'sent'
+  return Math.min(200, Math.max(20, Math.floor(number)))
 }
 
-function getLogMetaMessageId(item) {
-  return (
-    cleanText(item?.meta_message_id) ||
-    cleanText(item?.meta_response?.meta_message_id) ||
-    cleanText(item?.meta_response?.messages?.[0]?.id) ||
-    cleanText(item?.response?.messages?.[0]?.id)
-  )
+function getIncomingPhone(row) {
+  return cleanPhone(row?.phone || row?.from || row?.wa_id || row?.sender_phone || row?.customer_phone || '')
 }
 
-function getLogMessage(item) {
+function getOutgoingPhone(row) {
+  return cleanPhone(row?.phone || row?.to || row?.wa_id || row?.recipient_phone || row?.customer_phone || '')
+}
+
+function getBody(row) {
   return (
-    cleanText(item?.message) ||
-    cleanText(item?.body) ||
-    cleanText(item?.caption) ||
-    cleanText(item?.meta_response?.message) ||
+    cleanText(row?.body) ||
+    cleanText(row?.message) ||
+    cleanText(row?.text) ||
+    cleanText(row?.content) ||
+    cleanText(row?.caption) ||
+    cleanText(row?.media_caption) ||
+    cleanText(row?.template_name) ||
     ''
   )
 }
 
-function getLogCreatedAt(item) {
-  return item?.created_at || item?.sent_at || item?.updated_at || new Date().toISOString()
+function getIncomingTime(row) {
+  return row?.received_at || row?.message_created_at || row?.created_at || row?.updated_at || ''
 }
 
-function getMediaUrl(item) {
+function getOutgoingTime(row) {
+  return row?.sent_at || row?.created_at || row?.updated_at || row?.processed_at || ''
+}
+
+function getJobItemTime(row) {
+  return row?.sent_at || row?.processed_at || row?.scheduled_at || row?.created_at || row?.updated_at || ''
+}
+
+function getMediaUrl(row) {
   return (
-    cleanText(item?.attachment_url) ||
-    cleanText(item?.media_url) ||
-    cleanText(item?.image_url) ||
-    cleanText(item?.file_url) ||
-    cleanText(item?.document_url) ||
+    cleanText(row?.media_url) ||
+    cleanText(row?.attachment_url) ||
+    cleanText(row?.file_url) ||
+    cleanText(row?.url) ||
+    cleanText(row?.image_url) ||
+    cleanText(row?.document_url) ||
     ''
   )
 }
 
-function getMediaType(item) {
-  const directType = cleanText(item?.message_type || item?.attachment_type || item?.media_type).toLowerCase()
-  const mime = cleanText(item?.media_mime_type || item?.mime_type || item?.attachment_mime_type).toLowerCase()
-  const url = getMediaUrl(item).toLowerCase()
-
-  if (directType) return directType
-  if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('video/')) return 'video'
-  if (url.match(/\.(jpg|jpeg|png|webp|gif)(\?|$)/)) return 'image'
-  if (url.match(/\.(mp4|mov|webm)(\?|$)/)) return 'video'
-  if (url) return 'document'
-
-  return 'text'
-}
-
-function getMediaMime(item) {
+function getMediaType(row) {
   return (
-    cleanText(item?.media_mime_type) ||
-    cleanText(item?.mime_type) ||
-    cleanText(item?.attachment_mime_type) ||
-    null
+    cleanText(row?.media_type) ||
+    cleanText(row?.attachment_type) ||
+    cleanText(row?.type) ||
+    ''
   )
 }
 
-function getMediaFilename(item) {
+function getFilename(row) {
   return (
-    cleanText(item?.media_filename) ||
-    cleanText(item?.attachment_filename) ||
-    cleanText(item?.file_name) ||
-    cleanText(item?.filename) ||
-    null
+    cleanText(row?.filename) ||
+    cleanText(row?.file_name) ||
+    cleanText(row?.attachment_filename) ||
+    cleanText(row?.media_filename) ||
+    ''
   )
 }
 
-async function markConversationRead(phone) {
-  try {
-    await supabaseAdmin
-      .from('wa_conversations')
-      .update({
-        unread_count: 0,
-        updated_at: new Date().toISOString()
-      })
-      .eq('phone', phone)
-  } catch (error) {
-    // Jangan gagalkan load messages hanya karena mark read gagal.
-  }
-}
+async function fetchAll(table, maxRows = 50000) {
+  const pageSize = 1000
+  let from = 0
+  let rows = []
 
-async function safeQuery(callback, fallback) {
-  try {
-    const result = await callback()
-    if (result.error) return fallback
-    return result.data || fallback
-  } catch (error) {
-    return fallback
-  }
-}
+  while (from < maxRows) {
+    const to = from + pageSize - 1
 
-async function getDeliveryLogs(phone) {
-  return safeQuery(
-    () =>
-      supabaseAdmin
-        .from('send_delivery_logs')
-        .select('*')
-        .in('phone', phoneVariants(phone))
-        .order('created_at', { ascending: true })
-        .limit(3000),
-    []
-  )
-}
+    const result = await supabaseAdmin
+      .from(table)
+      .select('*')
+      .range(from, to)
 
-async function getJobItems(phone) {
-  return safeQuery(
-    () =>
-      supabaseAdmin
-        .from('send_job_items')
-        .select('*')
-        .in('phone', phoneVariants(phone))
-        .order('created_at', { ascending: true })
-        .limit(3000),
-    []
-  )
-}
-
-async function getLatestStatusesByMetaId(metaIds) {
-  const ids = Array.from(new Set((metaIds || []).map(cleanText).filter(Boolean)))
-  if (!ids.length) return new Map()
-
-  const data = await safeQuery(
-    () =>
-      supabaseAdmin
-        .from('send_delivery_logs')
-        .select('*')
-        .in('meta_message_id', ids)
-        .order('created_at', { ascending: true })
-        .limit(5000),
-    []
-  )
-
-  const map = new Map()
-
-  for (const item of data || []) {
-    const metaId = getLogMetaMessageId(item)
-    if (!metaId) continue
-
-    map.set(metaId, {
-      status: normalizeOutgoingStatus(item),
-      created_at: getLogCreatedAt(item),
-      error_message: item.error_message || item.error || null
-    })
-  }
-
-  return map
-}
-
-function normalizeMessage(row) {
-  return {
-    ...row,
-    created_at: row.created_at || new Date().toISOString(),
-    sort_time: getTime(row.created_at)
-  }
-}
-
-function dedupeMessages(rows) {
-  const map = new Map()
-
-  for (const row of rows || []) {
-    const metaKey = cleanText(row.meta_message_id)
-    const key = metaKey
-      ? `meta:${metaKey}`
-      : `${row.direction}:${row.created_at}:${cleanText(row.message).slice(0, 80)}:${row.media_id || row.media_url || ''}`
-
-    const current = map.get(key)
-
-    if (!current) {
-      map.set(key, row)
-      continue
+    if (result.error) {
+      throw new Error(result.error.message)
     }
 
-    map.set(key, {
-      ...current,
-      ...row,
-      message: row.message || current.message,
-      media_id: row.media_id || current.media_id,
-      media_url: row.media_url || current.media_url,
-      media_mime_type: row.media_mime_type || current.media_mime_type,
-      media_filename: row.media_filename || current.media_filename,
-      error_message: row.error_message || current.error_message,
-      status: row.status || current.status
-    })
+    const batch = Array.isArray(result.data) ? result.data : []
+    rows = rows.concat(batch)
+
+    if (batch.length < pageSize) break
+
+    from += pageSize
+  }
+
+  return rows
+}
+
+async function safeFetchAll(table, maxRows = 50000) {
+  try {
+    return await fetchAll(table, maxRows)
+  } catch (error) {
+    return []
+  }
+}
+
+async function fetchFocusItem(focusItemId) {
+  if (!focusItemId) return null
+
+  const result = await supabaseAdmin
+    .from('send_job_items')
+    .select('*')
+    .eq('id', focusItemId)
+    .single()
+
+  if (result.error) return null
+
+  return result.data || null
+}
+
+function buildIncomingMessage(row) {
+  const createdAt = getIncomingTime(row)
+
+  return {
+    id: row.id ? 'incoming-' + row.id : 'incoming-' + createdAt,
+    source_id: row.id || null,
+    direction: 'incoming',
+    type: 'text',
+    message: getBody(row) || '[Incoming message]',
+    body: getBody(row) || '[Incoming message]',
+    text: getBody(row) || '[Incoming message]',
+    created_at: createdAt,
+    timestamp: createdAt,
+    phone: getIncomingPhone(row),
+    raw: row
+  }
+}
+
+function buildOutgoingMessage(row) {
+  const createdAt = getOutgoingTime(row)
+  const mediaUrl = getMediaUrl(row)
+  const mediaType = getMediaType(row)
+
+  return {
+    id: row.id ? 'outgoing-' + row.id : 'outgoing-' + createdAt,
+    source_id: row.id || null,
+    direction: 'outgoing',
+    type: mediaType || (mediaUrl ? 'image' : 'text'),
+    message: getBody(row) || getFilename(row) || '[Outgoing message]',
+    body: getBody(row) || getFilename(row) || '[Outgoing message]',
+    text: getBody(row) || getFilename(row) || '[Outgoing message]',
+    created_at: createdAt,
+    timestamp: createdAt,
+    phone: getOutgoingPhone(row),
+    media_url: mediaUrl || null,
+    attachment_url: mediaUrl || null,
+    attachment_type: mediaType || null,
+    attachment_filename: getFilename(row) || null,
+    filename: getFilename(row) || null,
+    status: row.status || '',
+    meta_message_id: row.meta_message_id || row.whatsapp_message_id || null,
+    raw: row
+  }
+}
+
+function buildJobItemMessage(row) {
+  const createdAt = getJobItemTime(row)
+  const mediaUrl = getMediaUrl(row)
+  const mediaType = getMediaType(row) || cleanText(row.template_header_type).toLowerCase()
+
+  return {
+    id: row.id ? 'job-item-' + row.id : 'job-item-' + createdAt,
+    source_id: row.id || null,
+    job_id: row.job_id || null,
+    job_item_id: row.id || null,
+    direction: 'outgoing',
+    type: mediaType || (mediaUrl ? 'image' : 'template'),
+    message: getBody(row) || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
+    body: getBody(row) || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
+    text: getBody(row) || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
+    created_at: createdAt,
+    timestamp: createdAt,
+    phone: cleanPhone(row.phone),
+    media_url: mediaUrl || null,
+    attachment_url: mediaUrl || null,
+    attachment_type: mediaType || null,
+    attachment_filename: getFilename(row) || null,
+    filename: getFilename(row) || null,
+    status: row.status || '',
+    template_name: row.template_name || '',
+    template_language: row.template_language || '',
+    template_header_type: row.template_header_type || '',
+    header_media_id: row.header_media_id || null,
+    is_blast_history: true,
+    raw: row
+  }
+}
+
+function dedupeMessages(messages) {
+  const map = new Map()
+
+  for (const message of messages || []) {
+    const key = message.id || [message.direction, message.phone, message.created_at, message.message].join('::')
+    map.set(key, message)
   }
 
   return Array.from(map.values())
-}
-
-function getAttachmentCaption(item) {
-  return (
-    cleanText(item?.media_caption) ||
-    cleanText(item?.attachment_caption) ||
-    cleanText(item?.caption) ||
-    ''
-  )
 }
 
 export default async function handler(req, res) {
@@ -257,7 +245,8 @@ export default async function handler(req, res) {
   res.setHeader('Expires', '0')
 
   try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    if (!authUser) return
 
     if (req.method !== 'GET') {
       return res.status(405).json({
@@ -266,197 +255,50 @@ export default async function handler(req, res) {
       })
     }
 
-    const phone = cleanPhone(req.query.phone)
-    const limit = toLimit(req.query.limit)
+    const phone = cleanPhone(req.query.phone || req.query.wa_id || '')
     const before = cleanText(req.query.before)
-    const focusItemId = cleanText(req.query.job_item_id || req.query.item_id)
     const beforeTime = before ? getTime(before) : 0
+    const limit = toLimit(req.query.limit)
+    const focusItemId = cleanText(req.query.job_item_id || req.query.item_id)
 
-    if (!phone) {
+    if (!phone && !focusItemId) {
       return res.status(400).json({
         success: false,
-        message: 'Phone is required'
+        message: 'phone wajib diisi.'
       })
     }
 
-    await markConversationRead(phone)
+    const [incomingRows, outgoingRows, jobItemRows, focusItem] = await Promise.all([
+      safeFetchAll('wa_incoming_messages', 50000),
+      safeFetchAll('wa_outgoing_messages', 50000),
+      safeFetchAll('send_job_items', 50000),
+      fetchFocusItem(focusItemId)
+    ])
 
-    const variants = phoneVariants(phone)
+    const targetPhone = phone || cleanPhone(focusItem?.phone)
 
-    const incoming = await safeQuery(
-      () =>
-        supabaseAdmin
-          .from('wa_incoming_messages')
-          .select('*')
-          .in('phone', variants)
-          .order('received_at', { ascending: true })
-          .limit(3000),
-      []
-    )
-
-    const outgoing = await safeQuery(
-      () =>
-        supabaseAdmin
-          .from('wa_outgoing_messages')
-          .select('*')
-          .in('phone', variants)
-          .order('sent_at', { ascending: true })
-          .limit(3000),
-      []
-    )
-
-    const deliveryLogs = await getDeliveryLogs(phone)
-    let jobItems = await getJobItems(phone)
-
-    if (focusItemId && !jobItems.some((item) => cleanText(item.id) === focusItemId)) {
-      const focusItemResult = await supabaseAdmin
-        .from('send_job_items')
-        .select('*')
-        .eq('id', focusItemId)
-        .single()
-
-      if (!focusItemResult.error && focusItemResult.data) {
-        jobItems = [...jobItems, focusItemResult.data]
-      }
-    }
-
-    const outgoingMetaIds = new Set(
-      (outgoing || [])
-        .map((item) => cleanText(item.meta_message_id))
-        .filter(Boolean)
-    )
-
-    const deliveryMetaIds = deliveryLogs
-      .map(getLogMetaMessageId)
-      .filter(Boolean)
-
-    const jobMetaIds = jobItems
-      .map((item) => cleanText(item.meta_message_id || item.whatsapp_message_id))
-      .filter(Boolean)
-
-    const allMetaIds = [
-      ...(outgoing || []).map((item) => cleanText(item.meta_message_id)).filter(Boolean),
-      ...deliveryMetaIds,
-      ...jobMetaIds
-    ]
-
-    const latestStatusMap = await getLatestStatusesByMetaId(allMetaIds)
-
-    const incomingMessages = (incoming || []).map((item) =>
-      normalizeMessage({
-        id: item.id,
-        direction: 'incoming',
-        message: item.body || item.media_caption || '',
-        created_at: item.received_at,
-        status: 'read',
-        message_type: item.message_type || getMediaType(item),
-        media_id: item.media_id || null,
-        media_url: getMediaUrl(item) || null,
-        media_mime_type: getMediaMime(item),
-        media_filename: getMediaFilename(item),
-        media_caption: item.media_caption || null,
-        meta_message_id: item.whatsapp_message_id || null,
-        error_message: null,
-        source: 'wa_incoming_messages'
-      })
-    )
-
-    const outgoingMessages = (outgoing || []).map((item) => {
-      const metaId = cleanText(item.meta_message_id)
-      const latest = metaId ? latestStatusMap.get(metaId) : null
-
-      return normalizeMessage({
-        id: item.id,
-        direction: 'outgoing',
-        message: item.message || item.media_caption || getAttachmentCaption(item) || '',
-        created_at: item.sent_at || item.created_at,
-        status: latest?.status || normalizeOutgoingStatus(item),
-        message_type: item.message_type || getMediaType(item),
-        media_id: item.media_id || null,
-        media_url: getMediaUrl(item) || null,
-        media_mime_type: getMediaMime(item),
-        media_filename: getMediaFilename(item),
-        media_caption: item.media_caption || item.attachment_caption || null,
-        meta_message_id: metaId || null,
-        error_message: latest?.error_message || item.error_message || null,
-        source: 'wa_outgoing_messages'
-      })
+    let relevantJobItems = (jobItemRows || []).filter((item) => {
+      return cleanPhone(item.phone) === targetPhone
     })
 
-    const deliveryMessages = deliveryLogs
-      .filter((item) => {
-        const metaId = getLogMetaMessageId(item)
-        const message = getLogMessage(item)
-        const mode = cleanText(item.mode).toLowerCase()
-        const mediaUrl = getMediaUrl(item)
+    if (focusItem && !relevantJobItems.some((item) => cleanText(item.id) === focusItemId)) {
+      relevantJobItems.push(focusItem)
+    }
 
-        if (mode === 'webhook_status' && !message && !mediaUrl) return false
-        if (metaId && outgoingMetaIds.has(metaId)) return false
-        if (!message && !mediaUrl) return false
+    const incoming = (incomingRows || [])
+      .filter((row) => getIncomingPhone(row) === targetPhone)
+      .map(buildIncomingMessage)
 
-        return true
-      })
-      .map((item) => {
-        const metaId = getLogMetaMessageId(item)
-        const latest = metaId ? latestStatusMap.get(metaId) : null
+    const outgoing = (outgoingRows || [])
+      .filter((row) => getOutgoingPhone(row) === targetPhone)
+      .map(buildOutgoingMessage)
 
-        return normalizeMessage({
-          id: `delivery-${item.id || metaId || getLogCreatedAt(item)}`,
-          direction: 'outgoing',
-          message: getLogMessage(item) || getAttachmentCaption(item) || '',
-          created_at: getLogCreatedAt(item),
-          status: latest?.status || normalizeOutgoingStatus(item),
-          message_type: getMediaType(item),
-          media_id: item.media_id || null,
-          media_url: getMediaUrl(item) || null,
-          media_mime_type: getMediaMime(item),
-          media_filename: getMediaFilename(item),
-          media_caption: item.media_caption || item.attachment_caption || null,
-          meta_message_id: metaId || null,
-          error_message: latest?.error_message || item.error_message || null,
-          source: 'send_delivery_logs'
-        })
-      })
+    const blastOutgoing = relevantJobItems.map(buildJobItemMessage)
 
-    const jobItemMessages = jobItems
-      .filter((item) => {
-        const message = cleanText(item.message)
-        const mediaUrl = getMediaUrl(item)
-        const metaId = cleanText(item.meta_message_id || item.whatsapp_message_id)
-
-        if (metaId && outgoingMetaIds.has(metaId)) return false
-        return Boolean(message || mediaUrl)
-      })
-      .map((item) => {
-        const metaId = cleanText(item.meta_message_id || item.whatsapp_message_id)
-        const latest = metaId ? latestStatusMap.get(metaId) : null
-
-        return normalizeMessage({
-          id: `job-item-${item.id || metaId || item.created_at}`,
-          direction: 'outgoing',
-          message: item.message || item.media_caption || getAttachmentCaption(item) || '',
-          created_at: item.sent_at || item.processed_at || item.updated_at || item.created_at || item.scheduled_at,
-          status: latest?.status || normalizeOutgoingStatus(item),
-          message_type: item.message_type || getMediaType(item),
-          media_id: item.media_id || null,
-          media_url: getMediaUrl(item) || null,
-          media_mime_type: getMediaMime(item),
-          media_filename: getMediaFilename(item),
-          media_caption: item.media_caption || item.attachment_caption || null,
-          meta_message_id: metaId || null,
-          error_message: latest?.error_message || item.error_message || item.error || null,
-          source: 'send_job_items',
-          job_id: item.job_id || null,
-          job_item_id: item.id || null,
-          template_name: item.template_name || null
-        })
-      })
-
-    const allMessages = dedupeMessages([
-      ...incomingMessages,
-      ...outgoingMessages,
-      ...deliveryMessages,
-      ...jobItemMessages
+    let allMessages = dedupeMessages([
+      ...incoming,
+      ...outgoing,
+      ...blastOutgoing
     ])
       .filter((item) => item.created_at)
       .sort((a, b) => getTime(a.created_at) - getTime(b.created_at))
@@ -479,6 +321,7 @@ export default async function handler(req, res) {
       if (focusIndex >= 0) {
         const start = Math.max(0, focusIndex - 20)
         const end = Math.min(allMessages.length, focusIndex + 31)
+
         pageMessages = allMessages.slice(start, end)
         hasMore = start > 0
       }
@@ -488,23 +331,27 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      phone,
-      messages: pageMessages.map((item) => {
-        const { sort_time, ...safe } = item
-        return safe
-      }),
-      page: {
-        limit,
-        has_more: hasMore,
-        oldest_cursor: oldestCursor,
-        returned: pageMessages.length,
-        total_loaded: allMessages.length
+      phone: targetPhone,
+      messages: pageMessages,
+      data: pageMessages,
+      rows: pageMessages,
+      has_more: hasMore,
+      hasMore,
+      oldest_cursor: oldestCursor,
+      oldestCursor,
+      total: allMessages.length,
+      debug: {
+        incoming_total: incoming.length,
+        outgoing_total: outgoing.length,
+        blast_history_total: blastOutgoing.length,
+        focus_item_id: focusItemId || null,
+        focus_item_found: Boolean(focusItem)
       }
     })
   } catch (error) {
-    return res.status(401).json({
+    return res.status(500).json({
       success: false,
-      message: error.message || 'Unauthorized'
+      message: error.message || 'Gagal memuat messages.'
     })
   }
 }

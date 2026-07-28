@@ -95,9 +95,9 @@ function getItemTime(row) {
   return (
     row?.sent_at ||
     row?.processed_at ||
-    row?.updated_at ||
-    row?.created_at ||
     row?.scheduled_at ||
+    row?.created_at ||
+    row?.updated_at ||
     ''
   )
 }
@@ -236,6 +236,16 @@ function classifyReply(text) {
     'info',
     'detail',
     'jadwal',
+    'ditunda',
+    'tunda',
+    'pending',
+    'reschedule',
+    'jadwal ulang',
+    'hubungi',
+    'sekretaris',
+    'minggu depan',
+    'bulan depan',
+    'kembali',
     'schedule',
     'nanti',
     'lihat dulu',
@@ -356,6 +366,21 @@ function getFirstIncomingAfter({ phone, startAt, incomingByPhone }) {
   return null
 }
 
+
+function getIncomingListAfter({ phone, startAt, incomingByPhone }) {
+  const startTime = getTime(startAt)
+  const threshold = startTime > 0 ? startTime - 10 * 60 * 1000 : 0
+  const list = incomingByPhone.get(phone) || []
+
+  return list.filter((item) => getTime(getIncomingTime(item)) >= threshold)
+}
+
+function getLatestIncomingAfter({ phone, startAt, incomingByPhone }) {
+  const list = getIncomingListAfter({ phone, startAt, incomingByPhone })
+
+  return list.length ? list[list.length - 1] : null
+}
+
 function getFirstOutgoingAfter({ phone, startAt, outgoingByPhone }) {
   const startTime = getTime(startAt)
   const list = outgoingByPhone.get(phone) || []
@@ -467,31 +492,44 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
     if (itemFailed) failed += 1
     if (itemSent) sent += 1
 
-    const firstReply = getFirstIncomingAfter({
+    const incomingAfter = getIncomingListAfter({
       phone,
       startAt: itemStartAt,
       incomingByPhone
     })
 
-    if (!firstReply) continue
+    if (!incomingAfter.length) continue
 
     replies += 1
 
+    const firstReply = incomingAfter[0]
+    const latestReply = incomingAfter[incomingAfter.length - 1]
+
     const firstReplyAt = getIncomingTime(firstReply)
+    const latestReplyAt = getIncomingTime(latestReply)
+
     const firstAgentReply = getFirstAgentReplyAfterCustomer({
       phone,
       firstReplyAt,
       outgoingByPhone
     })
 
-    if (!firstAgentReply) {
+    const agentAfterLatestCustomer = getFirstAgentReplyAfterCustomer({
+      phone,
+      firstReplyAt: latestReplyAt,
+      outgoingByPhone
+    })
+
+    if (!agentAfterLatestCustomer) {
       needResponse += 1
-    } else {
+    }
+
+    if (firstAgentReply) {
       const seconds = Math.round((getTime(getOutgoingTime(firstAgentReply)) - getTime(firstReplyAt)) / 1000)
       if (seconds > 0) responseSeconds.push(seconds)
     }
 
-    const bucket = classifyReply(getReplyBody(firstReply))
+    const bucket = classifyReply(getReplyBody(latestReply))
 
     if (bucket === 'hot_lead') hotLead += 1
     else if (bucket === 'interested') interestedOnly += 1
@@ -607,7 +645,8 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
     debug: {
       items_loaded: safeItems.length,
       job_total_items: job?.total_items || null,
-      repaired_target_fallback: true
+      repaired_target_fallback: true,
+      latest_reply_logic: true
     }
   }
 }

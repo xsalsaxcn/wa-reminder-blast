@@ -335,7 +335,7 @@ function DetailPanel({ detail, loading, error, onClose }) {
 
                       <td className="px-3 py-4">
                         <Link
-                          href={`/inbox?phone=${encodeURIComponent(row.phone)}`}
+                          href={`/inbox?phone=${encodeURIComponent(row.phone)}${row.item_id ? `&job_item_id=${encodeURIComponent(row.item_id)}` : ''}`}
                           className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold !text-white hover:bg-blue-700"
                         >
                           Open Inbox

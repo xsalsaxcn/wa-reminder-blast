@@ -563,6 +563,100 @@ function applyCampaignFallback(item, campaign) {
   }
 }
 
+
+function inferCampaignTypeRobust(job, item) {
+  const direct = cleanText(job?.campaign_type)
+  if (direct) return direct
+
+  const text = [
+    job?.name,
+    job?.title,
+    item?.template_name
+  ].map(cleanText).join(' ').toLowerCase()
+
+  if (text.includes('reminder') || text.includes('pengingat')) return 'Reminder'
+  if (text.includes('follow')) return 'Follow-up'
+  if (text.includes('promo')) return 'Promo'
+  if (text.includes('event') || text.includes('seminar') || text.includes('workshop')) return 'Event'
+
+  return 'Campaign'
+}
+
+async function getLatestCampaignByPhoneRobust(phones) {
+  const phoneSet = new Set((phones || []).map(cleanPhone).filter(Boolean))
+  const latestByPhone = new Map()
+
+  if (!phoneSet.size) return latestByPhone
+
+  const items = await safeQuery(
+    () =>
+      supabaseAdmin
+        .from('send_job_items')
+        .select('id, job_id, phone, template_name, status, sent_at, processed_at, updated_at, created_at, scheduled_at')
+        .not('template_name', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(50000),
+    []
+  )
+
+  const jobIds = []
+
+  for (const item of items || []) {
+    const phone = cleanPhone(item.phone)
+    if (!phoneSet.has(phone)) continue
+
+    const itemTime = getTime(getItemTime(item) || item.created_at || item.updated_at)
+
+    const current = latestByPhone.get(phone)
+    const currentTime = current ? getTime(getItemTime(current) || current.created_at || current.updated_at) : 0
+
+    if (!current || itemTime >= currentTime) {
+      latestByPhone.set(phone, item)
+      if (item.job_id) jobIds.push(item.job_id)
+    }
+  }
+
+  const uniqueJobIds = Array.from(new Set(jobIds.filter(Boolean)))
+  const jobMap = new Map()
+
+  if (uniqueJobIds.length) {
+    const jobsResult = await safeQuery(
+      () =>
+        supabaseAdmin
+          .from('send_jobs')
+          .select('id, name, title, campaign_type, project_name, batch_name, created_at')
+          .in('id', uniqueJobIds),
+      []
+    )
+
+    for (const job of jobsResult || []) {
+      jobMap.set(job.id, job)
+    }
+  }
+
+  const result = new Map()
+
+  for (const [phone, item] of latestByPhone.entries()) {
+    const job = jobMap.get(item.job_id) || {}
+    const campaignType = inferCampaignTypeRobust(job, item)
+    const projectName = cleanText(job.project_name || job.name || job.title || item.template_name)
+    const batchName = cleanText(job.batch_name)
+
+    result.set(phone, {
+      campaign_type: campaignType,
+      project_name: projectName,
+      batch_name: batchName,
+      campaign_label: [campaignType, projectName, batchName].filter(Boolean).join(' - '),
+      campaign_job_id: item.job_id || null,
+      campaign_template_name: item.template_name || '',
+      campaign_last_sent_at: getItemTime(item) || item.created_at || null
+    })
+  }
+
+  return result
+}
+
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -685,7 +779,7 @@ export default async function handler(req, res) {
       })
     }
 
-    const campaignMap = await getLatestCampaignByPhone(Array.from(mergedMap.keys()))
+    const campaignMap = await getLatestCampaignByPhoneRobust(Array.from(mergedMap.keys()))
 
     const mergedConversations = Array.from(mergedMap.values())
       .map((item) => {

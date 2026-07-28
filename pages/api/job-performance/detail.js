@@ -84,7 +84,14 @@ function getOutgoingTime(row) {
 }
 
 function getItemTime(row) {
-  return row?.sent_at || row?.processed_at || row?.updated_at || row?.created_at || row?.scheduled_at || ''
+  return (
+    row?.sent_at ||
+    row?.processed_at ||
+    row?.scheduled_at ||
+    row?.created_at ||
+    row?.updated_at ||
+    ''
+  )
 }
 
 function getJobTime(row) {
@@ -204,6 +211,16 @@ function classifyReply(text) {
     'info',
     'detail',
     'jadwal',
+    'ditunda',
+    'tunda',
+    'pending',
+    'reschedule',
+    'jadwal ulang',
+    'hubungi',
+    'sekretaris',
+    'minggu depan',
+    'bulan depan',
+    'kembali',
     'schedule',
     'nanti',
     'lihat dulu',
@@ -294,6 +311,21 @@ function getFirstIncomingAfter({ phone, startAt, incomingByPhone }) {
   return null
 }
 
+
+function getIncomingListAfter({ phone, startAt, incomingByPhone }) {
+  const startTime = getTime(startAt)
+  const threshold = startTime > 0 ? startTime - 10 * 60 * 1000 : 0
+  const list = incomingByPhone.get(phone) || []
+
+  return list.filter((item) => getTime(getIncomingTime(item)) >= threshold)
+}
+
+function getLatestIncomingAfter({ phone, startAt, incomingByPhone }) {
+  const list = getIncomingListAfter({ phone, startAt, incomingByPhone })
+
+  return list.length ? list[list.length - 1] : null
+}
+
 function getFirstOutgoingAfter({ phone, startAt, outgoingByPhone }) {
   const startTime = getTime(startAt)
   const list = outgoingByPhone.get(phone) || []
@@ -382,18 +414,31 @@ function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contact
     if (!phone) continue
 
     const startAt = getItemTime(item) || getJobTime(job)
-    const firstReply = getFirstIncomingAfter({
+
+    const incomingAfter = getIncomingListAfter({
       phone,
       startAt,
       incomingByPhone
     })
 
+    const firstReply = incomingAfter.length ? incomingAfter[0] : null
+    const latestReply = incomingAfter.length ? incomingAfter[incomingAfter.length - 1] : null
+
     const firstReplyAt = firstReply ? getIncomingTime(firstReply) : null
+    const latestReplyAt = latestReply ? getIncomingTime(latestReply) : null
 
     const firstAgentReply = firstReply
       ? getFirstAgentReplyAfterCustomer({
           phone,
           firstReplyAt,
+          outgoingByPhone
+        })
+      : null
+
+    const agentAfterLatestCustomer = latestReply
+      ? getFirstAgentReplyAfterCustomer({
+          phone,
+          firstReplyAt: latestReplyAt,
           outgoingByPhone
         })
       : null
@@ -404,7 +449,7 @@ function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contact
         ? Math.max(0, Math.round((getTime(agentReplyAt) - getTime(firstReplyAt)) / 1000))
         : 0
 
-    const replyText = getReplyBody(firstReply)
+    const replyText = getReplyBody(latestReply)
     const replyBucket = classifyReply(replyText)
     const failed = isItemFailed(item)
     const sent = isItemSent({ item, job, outgoingByPhone })
@@ -427,15 +472,17 @@ function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contact
       template_language: item.template_language || null,
 
       processedAt: item.processed_at || item.updated_at || item.created_at || null,
-      sentAt: item.sent_at || item.processed_at || item.updated_at || item.created_at || null,
+      sentAt: item.sent_at || item.processed_at || item.created_at || item.updated_at || null,
       scheduledAt: item.scheduled_at || null,
 
-      hasReply: Boolean(firstReply),
-      hasAgentReply: Boolean(firstAgentReply),
-      replyCount: firstReply ? 1 : 0,
+      hasReply: Boolean(latestReply),
+      hasAgentReply: Boolean(agentAfterLatestCustomer),
+      replyCount: incomingAfter.length,
       replyBucket,
       lastReply: replyText,
-      lastReplyAt: firstReplyAt,
+      lastReplyAt: latestReplyAt,
+      firstReply: getReplyBody(firstReply),
+      firstReplyAt,
       agentReply: getReplyBody(firstAgentReply),
       agentReplyAt,
       responseSeconds,
