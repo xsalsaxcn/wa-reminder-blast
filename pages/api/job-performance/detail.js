@@ -63,99 +63,6 @@ function getReplyBody(row) {
   )
 }
 
-
-function getLogPhone(row) {
-  return cleanPhone(row?.phone || row?.to || row?.wa_id || row?.customer_phone || row?.recipient_phone || '')
-}
-
-function getLogJobId(row) {
-  return cleanText(row?.job_id || row?.send_job_id || row?.jobId || '')
-}
-
-function getLogTime(row) {
-  return (
-    row?.sent_at ||
-    row?.processed_at ||
-    row?.created_at ||
-    row?.updated_at ||
-    row?.scheduled_at ||
-    row?.timestamp ||
-    ''
-  )
-}
-
-function getLogMessage(row) {
-  return (
-    cleanText(row?.message) ||
-    cleanText(row?.body) ||
-    cleanText(row?.text) ||
-    cleanText(row?.content) ||
-    cleanText(row?.template_name) ||
-    ''
-  )
-}
-
-function shouldUseLogAsItem(row) {
-  const mode = cleanText(row?.mode || row?.event || row?.type || '').toLowerCase()
-
-  if (mode === 'webhook_status') return false
-  if (mode === 'status') return false
-
-  return Boolean(getLogPhone(row) && getLogJobId(row) && getLogTime(row))
-}
-
-function logToItem(row) {
-  return {
-    ...row,
-    id: row.id ? 'delivery-' + row.id : 'delivery-' + getLogJobId(row) + '-' + getLogPhone(row),
-    job_id: getLogJobId(row),
-    phone: getLogPhone(row),
-    message: getLogMessage(row),
-    status: row.status || 'sent',
-    sent_at: getLogTime(row),
-    processed_at: getLogTime(row),
-    created_at: getLogTime(row),
-    template_name: row.template_name || row.template || null,
-    error_message: row.error_message || row.error || row.reason || null,
-    from_delivery_log: true
-  }
-}
-
-function mergeDeliveryFallbackItems(existingItems, deliveryRows, jobMap, onlyJobId = '') {
-  const existingKey = new Set()
-
-  for (const item of existingItems || []) {
-    const key = getItemJobId(item) + '::' + getItemPhone(item)
-    existingKey.add(key)
-  }
-
-  const latestByKey = new Map()
-
-  for (const row of deliveryRows || []) {
-    if (!shouldUseLogAsItem(row)) continue
-
-    const jobId = getLogJobId(row)
-    const phone = getLogPhone(row)
-
-    if (onlyJobId && jobId !== onlyJobId) continue
-    if (jobMap && jobMap.size && !jobMap.has(jobId)) continue
-
-    const key = jobId + '::' + phone
-    if (existingKey.has(key)) continue
-
-    const current = latestByKey.get(key)
-    const currentTime = current ? getTime(getLogTime(current)) : 0
-    const rowTime = getTime(getLogTime(row))
-
-    if (!current || rowTime >= currentTime) {
-      latestByKey.set(key, row)
-    }
-  }
-
-  return Array.from(latestByKey.values()).map(logToItem)
-}
-
-
 function getIncomingPhone(row) {
   return cleanPhone(row?.phone || row?.from || row?.wa_id || row?.sender_phone || row?.customer_phone || '')
 }
@@ -647,11 +554,7 @@ export default async function handler(req, res) {
       })
     }
 
-    const baseItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
-    const deliveryRows = await safeFetchAll('send_delivery_logs', 50000)
-    const jobMap = new Map([[jobId, job]])
-    const deliveryFallbackItems = mergeDeliveryFallbackItems(baseItems, deliveryRows, jobMap, jobId)
-    const items = baseItems.concat(deliveryFallbackItems)
+    const items = Array.isArray(itemsResult.data) ? itemsResult.data : []
 
     const incomingRows = await safeFetchAll('wa_incoming_messages', 50000)
     const outgoingRows = await safeFetchAll('wa_outgoing_messages', 50000)
@@ -740,9 +643,6 @@ export default async function handler(req, res) {
         selected,
         job_total_items: job.total_items || null,
         items_loaded: items.length,
-        base_items_loaded: baseItems.length,
-        delivery_logs_loaded: deliveryRows.length,
-        delivery_fallback_items: deliveryFallbackItems.length,
         detail_rows: filteredDetails.length,
         target_fallback_enabled: true
       }
