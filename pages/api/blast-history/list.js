@@ -24,15 +24,15 @@ function cleanPhone(value) {
 }
 
 function toPage(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number) || number < 1) return 1
-  return Math.floor(number)
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 1) return 1
+  return Math.floor(n)
 }
 
 function toLimit(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number) || number <= 0) return 500
-  return Math.min(1000, Math.max(50, Math.floor(number)))
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return 500
+  return Math.min(1000, Math.max(50, Math.floor(n)))
 }
 
 function normalizeStatus(value) {
@@ -180,7 +180,6 @@ export default async function handler(req, res) {
     const template = cleanText(req.query.template)
     const campaignType = cleanText(req.query.campaign_type || req.query.campaignType)
     const projectName = cleanText(req.query.project_name || req.query.projectName)
-    const batchName = cleanText(req.query.batch_name || req.query.batchName)
 
     const jobs = await getJobs()
     const templates = await getTemplates()
@@ -195,14 +194,9 @@ export default async function handler(req, res) {
       filteredJobs = filteredJobs.filter((job) => cleanText(job.project_name || job.name || job.title) === projectName)
     }
 
-    if (batchName && batchName !== 'all') {
-      filteredJobs = filteredJobs.filter((job) => cleanText(job.batch_name) === batchName)
-    }
-
     const needJobFilter =
       (campaignType && campaignType !== 'all') ||
-      (projectName && projectName !== 'all') ||
-      (batchName && batchName !== 'all')
+      (projectName && projectName !== 'all')
 
     const filteredJobIds = filteredJobs.map((job) => job.id).filter(Boolean)
 
@@ -229,7 +223,6 @@ export default async function handler(req, res) {
                 .filter(Boolean)
             )
           ).sort((a, b) => a.localeCompare(b)),
-          batch_names: uniqueValues(jobs, 'batch_name'),
           templates
         }
       })
@@ -308,7 +301,6 @@ export default async function handler(req, res) {
               .filter(Boolean)
           )
         ).sort((a, b) => a.localeCompare(b)),
-        batch_names: uniqueValues(jobs, 'batch_name'),
         templates
       },
       filters: {
@@ -316,8 +308,7 @@ export default async function handler(req, res) {
         status,
         template,
         campaign_type: campaignType,
-        project_name: projectName,
-        batch_name: batchName
+        project_name: projectName
       }
     })
   } catch (error) {

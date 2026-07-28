@@ -15,7 +15,7 @@ function formatDate(value) {
   }
 }
 
-function shortText(value, max = 210) {
+function shortText(value, max = 260) {
   const text = cleanText(value)
   if (text.length <= max) return text
   return text.slice(0, max) + '...'
@@ -24,21 +24,10 @@ function shortText(value, max = 210) {
 function statusClass(status) {
   const text = cleanText(status).toLowerCase()
 
-  if (text === 'sent' || text === 'delivered' || text === 'read') {
-    return 'bg-emerald-50 text-emerald-700 ring-emerald-100'
-  }
-
-  if (text === 'failed') {
-    return 'bg-rose-50 text-rose-700 ring-rose-100'
-  }
-
-  if (text === 'processing') {
-    return 'bg-blue-50 text-blue-700 ring-blue-100'
-  }
-
-  if (text === 'pending' || text === 'queued') {
-    return 'bg-amber-50 text-amber-700 ring-amber-100'
-  }
+  if (text === 'sent' || text === 'delivered' || text === 'read') return 'bg-emerald-50 text-emerald-700 ring-emerald-100'
+  if (text === 'failed') return 'bg-rose-50 text-rose-700 ring-rose-100'
+  if (text === 'processing') return 'bg-blue-50 text-blue-700 ring-blue-100'
+  if (text === 'pending' || text === 'queued') return 'bg-amber-50 text-amber-700 ring-amber-100'
 
   return 'bg-slate-100 text-slate-600 ring-slate-200'
 }
@@ -59,7 +48,6 @@ export default function BlastHistoryPage() {
   const [options, setOptions] = useState({
     campaign_types: [],
     project_names: [],
-    batch_names: [],
     templates: []
   })
 
@@ -124,7 +112,6 @@ export default function BlastHistoryPage() {
       setOptions(data.options || {
         campaign_types: [],
         project_names: [],
-        batch_names: [],
         templates: []
       })
       setPageInfo(data.page || {})
@@ -274,7 +261,7 @@ export default function BlastHistoryPage() {
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-            <form onSubmit={applySearch} className="grid gap-3 lg:grid-cols-[1fr_170px_190px_230px_190px_auto_auto]">
+            <form onSubmit={applySearch} className="grid gap-3 lg:grid-cols-[1fr_170px_190px_210px_170px_auto_auto]">
               <input
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
@@ -397,7 +384,7 @@ export default function BlastHistoryPage() {
                 </div>
               ) : (
                 rows.map((row) => (
-                  <div key={row.id} className="grid gap-4 p-4 hover:bg-slate-50 lg:grid-cols-[160px_210px_1fr_150px_145px]">
+                  <div key={row.id} className="grid gap-4 p-4 hover:bg-slate-50 lg:grid-cols-[150px_190px_1fr_130px_130px]">
                     <div className="text-xs text-slate-500">
                       <div className="font-bold text-slate-700">{formatDate(row.display_time)}</div>
                       <div className="mt-2 text-slate-400">Row ID:</div>
@@ -407,6 +394,7 @@ export default function BlastHistoryPage() {
                     <div>
                       <div className="font-black text-slate-950">{row.name || '-'}</div>
                       <div className="mt-1 text-xs text-slate-500">{row.phone}</div>
+
                       <a
                         href={`/inbox?phone=${encodeURIComponent(row.phone)}&job_item_id=${encodeURIComponent(row.id)}`}
                         target="_blank"
