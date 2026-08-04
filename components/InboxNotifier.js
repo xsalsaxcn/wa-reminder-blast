@@ -1,582 +1,377 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter } from 'next/router'
-
-const POLL_INTERVAL_MS = 5000
-const TOAST_HIDE_MS = 9000
 
 function cleanText(value) {
   return String(value || '').trim()
 }
 
-function getConversationTime(item) {
-  const value =
-    item?.last_message_at ||
-    item?.updated_at ||
-    item?.created_at ||
-    ''
-
-  const time = value ? new Date(value).getTime() : 0
-
-  return Number.isFinite(time) ? time : 0
+function toNumber(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
 }
 
-function getConversationKey(item) {
-  return [
-    cleanText(item?.phone),
-    cleanText(item?.last_message_at),
-    cleanText(item?.last_message),
-    cleanText(item?.unread_count)
-  ].join('|')
-}
-
-function isInboxPage(pathname) {
-  return String(pathname || '').startsWith('/inbox')
-}
-
-function formatTime(value) {
-  if (!value) return '-'
+function formatDate(value) {
+  if (!value) return ''
 
   try {
-    const date = new Date(value)
-
-    if (Number.isNaN(date.getTime())) return '-'
-
-    return date.toLocaleString('id-ID', {
+    return new Date(value).toLocaleString('id-ID', {
       day: '2-digit',
       month: '2-digit',
       hour: '2-digit',
       minute: '2-digit'
     })
-  } catch (err) {
-    return '-'
+  } catch (error) {
+    return ''
   }
 }
 
+function shortText(value, max = 75) {
+  const text = cleanText(value)
+  if (text.length <= max) return text
+  return text.slice(0, max) + '...'
+}
+
 export default function InboxNotifier() {
-  const router = useRouter()
-
-  const [toast, setToast] = useState(null)
-  const [permission, setPermission] = useState('default')
-  const [enabled, setEnabled] = useState(true)
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [conversations, setConversations] = useState([])
-  const [totalUnread, setTotalUnread] = useState(0)
-  const [latestUnread, setLatestUnread] = useState(null)
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState([])
+  const [unreadTotal, setUnreadTotal] = useState(0)
+  const [loading, setLoading] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(false)
+  const [browserEnabled, setBrowserEnabled] = useState(false)
+  const [actionLoading, setActionLoading] = useState('')
 
-  const initializedRef = useRef(false)
-  const knownRef = useRef(new Map())
-  const toastTimerRef = useRef(null)
-  const originalTitleRef = useRef('')
-  const pollingRef = useRef(null)
+  const previousUnreadRef = useRef(0)
   const audioContextRef = useRef(null)
-  const soundEnabledRef = useRef(false)
+  const pollingRef = useRef(null)
 
-  const unreadConversations = useMemo(() => {
-    return (conversations || [])
-      .filter((item) => Number(item.unread_count || 0) > 0)
-      .sort((a, b) => getConversationTime(b) - getConversationTime(a))
-      .slice(0, 8)
-  }, [conversations])
+  const topItems = useMemo(() => {
+    return items.slice(0, 30)
+  }, [items])
 
-  function closeToast() {
-    setToast(null)
-
-    if (typeof document !== 'undefined') {
-      document.title = originalTitleRef.current || 'Notiva'
-    }
-
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current)
-      toastTimerRef.current = null
-    }
-  }
-
-  function updateBrowserTitle(nextTotalUnread) {
-    if (typeof document === 'undefined') return
-
-    if (!originalTitleRef.current) {
-      originalTitleRef.current = document.title || 'Notiva'
-    }
-
-    if (nextTotalUnread > 0) {
-      document.title = `(${nextTotalUnread}) Pesan baru - Notiva`
-    } else {
-      document.title = originalTitleRef.current || 'Notiva'
-    }
-  }
-
-  function getAudioContext() {
-    if (typeof window === 'undefined') return null
-
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext
-
-    if (!AudioContextClass) return null
-
-    if (!audioContextRef.current) {
-      audioContextRef.current = new AudioContextClass()
-    }
-
-    return audioContextRef.current
-  }
-
-  function playNotificationSound(force = false) {
-    if (!force && !soundEnabledRef.current) return
+  function playSound() {
+    if (!soundEnabled) return
 
     try {
-      const audioContext = getAudioContext()
+      const AudioContext = window.AudioContext || window.webkitAudioContext
+      if (!AudioContext) return
 
-      if (!audioContext) return
-
-      const playTone = () => {
-        const now = audioContext.currentTime
-
-        const tones = [
-          {
-            frequency: 880,
-            start: 0,
-            duration: 0.12
-          },
-          {
-            frequency: 1175,
-            start: 0.16,
-            duration: 0.16
-          }
-        ]
-
-        tones.forEach((tone) => {
-          const oscillator = audioContext.createOscillator()
-          const gain = audioContext.createGain()
-
-          oscillator.type = 'sine'
-          oscillator.frequency.setValueAtTime(tone.frequency, now + tone.start)
-
-          gain.gain.setValueAtTime(0.0001, now + tone.start)
-          gain.gain.exponentialRampToValueAtTime(0.2, now + tone.start + 0.02)
-          gain.gain.exponentialRampToValueAtTime(
-            0.0001,
-            now + tone.start + tone.duration
-          )
-
-          oscillator.connect(gain)
-          gain.connect(audioContext.destination)
-
-          oscillator.start(now + tone.start)
-          oscillator.stop(now + tone.start + tone.duration + 0.03)
-        })
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext()
       }
 
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().then(playTone).catch(() => {})
-      } else {
-        playTone()
-      }
-    } catch (err) {
-      console.error('Notification sound failed:', err)
+      const ctx = audioContextRef.current
+      const oscillator = ctx.createOscillator()
+      const gain = ctx.createGain()
+
+      oscillator.type = 'sine'
+      oscillator.frequency.value = 880
+      gain.gain.value = 0.08
+
+      oscillator.connect(gain)
+      gain.connect(ctx.destination)
+
+      oscillator.start()
+      oscillator.stop(ctx.currentTime + 0.18)
+    } catch (error) {
+      console.error('Failed to play notification sound:', error)
     }
   }
 
-  async function enableSound() {
-    soundEnabledRef.current = true
-    setSoundEnabled(true)
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('notiva_inbox_sound_enabled', '1')
-    }
-
-    playNotificationSound(true)
-  }
-
-  function disableSound() {
-    soundEnabledRef.current = false
-    setSoundEnabled(false)
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem('notiva_inbox_sound_enabled')
-    }
-  }
-
-  function showToast(payload) {
-    setToast(payload)
-    updateBrowserTitle(payload.unreadCount || 1)
-
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current)
-    }
-
-    toastTimerRef.current = setTimeout(() => {
-      setToast(null)
-      updateBrowserTitle(totalUnread)
-    }, TOAST_HIDE_MS)
-  }
-
-  function openInbox(phone) {
-    closeToast()
-    setPanelOpen(false)
-
-    if (phone) {
-      router.push('/inbox?phone=' + encodeURIComponent(phone))
-    } else {
-      router.push('/inbox')
-    }
-  }
-
-  async function requestPermission() {
-    if (typeof window === 'undefined') return
-    if (!('Notification' in window)) return
-
-    try {
-      const result = await Notification.requestPermission()
-      setPermission(result)
-    } catch (err) {
-      console.error('Notification permission failed:', err)
-    }
-  }
-
-  function showBrowserNotification(payload) {
+  function showBrowserNotification(item) {
+    if (!browserEnabled) return
     if (typeof window === 'undefined') return
     if (!('Notification' in window)) return
     if (Notification.permission !== 'granted') return
 
     try {
-      const notification = new Notification(payload.title, {
-        body: payload.body,
-        icon: '/favicon.ico',
-        tag: `notiva-inbox-${payload.phone || Date.now()}`,
-        renotify: true
+      const title = item.profile_name || item.phone || 'Pesan WhatsApp baru'
+      const body = item.last_message || 'Ada pesan belum dibaca.'
+
+      const notification = new Notification(title, {
+        body,
+        tag: 'notiva-inbox-' + (item.phone || Date.now())
       })
 
       notification.onclick = () => {
         window.focus()
-        openInbox(payload.phone)
-        notification.close()
+        window.location.href = item.phone
+          ? '/inbox?phone=' + encodeURIComponent(item.phone)
+          : '/inbox'
       }
-    } catch (err) {
-      console.error('Browser notification failed:', err)
+    } catch (error) {
+      console.error('Failed to show browser notification:', error)
     }
   }
 
-  function detectNewMessages(nextConversations) {
-    const safeConversations = nextConversations || []
-    const currentMap = new Map()
-
-    for (const item of safeConversations) {
-      const phone = cleanText(item.phone)
-      if (!phone) continue
-
-      currentMap.set(phone, {
-        key: getConversationKey(item),
-        time: getConversationTime(item),
-        unread: Number(item.unread_count || 0),
-        item
-      })
-    }
-
-    const nextTotalUnread = safeConversations.reduce(
-      (sum, item) => sum + Number(item.unread_count || 0),
-      0
-    )
-
-    const nextLatestUnread =
-      safeConversations
-        .filter((item) => Number(item.unread_count || 0) > 0)
-        .sort((a, b) => getConversationTime(b) - getConversationTime(a))[0] || null
-
-    setConversations(safeConversations)
-    setTotalUnread(nextTotalUnread)
-    setLatestUnread(nextLatestUnread)
-    updateBrowserTitle(nextTotalUnread)
-
-    if (!initializedRef.current) {
-      knownRef.current = currentMap
-      initializedRef.current = true
-      return
-    }
-
-    const newItems = []
-
-    for (const [phone, current] of currentMap.entries()) {
-      const previous = knownRef.current.get(phone)
-
-      if (!previous) {
-        if (current.unread > 0) {
-          newItems.push(current.item)
-        }
-
-        continue
-      }
-
-      const keyChanged = current.key !== previous.key
-      const newerTime = current.time > previous.time
-      const unreadIncreased = current.unread > previous.unread
-
-      if ((keyChanged || newerTime || unreadIncreased) && current.unread > 0) {
-        newItems.push(current.item)
-      }
-    }
-
-    knownRef.current = currentMap
-
-    if (!newItems.length) return
-
-    const latest = newItems.sort((a, b) => getConversationTime(b) - getConversationTime(a))[0]
-
-    const profileName = cleanText(latest.profile_name) || cleanText(latest.phone) || 'Customer'
-    const phone = cleanText(latest.phone)
-    const lastMessage = cleanText(latest.last_message) || 'Pesan baru masuk'
-
-    const payload = {
-      phone,
-      unreadCount: nextTotalUnread || newItems.length,
-      title: `Pesan baru dari ${profileName}`,
-      body: lastMessage,
-      profileName,
-      lastMessage
-    }
-
-    showToast(payload)
-    playNotificationSound()
-
-    if (!isInboxPage(router.pathname)) {
-      showBrowserNotification(payload)
-    } else if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
-      showBrowserNotification(payload)
-    }
-  }
-
-  async function checkInbox() {
-    if (!enabled) return
+  async function loadNotifications(silent = false) {
+    if (!silent) setLoading(true)
 
     try {
-      const response = await fetch('/api/inbox/list?t=' + Date.now(), {
+      const response = await fetch('/api/inbox/list?limit=10000&offset=0&t=' + Date.now(), {
         cache: 'no-store'
       })
 
       const data = await response.json()
 
-      if (!response.ok || !data.success) return
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Gagal memuat inbox notification')
+      }
 
-      detectNewMessages(data.conversations || [])
-    } catch (err) {
-      console.error('Inbox notifier check failed:', err)
+      const conversations = data.conversations || []
+
+      const unreadItems = conversations
+        .map((item) => ({
+          ...item,
+          unread_count: Math.max(0, toNumber(item.unread_count, 0))
+        }))
+        .filter((item) => item.unread_count > 0)
+        .sort((a, b) => {
+          const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
+          const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
+          return bTime - aTime
+        })
+
+      const total = unreadItems.reduce((acc, item) => acc + item.unread_count, 0)
+      const previous = previousUnreadRef.current
+
+      setItems(unreadItems)
+      setUnreadTotal(total)
+
+      if (previous > 0 && total > previous && unreadItems[0]) {
+        playSound()
+        showBrowserNotification(unreadItems[0])
+      }
+
+      previousUnreadRef.current = total
+    } catch (error) {
+      console.error('Failed to load inbox notifications:', error)
+    } finally {
+      if (!silent) setLoading(false)
     }
   }
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
+  async function enableSoundAndBrowser() {
+    setSoundEnabled(true)
 
-    originalTitleRef.current = document.title || 'Notiva'
-
-    const savedSound = window.localStorage.getItem('notiva_inbox_sound_enabled') === '1'
-    soundEnabledRef.current = savedSound
-    setSoundEnabled(savedSound)
-
-    if ('Notification' in window) {
-      setPermission(Notification.permission)
+    try {
+      if ('Notification' in window) {
+        const permission = await Notification.requestPermission()
+        setBrowserEnabled(permission === 'granted')
+      }
+    } catch (error) {
+      setBrowserEnabled(false)
     }
 
-    checkInbox()
+    playSound()
+  }
+
+  async function markRead(phone) {
+    const targetPhone = cleanText(phone)
+    if (!targetPhone) return
+
+    setActionLoading(targetPhone)
+
+    try {
+      await fetch('/api/inbox/mark-read', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phone: targetPhone
+        })
+      })
+
+      setItems((current) => current.filter((item) => item.phone !== targetPhone))
+      setUnreadTotal((current) => {
+        const found = items.find((item) => item.phone === targetPhone)
+        return Math.max(0, current - toNumber(found?.unread_count, 0))
+      })
+
+      setTimeout(() => loadNotifications(true), 300)
+    } catch (error) {
+      console.error('Failed to mark read:', error)
+      loadNotifications(true)
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  async function markAllRead() {
+    setActionLoading('all')
+
+    try {
+      await fetch('/api/inbox/mark-all-read', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+
+      setItems([])
+      setUnreadTotal(0)
+      previousUnreadRef.current = 0
+
+      setTimeout(() => loadNotifications(true), 300)
+    } catch (error) {
+      console.error('Failed to mark all read:', error)
+      loadNotifications(true)
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  function openInbox(phone = '') {
+    if (phone) {
+      window.location.href = '/inbox?phone=' + encodeURIComponent(phone)
+      return
+    }
+
+    window.location.href = '/inbox'
+  }
+
+  useEffect(() => {
+    loadNotifications(true)
 
     pollingRef.current = setInterval(() => {
-      const browserNotificationGranted =
-        'Notification' in window && Notification.permission === 'granted'
-
-      if (document.visibilityState === 'visible' || browserNotificationGranted) {
-        checkInbox()
+      if (document.visibilityState === 'visible') {
+        loadNotifications(true)
       }
-    }, POLL_INTERVAL_MS)
+    }, 5000)
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     }
-  }, [enabled, router.pathname])
-
-  if (!enabled) return null
+  }, [soundEnabled, browserEnabled])
 
   return (
-    <>
-      <div className="fixed right-4 top-4 z-[9997]">
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setPanelOpen((current) => !current)}
-            className={`relative flex h-12 w-12 items-center justify-center rounded-2xl border shadow-xl transition ${
-              totalUnread > 0
-                ? 'border-green-200 bg-green-600 text-white hover:bg-green-700'
-                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-            }`}
-            title="Notifikasi Inbox"
-          >
-            <span className="text-xl">🔔</span>
+    <div className="fixed right-4 top-4 z-[9999]">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((current) => !current)
+          loadNotifications(true)
+        }}
+        className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-green-600 text-2xl text-white shadow-xl hover:bg-green-700"
+        title="Inbox Notification"
+      >
+        🔔
 
-            {totalUnread > 0 ? (
-              <span className="absolute -right-2 -top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-red-600 px-1.5 text-[11px] font-black text-white ring-2 ring-white">
-                {totalUnread > 99 ? '99+' : totalUnread}
-              </span>
-            ) : null}
-          </button>
+        {unreadTotal > 0 ? (
+          <span className="absolute -right-2 -top-2 rounded-full bg-red-600 px-2 py-1 text-xs font-black text-white ring-2 ring-white">
+            {unreadTotal > 99 ? '99+' : unreadTotal}
+          </span>
+        ) : null}
+      </button>
 
-          {panelOpen ? (
-            <div className="absolute right-0 mt-3 w-[calc(100vw-2rem)] max-w-sm overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-              <div className="border-b border-slate-100 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-black text-slate-900">Inbox Notification</p>
-                    <p className="text-xs text-slate-500">
-                      {totalUnread > 0
-                        ? `${totalUnread} pesan belum dibaca`
-                        : 'Tidak ada pesan baru'}
-                    </p>
-                  </div>
+      {open ? (
+        <div className="mt-3 w-[360px] max-w-[calc(100vw-32px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-4">
+            <div>
+              <h3 className="text-lg font-black text-slate-950">Inbox Notification</h3>
+              <p className="text-sm text-slate-500">
+                {unreadTotal > 0 ? `${unreadTotal} pesan belum dibaca` : 'Tidak ada pesan belum dibaca'}
+              </p>
+            </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setPanelOpen(false)}
-                    className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-200"
-                  >
-                    ✕
-                  </button>
-                </div>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-full bg-slate-100 px-3 py-2 text-sm font-black text-slate-500 hover:bg-slate-200"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="max-h-[420px] overflow-y-auto">
+            {loading ? (
+              <div className="p-4 text-sm text-slate-500">Loading...</div>
+            ) : topItems.length === 0 ? (
+              <div className="p-5 text-sm text-slate-500">
+                Semua pesan sudah dibaca.
               </div>
+            ) : (
+              topItems.map((item) => (
+                <div key={item.phone} className="border-b border-slate-100 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openInbox(item.phone)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="truncate font-black text-slate-950">
+                        {item.profile_name || item.phone}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {item.phone}
+                      </div>
+                      <div className="mt-2 line-clamp-2 text-sm text-slate-700">
+                        {shortText(item.last_message, 95) || '-'}
+                      </div>
+                      <div className="mt-2 text-xs text-slate-400">
+                        {formatDate(item.last_message_at)}
+                      </div>
+                    </button>
 
-              <div className="max-h-80 overflow-y-auto">
-                {unreadConversations.length === 0 ? (
-                  <div className="p-4 text-sm text-slate-500">
-                    Belum ada pesan baru.
-                  </div>
-                ) : (
-                  unreadConversations.map((item) => {
-                    const profileName = cleanText(item.profile_name) || cleanText(item.phone)
-                    const phone = cleanText(item.phone)
-                    const message = cleanText(item.last_message) || '-'
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <span className="rounded-full bg-green-50 px-2 py-1 text-xs font-black text-green-700">
+                        {item.unread_count}
+                      </span>
 
-                    return (
                       <button
-                        key={phone}
                         type="button"
-                        onClick={() => openInbox(phone)}
-                        className="block w-full border-b border-slate-100 p-4 text-left hover:bg-slate-50"
+                        onClick={() => markRead(item.phone)}
+                        disabled={actionLoading === item.phone || actionLoading === 'all'}
+                        className="rounded-full bg-slate-100 px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate font-bold text-slate-900">
-                              {profileName}
-                            </p>
-                            <p className="mt-0.5 text-xs text-slate-400">
-                              {phone}
-                            </p>
-                          </div>
-
-                          <span className="rounded-full bg-green-50 px-2 py-1 text-xs font-black text-green-700">
-                            {Number(item.unread_count || 0)}
-                          </span>
-                        </div>
-
-                        <p className="mt-2 line-clamp-2 text-sm text-slate-600">
-                          {message}
-                        </p>
-
-                        <p className="mt-2 text-xs text-slate-400">
-                          {formatTime(item.last_message_at)}
-                        </p>
+                        {actionLoading === item.phone ? '...' : 'Tandai sudah baca'}
                       </button>
-                    )
-                  })
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 p-3">
-                <button
-                  type="button"
-                  onClick={() => openInbox(latestUnread?.phone)}
-                  className="rounded-xl bg-green-600 px-4 py-2 text-xs font-black text-white hover:bg-green-700"
-                >
-                  Open Inbox
-                </button>
-
-                <button
-                  type="button"
-                  onClick={soundEnabled ? disableSound : enableSound}
-                  className={`rounded-xl px-4 py-2 text-xs font-black ${
-                    soundEnabled
-                      ? 'bg-orange-50 text-orange-700 hover:bg-orange-100'
-                      : 'bg-orange-600 text-white hover:bg-orange-700'
-                  }`}
-                >
-                  {soundEnabled ? 'Suara Aktif' : 'Aktifkan Suara'}
-                </button>
-
-                {permission !== 'granted' ? (
-                  <button
-                    type="button"
-                    onClick={requestPermission}
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700"
-                  >
-                    Aktifkan Browser
-                  </button>
-                ) : (
-                  <span className="text-xs font-semibold text-green-600">
-                    Browser aktif
-                  </span>
-                )}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      {toast ? (
-        <div className="fixed bottom-4 right-4 z-[9999] w-[calc(100vw-2rem)] max-w-sm rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-green-50 text-lg">
-              🔔
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-black text-slate-900">
-                    {toast.title}
-                  </p>
-                  <p className="mt-1 line-clamp-2 text-sm text-slate-600">
-                    {toast.body}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Total unread: {toast.unreadCount}
-                  </p>
+                    </div>
+                  </div>
                 </div>
+              ))
+            )}
+          </div>
 
-                <button
-                  type="button"
-                  onClick={closeToast}
-                  className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-200"
-                >
-                  ✕
-                </button>
-              </div>
+          <div className="grid grid-cols-2 gap-2 border-t border-slate-100 p-4">
+            <button
+              type="button"
+              onClick={() => openInbox()}
+              className="rounded-xl bg-green-600 px-3 py-3 text-sm font-black text-white hover:bg-green-700"
+            >
+              Open Inbox
+            </button>
 
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => openInbox(toast.phone)}
-                  className="rounded-xl bg-green-600 px-4 py-2 text-xs font-black text-white hover:bg-green-700"
-                >
-                  Open Inbox
-                </button>
+            <button
+              type="button"
+              onClick={markAllRead}
+              disabled={actionLoading === 'all' || unreadTotal === 0}
+              className="rounded-xl bg-red-50 px-3 py-3 text-sm font-black text-red-700 hover:bg-red-100 disabled:opacity-50"
+            >
+              {actionLoading === 'all' ? 'Loading...' : 'Sudah baca semua'}
+            </button>
 
-                <button
-                  type="button"
-                  onClick={closeToast}
-                  className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200"
-                >
-                  Nanti
-                </button>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={enableSoundAndBrowser}
+              className="rounded-xl bg-amber-50 px-3 py-3 text-sm font-black text-amber-700 hover:bg-amber-100"
+            >
+              {soundEnabled ? 'Suara Aktif' : 'Aktifkan Suara'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => loadNotifications(false)}
+              className="rounded-xl bg-slate-100 px-3 py-3 text-sm font-black text-slate-700 hover:bg-slate-200"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="border-t border-slate-100 px-4 pb-4 text-xs text-slate-400">
+            {browserEnabled ? 'Browser aktif' : 'Browser notification belum aktif'}
           </div>
         </div>
       ) : null}
-    </>
+    </div>
   )
 }
