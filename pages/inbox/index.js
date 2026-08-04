@@ -202,6 +202,26 @@ export default function InboxPage() {
     }, 100)
   }
 
+  async function markConversationReadOnServer(phone) {
+    const targetPhone = String(phone || '').trim()
+
+    if (!targetPhone) return
+
+    try {
+      await fetch('/api/inbox/mark-read', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phone: targetPhone
+        })
+      })
+    } catch (err) {
+      console.error('Failed to mark conversation read:', err)
+    }
+  }
+
   function markLocalConversationRead(phone) {
     const targetPhone = String(phone || '')
 
@@ -449,6 +469,7 @@ export default function InboxPage() {
     setMessageSearchText('')
     setMessageSearchOpen(false)
     markLocalConversationRead(conversation.phone)
+    markConversationReadOnServer(conversation.phone)
 
     await loadMessages(conversation.phone, false, true)
   }
