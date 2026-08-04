@@ -409,7 +409,7 @@ export default function InboxPage() {
           ? router.query.phone
           : null
 
-      const activePhone = selectedPhoneRef.current || queryPhone
+      const activePhone = queryPhone || selectedPhoneRef.current
 
       const stillExists = activePhone
         ? list.find((item) => item.phone === activePhone)

@@ -344,7 +344,7 @@ async function getTemplateBlastItemsPaged() {
 
     const result = await supabaseAdmin
       .from('send_job_items')
-      .select('id, job_id, phone, message, status, template_name, template_language, template_header_type, created_at, updated_at, processed_at, sent_at, scheduled_at, error_message')
+      .select('id, job_id, phone, message, status, template_name, template_language, template_header_type, created_at, updated_at, processed_at, scheduled_at, error_message')
       .not('template_name', 'is', null)
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -365,7 +365,7 @@ async function getTemplateBlastItemsOld() {
     () =>
       supabaseAdmin
         .from('send_job_items')
-        .select('id, job_id, phone, message, status, template_name, template_language, template_header_type, created_at, updated_at, processed_at, sent_at, scheduled_at, error_message')
+        .select('id, job_id, phone, message, status, template_name, template_language, template_header_type, created_at, updated_at, processed_at, scheduled_at, error_message')
         .not('template_name', 'is', null)
         .order('created_at', { ascending: false })
         .limit(50000),
@@ -592,7 +592,7 @@ async function getLatestCampaignByPhoneRobust(phones) {
     () =>
       supabaseAdmin
         .from('send_job_items')
-        .select('id, job_id, phone, template_name, status, sent_at, processed_at, updated_at, created_at, scheduled_at')
+        .select('id, job_id, phone, template_name, status, processed_at, updated_at, created_at, scheduled_at')
         .not('template_name', 'is', null)
         .order('created_at', { ascending: false })
         .limit(50000),
