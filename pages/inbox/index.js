@@ -759,7 +759,7 @@ export default function InboxPage() {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
     }
-  }, [router.isReady, router.query.phone])
+  }, [router.isReady])
 
   const selectedWindowBadge = getWindowBadge(selectedConversation)
 
@@ -776,7 +776,7 @@ export default function InboxPage() {
                 Lihat dan balas pesan WhatsApp customer.
               </p>
               <p className="mt-1 text-[11px] text-slate-400 md:text-xs">
-                Auto-refresh 5 detik
+                Auto-refresh 15 detik
                 {lastUpdated ? ` - ${lastUpdated.toLocaleTimeString('id-ID')}` : ''}
               </p>
             </div>
