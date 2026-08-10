@@ -38,6 +38,7 @@ export default function InboxPage() {
   const messagesEndRef = useRef(null)
   const messagesScrollRef = useRef(null)
   const fileInputRef = useRef(null)
+  const queryPhoneAppliedRef = useRef(false)
 
   const campaignTypeOptions = useMemo(() => {
     const set = new Set()
@@ -375,7 +376,6 @@ export default function InboxPage() {
     setError('')
 
     try {
-      const offset = 0
       const params = new URLSearchParams()
 
       params.set('limit', String(CONVERSATION_PAGE_SIZE))
@@ -429,18 +429,42 @@ export default function InboxPage() {
           ? router.query.phone
           : null
 
-      const activePhone = queryPhone || selectedPhoneRef.current
+      const shouldApplyQueryPhone = Boolean(queryPhone && !queryPhoneAppliedRef.current)
+      const activePhone = shouldApplyQueryPhone
+        ? queryPhone
+        : selectedPhoneRef.current
 
       const stillExists = activePhone
         ? list.find((item) => item.phone === activePhone)
         : null
+
+      if (silent && selectedPhoneRef.current) {
+        const activeStillExists = list.find((item) => item.phone === selectedPhoneRef.current)
+
+        if (activeStillExists) {
+          setSelectedConversation((current) => {
+            if (!current || current.phone !== selectedPhoneRef.current) return current
+
+            return {
+              ...current,
+              ...activeStillExists,
+              unread_count: 0
+            }
+          })
+        }
+
+        return
+      }
 
       const nextSelected = stillExists || list[0]
 
       setSelectedConversation(nextSelected)
       selectedPhoneRef.current = nextSelected.phone
 
-      if (queryPhone) setMobileView('chat')
+      if (shouldApplyQueryPhone) {
+        queryPhoneAppliedRef.current = true
+        setMobileView('chat')
+      }
 
       await loadMessages(nextSelected.phone, true, !silent)
     } catch (err) {
@@ -458,6 +482,8 @@ export default function InboxPage() {
   }
 
   async function selectConversation(conversation) {
+    if (!conversation?.phone) return
+
     const nextConversation = {
       ...conversation,
       unread_count: 0
@@ -465,11 +491,27 @@ export default function InboxPage() {
 
     setSelectedConversation(nextConversation)
     selectedPhoneRef.current = conversation.phone
+    queryPhoneAppliedRef.current = true
     setMobileView('chat')
     setMessageSearchText('')
     setMessageSearchOpen(false)
     markLocalConversationRead(conversation.phone)
     markConversationReadOnServer(conversation.phone)
+
+    if (router?.replace) {
+      router.replace(
+        {
+          pathname: '/inbox',
+          query: {
+            phone: conversation.phone
+          }
+        },
+        undefined,
+        {
+          shallow: true
+        }
+      )
+    }
 
     await loadMessages(conversation.phone, false, true)
   }
@@ -528,15 +570,27 @@ export default function InboxPage() {
   async function sendReply(e) {
     e.preventDefault()
 
-    if (!selectedConversation?.phone) return
-    if (!replyText.trim() && !attachmentFile) return
+    const targetConversation = selectedConversation
+    const targetPhone = selectedPhoneRef.current || targetConversation?.phone || ''
+    const visiblePhone = targetConversation?.phone || ''
+    const messageToSend = replyText.trim()
+    const fileToSend = attachmentFile
+
+    if (!targetPhone || !visiblePhone) return
+
+    if (targetPhone !== visiblePhone) {
+      setError('Room chat berubah saat akan mengirim. Pilih ulang chat customer supaya tidak salah kirim.')
+      return
+    }
+
+    if (!messageToSend && !fileToSend) return
 
     setSending(true)
     setError('')
 
     try {
-      if (attachmentFile) {
-        const base64 = await fileToBase64(attachmentFile)
+      if (fileToSend) {
+        const base64 = await fileToBase64(fileToSend)
 
         const response = await fetch('/api/inbox/reply-attachment', {
           method: 'POST',
@@ -544,10 +598,10 @@ export default function InboxPage() {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            phone: selectedConversation.phone,
-            caption: replyText.trim(),
-            fileName: attachmentFile.name,
-            mimeType: attachmentFile.type,
+            phone: targetPhone,
+            caption: messageToSend,
+            fileName: fileToSend.name,
+            mimeType: fileToSend.type,
             base64
           })
         })
@@ -566,8 +620,8 @@ export default function InboxPage() {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            phone: selectedConversation.phone,
-            message: replyText.trim()
+            phone: targetPhone,
+            message: messageToSend
           })
         })
 
@@ -579,7 +633,7 @@ export default function InboxPage() {
       }
 
       setReplyText('')
-      await loadMessages(selectedConversation.phone, true, true)
+      await loadMessages(targetPhone, true, true)
       await loadConversations(true)
     } catch (err) {
       setError(err.message || 'Gagal mengirim balasan')
@@ -700,7 +754,7 @@ export default function InboxPage() {
       if (document.visibilityState === 'visible') {
         loadConversations(true)
       }
-    }, 5000)
+    }, 15000)
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
