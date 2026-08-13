@@ -13,6 +13,8 @@ export default function InboxPage() {
   const [oldestCursor, setOldestCursor] = useState('')
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [replyText, setReplyText] = useState('')
+  const [suggestingReply, setSuggestingReply] = useState(false)
+  const [suggestionResult, setSuggestionResult] = useState(null)
   const [searchText, setSearchText] = useState('')
   const [messageSearchText, setMessageSearchText] = useState('')
   const [messageSearchOpen, setMessageSearchOpen] = useState(false)
@@ -564,6 +566,59 @@ export default function InboxPage() {
       setAttachmentPreview(URL.createObjectURL(file))
     } else {
       setAttachmentPreview('')
+    }
+  }
+
+  async function suggestReplyFromBot() {
+    const targetConversation = selectedConversation
+    const targetPhone = selectedPhoneRef.current || targetConversation?.phone || ''
+
+    if (!targetPhone) {
+      setError('Pilih room chat dulu.')
+      return
+    }
+
+    setSuggestingReply(true)
+    setSuggestionResult(null)
+    setError('')
+
+    try {
+      const latestIncoming = [...messages]
+        .reverse()
+        .find((item) => item.direction === 'incoming')
+
+      const latestText =
+        latestIncoming?.message ||
+        latestIncoming?.body ||
+        latestIncoming?.text ||
+        ''
+
+      const response = await fetch('/api/chatbot/suggest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phone: targetPhone,
+          message: latestText
+        })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Gagal membuat suggest reply.')
+      }
+
+      setSuggestionResult(data)
+
+      if (data.answer) {
+        setReplyText(data.answer)
+      }
+    } catch (err) {
+      setError(err.message || 'Gagal membuat suggest reply.')
+    } finally {
+      setSuggestingReply(false)
     }
   }
 
@@ -1132,6 +1187,44 @@ export default function InboxPage() {
 
                 <div ref={messagesEndRef} />
               </div>
+            <div className="border-t border-slate-100 bg-white px-4 py-3">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+                    Bot Suggest Reply
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    Staff tetap harus cek dan klik Send manual. Bot tidak auto-kirim dari tombol ini.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={suggestReplyFromBot}
+                  disabled={suggestingReply || !selectedConversation?.phone}
+                  className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-black text-white hover:bg-cyan-700 disabled:opacity-50"
+                >
+                  {suggestingReply ? 'Membuat saran...' : 'Suggest Reply'}
+                </button>
+              </div>
+
+              {suggestionResult ? (
+                <div className="mt-3 rounded-2xl border border-cyan-100 bg-cyan-50 p-3 text-xs text-cyan-900">
+                  <div className="font-black">
+                    {suggestionResult.status} · Confidence {suggestionResult.confidence}
+                  </div>
+                  {suggestionResult.matched_faq ? (
+                    <div className="mt-1">
+                      Matched: {suggestionResult.matched_faq.question}
+                    </div>
+                  ) : null}
+                  <div className="mt-2 text-cyan-800">
+                    Jawaban sudah dimasukkan ke kolom reply. Silakan edit sebelum kirim.
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
 
               <form onSubmit={sendReply} className="shrink-0 border-t border-slate-200 bg-white p-3 md:p-4">
                 {selectedConversation && selectedWindowBadge.note ? (
