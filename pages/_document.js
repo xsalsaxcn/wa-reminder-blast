@@ -6,6 +6,13 @@ export default function Document() {
 return (
 <Html lang="id">
 <Head>
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <meta name="theme-color" content="#020617" />
+        <meta name="application-name" content="Notiva" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="Notiva" />
+        <link rel="apple-touch-icon" href="/icons/notiva-192.png" />
 <link rel="icon" href={LOGO_URL} />
 <link rel="apple-touch-icon" href={LOGO_URL} />
 <meta name="theme-color" content="#0F172A" />
