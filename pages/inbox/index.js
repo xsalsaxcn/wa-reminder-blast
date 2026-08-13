@@ -41,6 +41,8 @@ export default function InboxPage() {
   const messagesScrollRef = useRef(null)
   const fileInputRef = useRef(null)
   const queryPhoneAppliedRef = useRef(false)
+  const loadMessagesRef = useRef(null)
+  const activeMessagePollingRef = useRef(false)
 
   const campaignTypeOptions = useMemo(() => {
     const set = new Set()
@@ -795,6 +797,10 @@ export default function InboxPage() {
   }
 
   useEffect(() => {
+    loadMessagesRef.current = loadMessages
+  })
+
+  useEffect(() => {
     if (!router.isReady) return
 
     if (router.query.phone && typeof router.query.phone === 'string') {
@@ -817,6 +823,35 @@ export default function InboxPage() {
   }, [router.isReady])
 
   const selectedWindowBadge = getWindowBadge(selectedConversation)
+
+  // ACTIVE ROOM MESSAGE POLLING
+  useEffect(() => {
+    if (!router.isReady) return
+
+    const interval = setInterval(async () => {
+      const activePhone = selectedPhoneRef.current
+
+      if (!activePhone) return
+      if (activeMessagePollingRef.current) return
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+
+      activeMessagePollingRef.current = true
+
+      try {
+        if (loadMessagesRef.current) {
+          await loadMessagesRef.current(activePhone, true, false)
+        }
+      } catch (err) {
+        console.error('Active room message polling failed:', err)
+      } finally {
+        activeMessagePollingRef.current = false
+      }
+    }, 5000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [router.isReady])
 
   return (
     <div className="min-h-[100dvh] bg-slate-100 md:flex md:h-[100dvh] md:overflow-hidden">
