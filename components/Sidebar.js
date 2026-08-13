@@ -89,6 +89,16 @@ const OPERATIONAL_MENUS = [
 ]
 
 const ADMIN_MENUS = [
+{
+    label: 'iServe Integration',
+    href: '/iserve',
+    roles: ['master', 'admin']
+  },
+  {
+    label: 'Database Manager',
+    href: '/admin/database-manager',
+    roles: ['master', 'admin']
+  },
   {
     label: 'Database Manager',
     href: '/admin/database-manager',
