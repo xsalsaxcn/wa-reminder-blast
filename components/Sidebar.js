@@ -115,6 +115,12 @@ const ADMIN_MENUS = [
     roles: ['master', 'admin']
   },
   {
+    label: 'Chatbot FAQ',
+    href: '/admin/chatbot',
+    roles: ['master', 'admin']
+  },
+
+  {
     label: 'Meta API Test',
     href: '/admin/meta-test',
     roles: ['master', 'admin']
