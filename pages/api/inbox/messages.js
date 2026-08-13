@@ -23,6 +23,24 @@ function cleanPhone(value) {
   return result
 }
 
+function phoneVariants(value) {
+  const raw = cleanText(value)
+  const clean = cleanPhone(raw)
+  const variants = new Set()
+
+  if (raw) variants.add(raw)
+  if (clean) {
+    variants.add(clean)
+    variants.add('+' + clean)
+
+    if (clean.startsWith('62')) {
+      variants.add('0' + clean.slice(2))
+    }
+  }
+
+  return Array.from(variants).filter(Boolean)
+}
+
 function getTime(value) {
   const time = value ? new Date(value).getTime() : 0
   return Number.isFinite(time) ? time : 0
@@ -31,9 +49,21 @@ function getTime(value) {
 function toLimit(value) {
   const number = Number(value)
 
-  if (!Number.isFinite(number) || number <= 0) return 50
+  if (!Number.isFinite(number) || number <= 0) return 80
 
-  return Math.min(200, Math.max(20, Math.floor(number)))
+  return Math.min(200, Math.max(30, Math.floor(number)))
+}
+
+function parseRaw(value) {
+  if (!value) return {}
+
+  if (typeof value === 'object') return value
+
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    return {}
+  }
 }
 
 function getIncomingPhone(row) {
@@ -45,6 +75,8 @@ function getOutgoingPhone(row) {
 }
 
 function getBody(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.body) ||
     cleanText(row?.message) ||
@@ -53,6 +85,10 @@ function getBody(row) {
     cleanText(row?.caption) ||
     cleanText(row?.media_caption) ||
     cleanText(row?.template_name) ||
+    cleanText(raw?.body) ||
+    cleanText(raw?.message) ||
+    cleanText(raw?.text?.body) ||
+    cleanText(raw?.template?.name) ||
     ''
   )
 }
@@ -66,10 +102,12 @@ function getOutgoingTime(row) {
 }
 
 function getJobItemTime(row) {
-  return row?.sent_at || row?.processed_at || row?.scheduled_at || row?.created_at || row?.updated_at || ''
+  return row?.processed_at || row?.scheduled_at || row?.created_at || row?.updated_at || ''
 }
 
 function getMediaUrl(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.media_url) ||
     cleanText(row?.attachment_url) ||
@@ -77,63 +115,77 @@ function getMediaUrl(row) {
     cleanText(row?.url) ||
     cleanText(row?.image_url) ||
     cleanText(row?.document_url) ||
+    cleanText(raw?.media_url) ||
+    cleanText(raw?.attachment_url) ||
     ''
   )
 }
 
 function getMediaType(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.media_type) ||
     cleanText(row?.attachment_type) ||
+    cleanText(row?.message_type) ||
     cleanText(row?.type) ||
+    cleanText(raw?.type) ||
     ''
   )
 }
 
 function getFilename(row) {
+  const raw = parseRaw(row?.raw)
+
   return (
     cleanText(row?.filename) ||
     cleanText(row?.file_name) ||
     cleanText(row?.attachment_filename) ||
     cleanText(row?.media_filename) ||
+    cleanText(raw?.filename) ||
+    cleanText(raw?.attachment_filename) ||
     ''
   )
 }
 
-async function fetchAll(table, maxRows = 50000) {
-  const pageSize = 1000
-  let from = 0
-  let rows = []
-
-  while (from < maxRows) {
-    const to = from + pageSize - 1
-
-    const result = await supabaseAdmin
-      .from(table)
-      .select('*')
-      .range(from, to)
-
-    if (result.error) {
-      throw new Error(result.error.message)
-    }
-
-    const batch = Array.isArray(result.data) ? result.data : []
-    rows = rows.concat(batch)
-
-    if (batch.length < pageSize) break
-
-    from += pageSize
-  }
-
-  return rows
+function getMetaMessageId(row) {
+  return (
+    cleanText(row?.meta_message_id) ||
+    cleanText(row?.whatsapp_message_id) ||
+    cleanText(row?.message_id) ||
+    cleanText(row?.wamid) ||
+    ''
+  )
 }
 
-async function safeFetchAll(table, maxRows = 50000) {
+async function safeQuery(label, queryBuilder) {
   try {
-    return await fetchAll(table, maxRows)
+    const result = await queryBuilder()
+
+    if (result.error) {
+      console.error(label, result.error.message)
+      return []
+    }
+
+    return Array.isArray(result.data) ? result.data : []
   } catch (error) {
+    console.error(label, error.message)
     return []
   }
+}
+
+async function queryByPhone(table, variants, max = 500) {
+  if (!variants.length) return []
+
+  const rows = await safeQuery(table, () =>
+    supabaseAdmin
+      .from(table)
+      .select('*')
+      .in('phone', variants)
+      .limit(max)
+  )
+
+  return rows
 }
 
 async function fetchFocusItem(focusItemId) {
@@ -143,7 +195,7 @@ async function fetchFocusItem(focusItemId) {
     .from('send_job_items')
     .select('*')
     .eq('id', focusItemId)
-    .single()
+    .maybeSingle()
 
   if (result.error) return null
 
@@ -152,18 +204,24 @@ async function fetchFocusItem(focusItemId) {
 
 function buildIncomingMessage(row) {
   const createdAt = getIncomingTime(row)
+  const body = getBody(row)
 
   return {
     id: row.id ? 'incoming-' + row.id : 'incoming-' + createdAt,
     source_id: row.id || null,
     direction: 'incoming',
-    type: 'text',
-    message: getBody(row) || '[Incoming message]',
-    body: getBody(row) || '[Incoming message]',
-    text: getBody(row) || '[Incoming message]',
+    type: getMediaType(row) || (getMediaUrl(row) ? 'image' : 'text'),
+    message: body || getFilename(row) || '[Incoming message]',
+    body: body || getFilename(row) || '[Incoming message]',
+    text: body || getFilename(row) || '[Incoming message]',
     created_at: createdAt,
     timestamp: createdAt,
     phone: getIncomingPhone(row),
+    media_url: getMediaUrl(row) || null,
+    attachment_url: getMediaUrl(row) || null,
+    attachment_type: getMediaType(row) || null,
+    attachment_filename: getFilename(row) || null,
+    filename: getFilename(row) || null,
     raw: row
   }
 }
@@ -172,15 +230,16 @@ function buildOutgoingMessage(row) {
   const createdAt = getOutgoingTime(row)
   const mediaUrl = getMediaUrl(row)
   const mediaType = getMediaType(row)
+  const body = getBody(row)
 
   return {
     id: row.id ? 'outgoing-' + row.id : 'outgoing-' + createdAt,
     source_id: row.id || null,
     direction: 'outgoing',
     type: mediaType || (mediaUrl ? 'image' : 'text'),
-    message: getBody(row) || getFilename(row) || '[Outgoing message]',
-    body: getBody(row) || getFilename(row) || '[Outgoing message]',
-    text: getBody(row) || getFilename(row) || '[Outgoing message]',
+    message: body || getFilename(row) || '[Outgoing message]',
+    body: body || getFilename(row) || '[Outgoing message]',
+    text: body || getFilename(row) || '[Outgoing message]',
     created_at: createdAt,
     timestamp: createdAt,
     phone: getOutgoingPhone(row),
@@ -190,7 +249,7 @@ function buildOutgoingMessage(row) {
     attachment_filename: getFilename(row) || null,
     filename: getFilename(row) || null,
     status: row.status || '',
-    meta_message_id: row.meta_message_id || row.whatsapp_message_id || null,
+    meta_message_id: getMetaMessageId(row) || null,
     raw: row
   }
 }
@@ -199,6 +258,7 @@ function buildJobItemMessage(row) {
   const createdAt = getJobItemTime(row)
   const mediaUrl = getMediaUrl(row)
   const mediaType = getMediaType(row) || cleanText(row.template_header_type).toLowerCase()
+  const body = getBody(row)
 
   return {
     id: row.id ? 'job-item-' + row.id : 'job-item-' + createdAt,
@@ -207,9 +267,9 @@ function buildJobItemMessage(row) {
     job_item_id: row.id || null,
     direction: 'outgoing',
     type: mediaType || (mediaUrl ? 'image' : 'template'),
-    message: getBody(row) || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
-    body: getBody(row) || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
-    text: getBody(row) || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
+    message: body || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
+    body: body || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
+    text: body || (row.template_name ? 'Template Blast: ' + row.template_name : '[Template Blast]'),
     created_at: createdAt,
     timestamp: createdAt,
     phone: cleanPhone(row.phone),
@@ -223,6 +283,7 @@ function buildJobItemMessage(row) {
     template_language: row.template_language || '',
     template_header_type: row.template_header_type || '',
     header_media_id: row.header_media_id || null,
+    meta_message_id: getMetaMessageId(row) || null,
     is_blast_history: true,
     raw: row
   }
@@ -232,7 +293,12 @@ function dedupeMessages(messages) {
   const map = new Map()
 
   for (const message of messages || []) {
-    const key = message.id || [message.direction, message.phone, message.created_at, message.message].join('::')
+    const metaId = cleanText(message.meta_message_id)
+
+    const key = metaId
+      ? 'meta::' + metaId
+      : message.id || [message.direction, message.phone, message.created_at, message.message].join('::')
+
     map.set(key, message)
   }
 
@@ -255,27 +321,29 @@ export default async function handler(req, res) {
       })
     }
 
-    const phone = cleanPhone(req.query.phone || req.query.wa_id || '')
+    const requestedPhone = cleanPhone(req.query.phone || req.query.wa_id || '')
     const before = cleanText(req.query.before)
     const beforeTime = before ? getTime(before) : 0
     const limit = toLimit(req.query.limit)
     const focusItemId = cleanText(req.query.job_item_id || req.query.item_id)
 
-    if (!phone && !focusItemId) {
+    const focusItem = await fetchFocusItem(focusItemId)
+    const targetPhone = requestedPhone || cleanPhone(focusItem?.phone)
+
+    if (!targetPhone) {
       return res.status(400).json({
         success: false,
         message: 'phone wajib diisi.'
       })
     }
 
-    const [incomingRows, outgoingRows, jobItemRows, focusItem] = await Promise.all([
-      safeFetchAll('wa_incoming_messages', 50000),
-      safeFetchAll('wa_outgoing_messages', 50000),
-      safeFetchAll('send_job_items', 50000),
-      fetchFocusItem(focusItemId)
-    ])
+    const variants = phoneVariants(targetPhone)
 
-    const targetPhone = phone || cleanPhone(focusItem?.phone)
+    const [incomingRows, outgoingRows, jobItemRows] = await Promise.all([
+      queryByPhone('wa_incoming_messages', variants, 700),
+      queryByPhone('wa_outgoing_messages', variants, 700),
+      queryByPhone('send_job_items', variants, 700)
+    ])
 
     let relevantJobItems = (jobItemRows || []).filter((item) => {
       return cleanPhone(item.phone) === targetPhone
@@ -295,7 +363,7 @@ export default async function handler(req, res) {
 
     const blastOutgoing = relevantJobItems.map(buildJobItemMessage)
 
-    let allMessages = dedupeMessages([
+    const allMessages = dedupeMessages([
       ...incoming,
       ...outgoing,
       ...blastOutgoing
@@ -341,6 +409,7 @@ export default async function handler(req, res) {
       oldestCursor,
       total: allMessages.length,
       debug: {
+        optimized_query: true,
         incoming_total: incoming.length,
         outgoing_total: outgoing.length,
         blast_history_total: blastOutgoing.length,
