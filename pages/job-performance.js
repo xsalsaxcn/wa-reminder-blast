@@ -354,6 +354,20 @@ function DetailPanel({ detail, loading, error, onClose }) {
 }
 
 function JobCard({ item, onMetricClick }) {
+  function exportSegment(segment) {
+    if (!item?.id) {
+      alert('Job ID tidak ditemukan.')
+      return
+    }
+
+    const params = new URLSearchParams()
+    params.set('job_id', item.id)
+    params.set('segment', segment || 'all')
+    params.set('t', String(Date.now()))
+
+    window.open('/api/job-performance/export-segment?' + params.toString(), '_blank')
+  }
+
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -416,6 +430,61 @@ function JobCard({ item, onMetricClick }) {
         <MiniStat label="Opt-out" value={item.optOut} className="text-slate-700" onClick={() => onMetricClick(item, 'opt_out')} />
         <MiniStat label="Hot Lead" value={item.hotLead} className="text-emerald-700" onClick={() => onMetricClick(item, 'hot_lead')} />
         <MiniStat label="Score" value={`${item.score}/100`} className="text-slate-900" onClick={() => onMetricClick(item, 'score')} />
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-cyan-100 bg-cyan-50 px-4 py-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-cyan-700">
+              Export Data Job Ini
+            </p>
+            <p className="mt-1 text-xs text-cyan-700">
+              Download CSV per card: semua data, sudah baca, belum baca, reply, dan read no reply.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => exportSegment('all')}
+              className="rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+            >
+              Export Semua
+            </button>
+
+            <button
+              type="button"
+              onClick={() => exportSegment('read')}
+              className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-emerald-700"
+            >
+              Sudah Baca
+            </button>
+
+            <button
+              type="button"
+              onClick={() => exportSegment('unread')}
+              className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-amber-600"
+            >
+              Belum Baca
+            </button>
+
+            <button
+              type="button"
+              onClick={() => exportSegment('replied')}
+              className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-blue-700"
+            >
+              Reply
+            </button>
+
+            <button
+              type="button"
+              onClick={() => exportSegment('no_reply_read')}
+              className="rounded-xl bg-purple-600 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-purple-700"
+            >
+              Read No Reply
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
