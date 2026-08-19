@@ -801,10 +801,76 @@ export default async function handler(req, res) {
       })
       .sort((a, b) => getTime(b.last_message_at) - getTime(a.last_message_at))
 
+    // NOTIVA_PATCH_02_SAFE_SERVER_FILTER_V1
+    // Keep the existing conversation-building logic untouched. Pagination/search/filter
+    // is applied only after the exact same merged result has been produced.
     const pageLimit = getPageLimit(req.query.limit)
     const pageOffset = getPageOffset(req.query.offset)
+    const searchQuery = cleanText(req.query.q).toLowerCase().slice(0, 200)
+    const campaignTypeFilter = cleanText(req.query.campaign_type)
+    const projectFilter = cleanText(req.query.project_name)
+    const focusPhone = cleanPhone(req.query.focus_phone)
     const totalConversations = mergedConversations.length
-    const pagedConversations = mergedConversations.slice(pageOffset, pageOffset + pageLimit)
+
+    const campaignTypes = Array.from(
+      new Set(mergedConversations.map((item) => cleanText(item.campaign_type)).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b, 'id'))
+
+    const projectSource = campaignTypeFilter
+      ? mergedConversations.filter((item) => item.campaign_type === campaignTypeFilter)
+      : mergedConversations
+
+    const projects = Array.from(
+      new Set(projectSource.map((item) => cleanText(item.project_name)).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b, 'id'))
+
+    const filteredConversations = mergedConversations.filter((item) => {
+      const matchCampaign = !campaignTypeFilter || item.campaign_type === campaignTypeFilter
+      const matchProject = !projectFilter || item.project_name === projectFilter
+
+      if (!matchCampaign || !matchProject) return false
+      if (!searchQuery) return true
+
+      const searchable = [
+        item.profile_name,
+        item.phone,
+        item.last_message,
+        item.campaign_type,
+        item.project_name,
+        item.batch_name,
+        item.campaign_label
+      ]
+        .map((value) => String(value || '').toLowerCase())
+        .join('\n')
+
+      return searchable.includes(searchQuery)
+    })
+
+    const filteredTotal = filteredConversations.length
+    let pagedConversations = filteredConversations.slice(pageOffset, pageOffset + pageLimit)
+
+    // Preserve deep-link behavior from Blast History / Job Performance.
+    // If the requested phone is outside the first page, include it without removing
+    // or changing its conversation data. next_offset still follows the normal page.
+    if (
+      focusPhone &&
+      pageOffset === 0 &&
+      !searchQuery &&
+      !campaignTypeFilter &&
+      !projectFilter &&
+      !pagedConversations.some((item) => cleanPhone(item.phone) === focusPhone)
+    ) {
+      const focusedConversation = mergedConversations.find(
+        (item) => cleanPhone(item.phone) === focusPhone
+      )
+
+      if (focusedConversation) {
+        pagedConversations = [focusedConversation, ...pagedConversations]
+      }
+    }
+
+    const nextOffset =
+      pageOffset + pageLimit < filteredTotal ? pageOffset + pageLimit : null
 
     return res.status(200).json({
       success: true,
@@ -814,8 +880,13 @@ export default async function handler(req, res) {
         offset: pageOffset,
         returned: pagedConversations.length,
         total: totalConversations,
-        has_more: pageOffset + pageLimit < totalConversations,
-        next_offset: pageOffset + pageLimit < totalConversations ? pageOffset + pageLimit : null
+        filtered_total: filteredTotal,
+        has_more: nextOffset !== null,
+        next_offset: nextOffset
+      },
+      filters: {
+        campaign_types: campaignTypes,
+        projects
       },
       debug: {
         conversations: mergedConversations.length,

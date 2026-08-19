@@ -30,10 +30,15 @@ export default function InboxPage() {
   const [campaignTypeFilter, setCampaignTypeFilter] = useState('all')
   const [projectFilter, setProjectFilter] = useState('all')
   const [conversationTotal, setConversationTotal] = useState(0)
+  const [conversationNextOffset, setConversationNextOffset] = useState(0)
   const [hasMoreConversations, setHasMoreConversations] = useState(false)
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
+  const [availableCampaignTypes, setAvailableCampaignTypes] = useState([])
+  const [availableProjects, setAvailableProjects] = useState([])
 
-  const CONVERSATION_PAGE_SIZE = 10000
+  // NOTIVA_PATCH_02_SAFE_PAGINATION_V1
+  const CONVERSATION_PAGE_SIZE = 50
+  const CONVERSATION_FILTER_DEBOUNCE_MS = 350
 
   const selectedPhoneRef = useRef(null)
   const pollingRef = useRef(null)
@@ -42,9 +47,14 @@ export default function InboxPage() {
   const fileInputRef = useRef(null)
   const queryPhoneAppliedRef = useRef(false)
   const loadMessagesRef = useRef(null)
+  const loadConversationsRef = useRef(null)
+  const conversationFilterTimerRef = useRef(null)
+  const conversationFilterReadyRef = useRef(false)
   const activeMessagePollingRef = useRef(false)
 
   const campaignTypeOptions = useMemo(() => {
+    if (availableCampaignTypes.length) return availableCampaignTypes
+
     const set = new Set()
 
     for (const item of conversations || []) {
@@ -52,9 +62,11 @@ export default function InboxPage() {
     }
 
     return Array.from(set).sort()
-  }, [conversations])
+  }, [availableCampaignTypes, conversations])
 
   const projectOptions = useMemo(() => {
+    if (availableProjects.length) return availableProjects
+
     const set = new Set()
 
     for (const item of conversations || []) {
@@ -63,7 +75,7 @@ export default function InboxPage() {
     }
 
     return Array.from(set).sort()
-  }, [conversations, campaignTypeFilter])
+  }, [availableProjects, conversations, campaignTypeFilter])
 
   const filteredConversations = useMemo(() => {
     const q = searchText.trim().toLowerCase()
@@ -373,7 +385,7 @@ export default function InboxPage() {
     await loadMessages(selectedConversation.phone, true, false, oldestCursor)
   }
 
-  async function loadConversations(silent = false, append = false) {
+  async function loadConversations(silent = false, append = false, options = {}) {
     if (append) setLoadingMoreConversations(true)
     else if (!silent) setLoading(true)
 
@@ -381,10 +393,39 @@ export default function InboxPage() {
 
     try {
       const params = new URLSearchParams()
+      const searchValue = Object.prototype.hasOwnProperty.call(options, 'searchText')
+        ? String(options.searchText || '')
+        : searchText
+      const campaignValue = Object.prototype.hasOwnProperty.call(options, 'campaignTypeFilter')
+        ? String(options.campaignTypeFilter || 'all')
+        : campaignTypeFilter
+      const projectValue = Object.prototype.hasOwnProperty.call(options, 'projectFilter')
+        ? String(options.projectFilter || 'all')
+        : projectFilter
+      const currentLoaded = Math.max(CONVERSATION_PAGE_SIZE, conversations.length || 0)
+      const requestLimit = options.loadAll
+        ? Math.max(CONVERSATION_PAGE_SIZE, conversationTotal || currentLoaded)
+        : silent && !append
+          ? currentLoaded
+          : CONVERSATION_PAGE_SIZE
+      const requestOffset = append ? conversationNextOffset : 0
 
-      params.set('limit', String(CONVERSATION_PAGE_SIZE))
-      params.set('offset', '0')
+      params.set('limit', String(requestLimit))
+      params.set('offset', String(requestOffset))
       params.set('t', String(Date.now()))
+
+      if (searchValue.trim()) params.set('q', searchValue.trim())
+      if (campaignValue !== 'all') params.set('campaign_type', campaignValue)
+      if (projectValue !== 'all') params.set('project_name', projectValue)
+
+      const queryPhone =
+        router?.query?.phone && typeof router.query.phone === 'string'
+          ? router.query.phone
+          : null
+
+      if (!append && queryPhone && !queryPhoneAppliedRef.current) {
+        params.set('focus_phone', queryPhone)
+      }
 
       const response = await fetch('/api/inbox/list?' + params.toString(), {
         cache: 'no-store'
@@ -409,29 +450,54 @@ export default function InboxPage() {
       )
 
       setConversationTotal(Number(data.page?.total || list.length))
-      setHasMoreConversations(false)
+      setConversationNextOffset(
+        data.page?.next_offset === null || data.page?.next_offset === undefined
+          ? 0
+          : Number(data.page.next_offset)
+      )
+      setHasMoreConversations(Boolean(data.page?.has_more))
+
+      if (Array.isArray(data.filters?.campaign_types)) {
+        setAvailableCampaignTypes(data.filters.campaign_types)
+      }
+
+      if (Array.isArray(data.filters?.projects)) {
+        setAvailableProjects(data.filters.projects)
+      }
+
       setLastUpdated(new Date())
 
       if (append) {
-        setConversations(list)
+        setConversations((current) => {
+          const merged = new Map()
+
+          for (const item of current || []) {
+            if (item?.phone) merged.set(item.phone, item)
+          }
+
+          for (const item of list || []) {
+            if (item?.phone) merged.set(item.phone, item)
+          }
+
+          return Array.from(merged.values()).sort(
+            (a, b) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
+          )
+        })
         return
       }
 
       setConversations(list)
 
       if (list.length === 0) {
-        setSelectedConversation(null)
-        selectedPhoneRef.current = null
-        setMessages([])
-        setHasMoreMessages(false)
-        setOldestCursor('')
+        if (!silent || !selectedPhoneRef.current) {
+          setSelectedConversation(null)
+          selectedPhoneRef.current = null
+          setMessages([])
+          setHasMoreMessages(false)
+          setOldestCursor('')
+        }
         return
       }
-
-      const queryPhone =
-        router?.query?.phone && typeof router.query.phone === 'string'
-          ? router.query.phone
-          : null
 
       const shouldApplyQueryPhone = Boolean(queryPhone && !queryPhoneAppliedRef.current)
       const activePhone = shouldApplyQueryPhone
@@ -482,7 +548,8 @@ export default function InboxPage() {
   async function loadMoreConversations() {
     if (loadingMoreConversations || !hasMoreConversations) return
 
-    await loadConversations(true, true)
+    // Existing "Load semua chat" behavior remains available, but only on explicit click.
+    await loadConversations(true, true, { loadAll: true })
   }
 
   async function selectConversation(conversation) {
@@ -798,7 +865,33 @@ export default function InboxPage() {
 
   useEffect(() => {
     loadMessagesRef.current = loadMessages
+    loadConversationsRef.current = loadConversations
   })
+
+  useEffect(() => {
+    if (!router.isReady) return
+
+    if (!conversationFilterReadyRef.current) {
+      conversationFilterReadyRef.current = true
+      return
+    }
+
+    if (conversationFilterTimerRef.current) {
+      clearTimeout(conversationFilterTimerRef.current)
+    }
+
+    conversationFilterTimerRef.current = setTimeout(() => {
+      if (loadConversationsRef.current) {
+        loadConversationsRef.current(true, false)
+      }
+    }, CONVERSATION_FILTER_DEBOUNCE_MS)
+
+    return () => {
+      if (conversationFilterTimerRef.current) {
+        clearTimeout(conversationFilterTimerRef.current)
+      }
+    }
+  }, [router.isReady, searchText, campaignTypeFilter, projectFilter])
 
   useEffect(() => {
     if (!router.isReady) return
@@ -812,8 +905,8 @@ export default function InboxPage() {
     loadQuickReplies()
 
     pollingRef.current = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        loadConversations(true)
+      if (document.visibilityState === 'visible' && loadConversationsRef.current) {
+        loadConversationsRef.current(true)
       }
     }, 15000)
 
