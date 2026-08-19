@@ -106,7 +106,7 @@ export default function InboxNotifier() {
     if (!silent) setLoading(true)
 
     try {
-      const response = await fetch('/api/inbox/list?limit=10000&offset=0&t=' + Date.now(), {
+      const response = await fetch('/api/inbox/notifications?t=' + Date.now(), {
         cache: 'no-store'
       })
 
