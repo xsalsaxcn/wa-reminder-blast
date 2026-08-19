@@ -37,8 +37,8 @@ export default function InboxPage() {
   const [availableProjects, setAvailableProjects] = useState([])
 
   // NOTIVA_PATCH_02_SAFE_PAGINATION_V1
-  // NOTIVA_PATCH_02B_SAFE_INCREMENTAL_100_V1
-  const CONVERSATION_PAGE_SIZE = 100
+  // NOTIVA_PATCH_02C_SAFE_PROGRESSIVE_50_100_200_V1
+  const CONVERSATION_PAGE_SIZE = 50
   const CONVERSATION_FILTER_DEBOUNCE_MS = 350
 
   const selectedPhoneRef = useRef(null)
@@ -404,8 +404,12 @@ export default function InboxPage() {
         ? String(options.projectFilter || 'all')
         : projectFilter
       const currentLoaded = Math.max(CONVERSATION_PAGE_SIZE, conversations.length || 0)
-      const requestLimit =
-        silent && !append ? currentLoaded : CONVERSATION_PAGE_SIZE
+      const requestedAppendLimit = Number(options.appendLimit || CONVERSATION_PAGE_SIZE)
+      const requestLimit = append
+        ? Math.max(1, Math.min(100, requestedAppendLimit))
+        : silent
+          ? currentLoaded
+          : CONVERSATION_PAGE_SIZE
       const requestOffset = append ? conversationNextOffset : 0
 
       params.set('limit', String(requestLimit))
@@ -546,8 +550,12 @@ export default function InboxPage() {
   async function loadMoreConversations() {
     if (loadingMoreConversations || !hasMoreConversations) return
 
-    // NOTIVA_PATCH_02B_SAFE_INCREMENTAL_100_V1: append exactly one next page; never request the full Inbox.
-    await loadConversations(true, true)
+    const currentLoadedCount = conversations.length || 0
+    const nextTarget = currentLoadedCount < 100 ? 100 : currentLoadedCount + 100
+    const appendLimit = Math.max(1, nextTarget - currentLoadedCount)
+
+    // NOTIVA_PATCH_02C_SAFE_PROGRESSIVE_50_100_200_V1: 50 -> 100 -> 200 -> 300 -> ... without loading the whole Inbox.
+    await loadConversations(true, true, { appendLimit })
   }
 
   async function selectConversation(conversation) {
@@ -1147,7 +1155,12 @@ export default function InboxPage() {
                         disabled={loadingMoreConversations}
                         className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-60"
                       >
-                        {loadingMoreConversations ? 'Loading...' : 'Load 100 chat berikutnya'}
+                        {loadingMoreConversations
+                          ? 'Loading...'
+                          : `Load sampai ${Math.min(
+                              conversationTotal || conversations.length + 100,
+                              conversations.length < 100 ? 100 : conversations.length + 100
+                            )} chat`}
                       </button>
                       <p className="mt-2 text-center text-xs text-slate-400">
                         Loaded {conversations.length} dari {conversationTotal || conversations.length} conversation
