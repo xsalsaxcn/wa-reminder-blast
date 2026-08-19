@@ -37,7 +37,8 @@ export default function InboxPage() {
   const [availableProjects, setAvailableProjects] = useState([])
 
   // NOTIVA_PATCH_02_SAFE_PAGINATION_V1
-  const CONVERSATION_PAGE_SIZE = 50
+  // NOTIVA_PATCH_02B_SAFE_INCREMENTAL_100_V1
+  const CONVERSATION_PAGE_SIZE = 100
   const CONVERSATION_FILTER_DEBOUNCE_MS = 350
 
   const selectedPhoneRef = useRef(null)
@@ -403,11 +404,8 @@ export default function InboxPage() {
         ? String(options.projectFilter || 'all')
         : projectFilter
       const currentLoaded = Math.max(CONVERSATION_PAGE_SIZE, conversations.length || 0)
-      const requestLimit = options.loadAll
-        ? Math.max(CONVERSATION_PAGE_SIZE, conversationTotal || currentLoaded)
-        : silent && !append
-          ? currentLoaded
-          : CONVERSATION_PAGE_SIZE
+      const requestLimit =
+        silent && !append ? currentLoaded : CONVERSATION_PAGE_SIZE
       const requestOffset = append ? conversationNextOffset : 0
 
       params.set('limit', String(requestLimit))
@@ -548,8 +546,8 @@ export default function InboxPage() {
   async function loadMoreConversations() {
     if (loadingMoreConversations || !hasMoreConversations) return
 
-    // Existing "Load semua chat" behavior remains available, but only on explicit click.
-    await loadConversations(true, true, { loadAll: true })
+    // NOTIVA_PATCH_02B_SAFE_INCREMENTAL_100_V1: append exactly one next page; never request the full Inbox.
+    await loadConversations(true, true)
   }
 
   async function selectConversation(conversation) {
@@ -1149,7 +1147,7 @@ export default function InboxPage() {
                         disabled={loadingMoreConversations}
                         className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-60"
                       >
-                        {loadingMoreConversations ? 'Loading...' : 'Load semua chat'}
+                        {loadingMoreConversations ? 'Loading...' : 'Load 100 chat berikutnya'}
                       </button>
                       <p className="mt-2 text-center text-xs text-slate-400">
                         Loaded {conversations.length} dari {conversationTotal || conversations.length} conversation
