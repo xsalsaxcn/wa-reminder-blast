@@ -59,6 +59,202 @@ async function fetchUnreadConversations() {
   return rows
 }
 
+// NOTIVA_PATCH_03_SAFE_NOTIFICATION_CAMPAIGN_CONTEXT_V1
+function getCampaignItemTime(item) {
+  return (
+    item?.processed_at ||
+    item?.created_at ||
+    item?.scheduled_at ||
+    item?.updated_at ||
+    null
+  )
+}
+
+function isUsableCampaignItem(item) {
+  const status = cleanText(item?.status).toLowerCase()
+
+  if (!status) return true
+
+  return ![
+    'pending',
+    'queued',
+    'queue',
+    'processing',
+    'scheduled',
+    'failed',
+    'error',
+    'cancelled',
+    'canceled'
+  ].includes(status)
+}
+
+function buildPhoneVariants(phone) {
+  const clean = cleanPhone(phone)
+  if (!clean) return []
+
+  const values = new Set([clean, '+' + clean])
+
+  if (clean.startsWith('62') && clean.length > 2) {
+    values.add('0' + clean.slice(2))
+  }
+
+  return Array.from(values)
+}
+
+function inferNotificationType(item, job) {
+  const jobType = cleanText(job?.type).toLowerCase()
+  const campaignType = cleanText(job?.campaign_type).toLowerCase()
+  const sendMode = cleanText(job?.send_mode || job?.mode).toLowerCase()
+  const text = [
+    job?.name,
+    job?.title,
+    item?.template_name
+  ].map(cleanText).join(' ').toLowerCase()
+
+  if (
+    jobType === 'reminder' ||
+    campaignType === 'reminder' ||
+    text.includes('reminder') ||
+    text.includes('pengingat')
+  ) return 'Reminder'
+
+  if (
+    jobType === 'blast' ||
+    sendMode === 'template' ||
+    cleanText(item?.template_name)
+  ) return 'Blast'
+
+  if (campaignType) {
+    return campaignType.charAt(0).toUpperCase() + campaignType.slice(1)
+  }
+
+  return item ? 'Campaign' : 'Organic'
+}
+
+function getNotificationCampaignTitle(item, job) {
+  return (
+    cleanText(item?.template_name) ||
+    cleanText(job?.project_name) ||
+    cleanText(job?.title) ||
+    cleanText(job?.name) ||
+    ''
+  )
+}
+
+async function getNotificationCampaignContext(conversations) {
+  const context = new Map()
+  const conversationByPhone = new Map()
+
+  for (const conversation of conversations || []) {
+    const phone = cleanPhone(conversation?.phone)
+    if (!phone) continue
+
+    conversationByPhone.set(phone, conversation)
+    context.set(phone, {
+      notification_type: 'Organic',
+      notification_campaign_title: '',
+      notification_template_name: '',
+      notification_job_id: null
+    })
+  }
+
+  if (!conversationByPhone.size) return context
+
+  try {
+    const queryPhones = Array.from(
+      new Set(
+        Array.from(conversationByPhone.keys()).flatMap(buildPhoneVariants)
+      )
+    )
+
+    const items = []
+    const queryChunkSize = 100
+
+    for (let index = 0; index < queryPhones.length; index += queryChunkSize) {
+      const chunk = queryPhones.slice(index, index + queryChunkSize)
+      if (!chunk.length) continue
+
+      const result = await supabaseAdmin
+        .from('send_job_items')
+        .select('id, job_id, phone, template_name, status, processed_at, updated_at, created_at, scheduled_at')
+        .in('phone', chunk)
+        .order('created_at', { ascending: false })
+        .limit(500)
+
+      if (result.error) continue
+      items.push(...(result.data || []))
+    }
+
+    const latestItemByPhone = new Map()
+
+    for (const item of items) {
+      if (!isUsableCampaignItem(item)) continue
+
+      const phone = cleanPhone(item?.phone)
+      const conversation = conversationByPhone.get(phone)
+      if (!phone || !conversation) continue
+
+      const itemTime = getTime(getCampaignItemTime(item))
+      const conversationTime = getTime(conversation.last_message_at)
+
+      // Associate the unread reply with the most recent campaign/template that
+      // was already sent before the latest conversation activity.
+      if (conversationTime && itemTime && itemTime > conversationTime + 5 * 60 * 1000) continue
+
+      const current = latestItemByPhone.get(phone)
+      const currentTime = getTime(getCampaignItemTime(current))
+
+      if (!current || itemTime >= currentTime) {
+        latestItemByPhone.set(phone, item)
+      }
+    }
+
+    const jobIds = Array.from(
+      new Set(
+        Array.from(latestItemByPhone.values())
+          .map((item) => cleanText(item?.job_id))
+          .filter(Boolean)
+      )
+    )
+
+    const jobs = new Map()
+
+    for (let index = 0; index < jobIds.length; index += 100) {
+      const chunk = jobIds.slice(index, index + 100)
+      if (!chunk.length) continue
+
+      const result = await supabaseAdmin
+        .from('send_jobs')
+        .select('*')
+        .in('id', chunk)
+
+      if (result.error) continue
+
+      for (const job of result.data || []) {
+        jobs.set(job.id, job)
+      }
+    }
+
+    for (const [phone, item] of latestItemByPhone.entries()) {
+      const job = jobs.get(item?.job_id) || {}
+      const templateName = cleanText(item?.template_name)
+
+      context.set(phone, {
+        notification_type: inferNotificationType(item, job),
+        notification_campaign_title: getNotificationCampaignTitle(item, job),
+        notification_template_name: templateName,
+        notification_job_id: item?.job_id || null
+      })
+    }
+  } catch (error) {
+    // Campaign enrichment is deliberately non-blocking. If metadata lookup fails,
+    // existing unread notification behavior must continue to work.
+    console.error('Failed to enrich inbox notification campaign context:', error)
+  }
+
+  return context
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -105,10 +301,21 @@ export default async function handler(req, res) {
       .filter((item) => item.unread_count > 0)
       .sort((a, b) => getTime(b.last_message_at) - getTime(a.last_message_at))
 
+    const campaignContext = await getNotificationCampaignContext(conversations.slice(0, 30))
+    const enrichedConversations = conversations.map((item) => ({
+      ...item,
+      ...(campaignContext.get(cleanPhone(item.phone)) || {
+        notification_type: 'Organic',
+        notification_campaign_title: '',
+        notification_template_name: '',
+        notification_job_id: null
+      })
+    }))
+
     return res.status(200).json({
       success: true,
-      conversations,
-      unread_total: conversations.reduce((sum, item) => sum + item.unread_count, 0)
+      conversations: enrichedConversations,
+      unread_total: enrichedConversations.reduce((sum, item) => sum + item.unread_count, 0)
     })
   } catch (error) {
     return res.status(500).json({

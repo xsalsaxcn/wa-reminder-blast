@@ -304,6 +304,23 @@ export default function InboxNotifier() {
                       <div className="mt-1 text-xs text-slate-500">
                         {item.phone}
                       </div>
+
+                      {/* NOTIVA_PATCH_03_SAFE_NOTIFICATION_BADGES_V1 */}
+                      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-700">
+                          {item.notification_type || 'Organic'}
+                        </span>
+
+                        {item.notification_campaign_title ? (
+                          <span
+                            className="max-w-[190px] truncate rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600"
+                            title={item.notification_campaign_title}
+                          >
+                            {shortText(item.notification_campaign_title, 42)}
+                          </span>
+                        ) : null}
+                      </div>
+
                       <div className="mt-2 line-clamp-2 text-sm text-slate-700">
                         {shortText(item.last_message, 95) || '-'}
                       </div>
