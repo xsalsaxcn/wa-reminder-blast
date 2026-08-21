@@ -772,6 +772,7 @@ export default function InboxPage() {
     }
   }
 
+  // NOTIVA_PATCH_04B_SAFE_SAVE_BUTTON_STYLE_V1
   // NOTIVA_PATCH_04_SAFE_MEDIA_UI_V1
   function messageType(msg) {
     return String(msg?.message_type || msg?.type || msg?.attachment_type || '').toLowerCase()
@@ -954,7 +955,7 @@ export default function InboxPage() {
                 <button
                   type="button"
                   onClick={() => saveContactVcard(contact, index)}
-                  className="mt-3 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                  className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
                 >
                   Save Contact (.vcf)
                 </button>
@@ -1002,7 +1003,7 @@ export default function InboxPage() {
             </a>
             <a
               href={downloadUrl}
-              className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-700"
+              className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
             >
               Save
             </a>
