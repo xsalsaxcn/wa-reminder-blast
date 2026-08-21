@@ -63,7 +63,16 @@ function getIncomingBody(message) {
   if (message.type === 'audio') return '[audio]'
   if (message.type === 'sticker') return '[sticker]'
   if (message.type === 'location') return '[location]'
-  if (message.type === 'contacts') return '[contact]'
+  if (message.type === 'contacts') {
+    const firstContact = Array.isArray(message.contacts) ? message.contacts[0] : null
+    const contactName = cleanText(
+      firstContact?.name?.formatted_name ||
+      firstContact?.name?.first_name ||
+      ''
+    )
+
+    return contactName ? `[contact] ${contactName}` : '[contact]'
+  }
   if (message.type === 'reaction') return cleanText(message.reaction?.emoji) || '[reaction]'
 
   return `[${message.type || 'message'}]`
@@ -71,6 +80,22 @@ function getIncomingBody(message) {
 
 function getMediaInfo(message) {
   const type = message.type
+
+  // NOTIVA_PATCH_04_SAFE_INCOMING_CONTACT_CAPTURE_V1
+  // Keep contact payload inside the existing media_caption text field so no DB migration is required.
+  if (type === 'contacts') {
+    const contactItems = Array.isArray(message.contacts) ? message.contacts : []
+
+    return {
+      media_id: null,
+      media_mime_type: 'application/vnd.notiva.contacts+json',
+      media_filename: null,
+      media_caption: JSON.stringify({
+        notiva_kind: 'contacts_v1',
+        contacts: contactItems
+      })
+    }
+  }
 
   if (!['image', 'document', 'video', 'audio', 'sticker'].includes(type)) {
     return {

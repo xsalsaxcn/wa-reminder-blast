@@ -158,6 +158,27 @@ function getMetaMessageId(row) {
   )
 }
 
+// NOTIVA_PATCH_04_SAFE_INCOMING_MEDIA_FIELDS_V1
+function getContactData(row) {
+  const type = getMediaType(row).toLowerCase()
+
+  if (type !== 'contacts' && type !== 'contact') return []
+
+  const value = cleanText(row?.media_caption)
+  if (!value) return []
+
+  try {
+    const parsed = JSON.parse(value)
+
+    if (Array.isArray(parsed)) return parsed
+    if (Array.isArray(parsed?.contacts)) return parsed.contacts
+
+    return []
+  } catch (error) {
+    return []
+  }
+}
+
 async function safeQuery(label, queryBuilder) {
   try {
     const result = await queryBuilder()
@@ -205,23 +226,32 @@ async function fetchFocusItem(focusItemId) {
 function buildIncomingMessage(row) {
   const createdAt = getIncomingTime(row)
   const body = getBody(row)
+  const mediaType = getMediaType(row)
+  const filename = getFilename(row)
+  const contactData = getContactData(row)
 
   return {
     id: row.id ? 'incoming-' + row.id : 'incoming-' + createdAt,
     source_id: row.id || null,
     direction: 'incoming',
-    type: getMediaType(row) || (getMediaUrl(row) ? 'image' : 'text'),
-    message: body || getFilename(row) || '[Incoming message]',
-    body: body || getFilename(row) || '[Incoming message]',
-    text: body || getFilename(row) || '[Incoming message]',
+    type: mediaType || (getMediaUrl(row) ? 'image' : 'text'),
+    message_type: mediaType || 'text',
+    message: body || filename || '[Incoming message]',
+    body: body || filename || '[Incoming message]',
+    text: body || filename || '[Incoming message]',
     created_at: createdAt,
     timestamp: createdAt,
     phone: getIncomingPhone(row),
+    media_id: cleanText(row?.media_id) || null,
+    media_mime_type: cleanText(row?.media_mime_type) || null,
+    media_filename: cleanText(row?.media_filename) || filename || null,
+    media_caption: cleanText(row?.media_caption) || null,
+    contact_data: contactData,
     media_url: getMediaUrl(row) || null,
     attachment_url: getMediaUrl(row) || null,
-    attachment_type: getMediaType(row) || null,
-    attachment_filename: getFilename(row) || null,
-    filename: getFilename(row) || null,
+    attachment_type: mediaType || null,
+    attachment_filename: filename || null,
+    filename: filename || null,
     raw: row
   }
 }

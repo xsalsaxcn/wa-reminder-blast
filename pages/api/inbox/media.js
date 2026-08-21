@@ -33,6 +33,8 @@ export default async function handler(req, res) {
 
     const mediaId = cleanText(req.query.media_id)
     const filename = cleanFilename(req.query.filename || 'attachment')
+    // NOTIVA_PATCH_04_SAFE_MEDIA_DOWNLOAD_V1
+    const download = String(req.query.download || '') === '1'
 
     if (!mediaId) {
       return res.status(400).json({
@@ -86,7 +88,10 @@ export default async function handler(req, res) {
 
     res.setHeader('Cache-Control', 'private, max-age=3600, stale-while-revalidate=86400')
     res.setHeader('Content-Type', contentType)
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"`)
+    res.setHeader(
+      'Content-Disposition',
+      `${download ? 'attachment' : 'inline'}; filename="${filename}"`
+    )
 
     return res.status(200).send(buffer)
   } catch (error) {

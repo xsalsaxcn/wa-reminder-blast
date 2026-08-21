@@ -772,41 +772,257 @@ export default function InboxPage() {
     }
   }
 
-  function mediaUrl(msg) {
+  // NOTIVA_PATCH_04_SAFE_MEDIA_UI_V1
+  function messageType(msg) {
+    return String(msg?.message_type || msg?.type || msg?.attachment_type || '').toLowerCase()
+  }
+
+  function mediaFilename(msg) {
+    if (msg?.media_filename) return String(msg.media_filename)
+
+    const type = messageType(msg)
+    const mime = String(msg?.media_mime_type || '').toLowerCase()
+
+    if (type === 'sticker' || mime === 'image/webp') return 'sticker.webp'
+    if (mime === 'image/png') return 'image.png'
+    if (mime === 'image/jpeg') return 'image.jpg'
+    if (mime === 'image/gif') return 'image.gif'
+    if (type === 'image') return 'image.jpg'
+    if (type === 'video') return 'video.mp4'
+    if (type === 'audio') return 'audio'
+
+    return 'attachment'
+  }
+
+  function mediaUrl(msg, download = false) {
     const params = new URLSearchParams()
     params.set('media_id', msg.media_id)
-    params.set('filename', msg.media_filename || 'attachment')
+    params.set('filename', mediaFilename(msg))
+    if (download) params.set('download', '1')
     return '/api/inbox/media?' + params.toString()
   }
 
+  function isContactMessage(msg) {
+    const type = messageType(msg)
+    return type === 'contacts' || type === 'contact'
+  }
+
+  function contactList(msg) {
+    if (Array.isArray(msg?.contact_data)) return msg.contact_data
+    if (Array.isArray(msg?.contact_data?.contacts)) return msg.contact_data.contacts
+    return []
+  }
+
+  function contactDisplayName(contact) {
+    return (
+      contact?.name?.formatted_name ||
+      [contact?.name?.first_name, contact?.name?.middle_name, contact?.name?.last_name]
+        .filter(Boolean)
+        .join(' ') ||
+      contact?.org?.company ||
+      'WhatsApp Contact'
+    )
+  }
+
+  function contactPhones(contact) {
+    return (Array.isArray(contact?.phones) ? contact.phones : [])
+      .map((item) => item?.phone || item?.wa_id || '')
+      .filter(Boolean)
+  }
+
+  function contactEmails(contact) {
+    return (Array.isArray(contact?.emails) ? contact.emails : [])
+      .map((item) => item?.email || '')
+      .filter(Boolean)
+  }
+
+  function vcardEscape(value) {
+    return String(value || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/\r?\n/g, '\\n')
+      .replace(/;/g, '\\;')
+      .replace(/,/g, '\\,')
+  }
+
+  function buildContactVcard(contact) {
+    const name = contact?.name || {}
+    const displayName = contactDisplayName(contact)
+    const lines = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      `N:${[name.last_name, name.first_name, name.middle_name, name.name_prefix, name.name_suffix]
+        .map(vcardEscape)
+        .join(';')}`,
+      `FN:${vcardEscape(displayName)}`
+    ]
+
+    if (contact?.org?.company) lines.push(`ORG:${vcardEscape(contact.org.company)}`)
+    if (contact?.org?.title) lines.push(`TITLE:${vcardEscape(contact.org.title)}`)
+
+    for (const phone of contactPhones(contact)) {
+      lines.push(`TEL;TYPE=CELL:${vcardEscape(phone)}`)
+    }
+
+    for (const email of contactEmails(contact)) {
+      lines.push(`EMAIL:${vcardEscape(email)}`)
+    }
+
+    for (const item of Array.isArray(contact?.urls) ? contact.urls : []) {
+      if (item?.url) lines.push(`URL:${vcardEscape(item.url)}`)
+    }
+
+    lines.push('END:VCARD')
+    return lines.join('\r\n') + '\r\n'
+  }
+
+  function saveContactVcard(contact, index = 0) {
+    const safeName = contactDisplayName(contact)
+      .replace(/[^a-zA-Z0-9 _.-]/g, '')
+      .trim() || `contact-${index + 1}`
+    const blob = new Blob([buildContactVcard(contact)], {
+      type: 'text/vcard;charset=utf-8'
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+
+    link.href = url
+    link.download = `${safeName}.vcf`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  function shouldRenderMessageText(msg) {
+    const text = String(msg?.message || '').trim()
+    const lower = text.toLowerCase()
+    const type = messageType(msg)
+
+    if (!text) return false
+    if (type === 'image' && lower === '[image]') return false
+    if (type === 'sticker' && lower === '[sticker]') return false
+    if (isContactMessage(msg) && lower.startsWith('[contact]')) return false
+
+    return true
+  }
+
   function renderMedia(msg) {
+    const type = messageType(msg)
+
+    if (isContactMessage(msg)) {
+      const contacts = contactList(msg)
+
+      if (!contacts.length) {
+        return (
+          <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+            Contact diterima. Detail contact lama belum tersimpan.
+          </div>
+        )
+      }
+
+      return (
+        <div className="mt-2 space-y-2">
+          {contacts.map((contact, index) => {
+            const phones = contactPhones(contact)
+            const emails = contactEmails(contact)
+
+            return (
+              <div
+                key={`contact-${index}-${contactDisplayName(contact)}`}
+                className="rounded-xl border border-slate-200 bg-white p-3 text-slate-800"
+              >
+                <div className="font-bold">{contactDisplayName(contact)}</div>
+
+                {contact?.org?.company ? (
+                  <div className="mt-1 text-xs text-slate-500">
+                    {[contact.org.company, contact.org.title].filter(Boolean).join(' - ')}
+                  </div>
+                ) : null}
+
+                {phones.map((phone) => (
+                  <div key={phone} className="mt-2 text-sm">
+                    {phone}
+                  </div>
+                ))}
+
+                {emails.map((email) => (
+                  <div key={email} className="mt-1 break-all text-xs text-slate-500">
+                    {email}
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => saveContactVcard(contact, index)}
+                  className="mt-3 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                >
+                  Save Contact (.vcf)
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )
+    }
+
     if (!msg.media_id) return null
 
-    const type = String(msg.message_type || '').toLowerCase()
     const mime = String(msg.media_mime_type || '').toLowerCase()
-    const url = mediaUrl(msg)
+    const inlineUrl = mediaUrl(msg, false)
+    const downloadUrl = mediaUrl(msg, true)
+    const imageLike = type === 'image' || type === 'sticker' || mime.startsWith('image/')
 
-    if (type === 'image' || mime.startsWith('image/')) {
+    if (imageLike) {
+      const sticker = type === 'sticker'
+
       return (
-        <a href={url} target="_blank" rel="noreferrer" className="mt-2 block">
-          <img
-            src={url}
-            alt={msg.media_caption || msg.media_filename || 'image'}
-            className="max-h-64 rounded-xl object-cover"
-          />
-        </a>
+        <div className="mt-2">
+          <a href={inlineUrl} target="_blank" rel="noreferrer" className="block">
+            <img
+              src={inlineUrl}
+              loading="lazy"
+              decoding="async"
+              alt={msg.media_caption || msg.media_filename || (sticker ? 'sticker' : 'image')}
+              className={
+                sticker
+                  ? 'max-h-44 max-w-[220px] object-contain'
+                  : 'max-h-72 max-w-full rounded-xl object-contain'
+              }
+            />
+          </a>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <a
+              href={inlineUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200"
+            >
+              Buka
+            </a>
+            <a
+              href={downloadUrl}
+              className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-700"
+            >
+              Save
+            </a>
+          </div>
+        </div>
       )
     }
 
     return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 flex items-center gap-2 rounded-xl bg-white/20 px-3 py-2 text-sm font-semibold underline"
-      >
-        File: {msg.media_filename || 'Download attachment'}
-      </a>
+      <div className="mt-2 rounded-xl bg-white/20 px-3 py-2 text-sm">
+        <div className="font-semibold">File: {mediaFilename(msg)}</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <a href={inlineUrl} target="_blank" rel="noreferrer" className="font-semibold underline">
+            Buka
+          </a>
+          <a href={downloadUrl} className="font-semibold underline">
+            Save
+          </a>
+        </div>
+      </div>
     )
   }
 
@@ -1294,7 +1510,7 @@ export default function InboxPage() {
                         >
                           {renderMedia(msg)}
 
-                          {msg.message ? (
+                          {shouldRenderMessageText(msg) ? (
                             <div className="whitespace-pre-wrap break-words">
                               {msg.message}
                             </div>
