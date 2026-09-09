@@ -30,6 +30,12 @@ const OPERATIONAL_MENUS = [
     href: '/analysis',
     roles: ['master', 'admin', 'user', 'agent']
   },
+  // NOTIVA_PATCH_06_SAFE_JOTFORM_AI_MENU_V1
+  {
+    label: 'AI Assistant',
+    href: '/ai-assistant',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
   {
     label: 'Usage Log',
     href: '/usage',
