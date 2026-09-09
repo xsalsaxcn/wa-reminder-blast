@@ -3,11 +3,52 @@ import { useRouter } from 'next/router'
 import Link from 'next/link'
 import Sidebar from '../../components/Sidebar'
 
+// NOTIVA_PATCH_05_SAFE_FAST_INBOX_NAVIGATION_V1
+// Small in-memory route cache only. It survives client-side menu changes,
+// but disappears on logout/full reload and never writes customer data to storage.
+const NOTIVA_INBOX_ROUTE_CACHE_MAX_AGE_MS = 5 * 60 * 1000
+let notivaInboxRouteCache = null
+
+function getNotivaInboxRouteCache() {
+  if (typeof window === 'undefined') return null
+  if (!notivaInboxRouteCache) return null
+
+  const age = Date.now() - Number(notivaInboxRouteCache.saved_at || 0)
+
+  if (!Number.isFinite(age) || age < 0 || age > NOTIVA_INBOX_ROUTE_CACHE_MAX_AGE_MS) {
+    notivaInboxRouteCache = null
+    return null
+  }
+
+  return notivaInboxRouteCache
+}
+
+function setNotivaInboxRouteCache(snapshot) {
+  if (typeof window === 'undefined') return
+  if (!snapshot?.conversations?.length) return
+
+  notivaInboxRouteCache = {
+    ...snapshot,
+    saved_at: Date.now()
+  }
+}
+
 export default function InboxPage() {
   const router = useRouter()
+  const requestedInitialPhone =
+    router?.query?.phone && typeof router.query.phone === 'string'
+      ? router.query.phone
+      : ''
+  const cachedInboxSnapshot = getNotivaInboxRouteCache()
+  const initialInboxCache = requestedInitialPhone ? null : cachedInboxSnapshot
 
-  const [conversations, setConversations] = useState([])
-  const [selectedConversation, setSelectedConversation] = useState(null)
+  const cachedConversations = Array.isArray(initialInboxCache?.conversations)
+    ? initialInboxCache.conversations
+    : []
+  const cachedFirstConversation = cachedConversations[0] || null
+
+  const [conversations, setConversations] = useState(cachedConversations)
+  const [selectedConversation, setSelectedConversation] = useState(cachedFirstConversation)
   const [messages, setMessages] = useState([])
   const [hasMoreMessages, setHasMoreMessages] = useState(false)
   const [oldestCursor, setOldestCursor] = useState('')
@@ -21,27 +62,43 @@ export default function InboxPage() {
   const [quickReplyTemplates, setQuickReplyTemplates] = useState([])
   const [attachmentFile, setAttachmentFile] = useState(null)
   const [attachmentPreview, setAttachmentPreview] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(cachedConversations.length === 0)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
-  const [lastUpdated, setLastUpdated] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(
+    initialInboxCache?.last_updated ? new Date(initialInboxCache.last_updated) : null
+  )
   const [mobileView, setMobileView] = useState('list')
   const [campaignTypeFilter, setCampaignTypeFilter] = useState('all')
   const [projectFilter, setProjectFilter] = useState('all')
-  const [conversationTotal, setConversationTotal] = useState(0)
-  const [conversationNextOffset, setConversationNextOffset] = useState(0)
-  const [hasMoreConversations, setHasMoreConversations] = useState(false)
+  const [conversationTotal, setConversationTotal] = useState(
+    Number(initialInboxCache?.conversation_total || cachedConversations.length || 0)
+  )
+  const [conversationNextOffset, setConversationNextOffset] = useState(
+    Number(initialInboxCache?.conversation_next_offset || cachedConversations.length || 0)
+  )
+  const [hasMoreConversations, setHasMoreConversations] = useState(
+    Boolean(initialInboxCache?.has_more_conversations)
+  )
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
-  const [availableCampaignTypes, setAvailableCampaignTypes] = useState([])
-  const [availableProjects, setAvailableProjects] = useState([])
+  const [availableCampaignTypes, setAvailableCampaignTypes] = useState(
+    Array.isArray(initialInboxCache?.available_campaign_types)
+      ? initialInboxCache.available_campaign_types
+      : []
+  )
+  const [availableProjects, setAvailableProjects] = useState(
+    Array.isArray(initialInboxCache?.available_projects)
+      ? initialInboxCache.available_projects
+      : []
+  )
 
   // NOTIVA_PATCH_02_SAFE_PAGINATION_V1
   // NOTIVA_PATCH_02C_SAFE_PROGRESSIVE_50_100_200_V1
   const CONVERSATION_PAGE_SIZE = 50
   const CONVERSATION_FILTER_DEBOUNCE_MS = 350
 
-  const selectedPhoneRef = useRef(null)
+  const selectedPhoneRef = useRef(cachedFirstConversation?.phone || null)
   const pollingRef = useRef(null)
   const messagesEndRef = useRef(null)
   const messagesScrollRef = useRef(null)
@@ -386,9 +443,73 @@ export default function InboxPage() {
     await loadMessages(selectedConversation.phone, true, false, oldestCursor)
   }
 
+  async function loadQuickConversations() {
+    setError('')
+
+    try {
+      const params = new URLSearchParams()
+      const queryPhone =
+        router?.query?.phone && typeof router.query.phone === 'string'
+          ? router.query.phone
+          : ''
+
+      params.set('limit', String(CONVERSATION_PAGE_SIZE))
+      if (queryPhone) params.set('focus_phone', queryPhone)
+
+      const response = await fetch('/api/inbox/quick-list?' + params.toString(), {
+        cache: 'no-store'
+      })
+      const data = await response.json()
+
+      if (!response.ok || !data.success) return false
+
+      const list = Array.isArray(data.conversations) ? data.conversations : []
+
+      if (!list.length) {
+        setLoading(false)
+        return false
+      }
+
+      setConversations(list)
+      setConversationTotal(Number(data.page?.total || list.length))
+      setConversationNextOffset(
+        data.page?.next_offset === null || data.page?.next_offset === undefined
+          ? list.length
+          : Number(data.page.next_offset)
+      )
+      // Quick rows are display-only. Enable progressive pagination again
+      // after the existing full Inbox endpoint has reconciled the exact order.
+      setHasMoreConversations(false)
+      setLastUpdated(new Date())
+      setLoading(false)
+
+      const requestedPhone = queryPhone
+      const nextSelected =
+        (requestedPhone ? list.find((item) => item.phone === requestedPhone) : null) ||
+        list[0]
+
+      if (nextSelected?.phone) {
+        setSelectedConversation(nextSelected)
+        selectedPhoneRef.current = nextSelected.phone
+
+        if (requestedPhone) {
+          queryPhoneAppliedRef.current = true
+          setMobileView('chat')
+        }
+
+        await loadMessages(nextSelected.phone, true, true)
+      }
+
+      return true
+    } catch (err) {
+      console.warn('Fast Inbox bootstrap failed; using full Inbox loader.', err)
+      return false
+    }
+  }
+
   async function loadConversations(silent = false, append = false, options = {}) {
     if (append) setLoadingMoreConversations(true)
-    else if (!silent) setLoading(true)
+    else if (!silent && conversations.length === 0) setLoading(true)
 
     setError('')
 
@@ -1087,6 +1208,33 @@ export default function InboxPage() {
   }
 
   useEffect(() => {
+    if (!conversations.length) return
+    if (searchText.trim()) return
+    if (campaignTypeFilter !== 'all' || projectFilter !== 'all') return
+
+    setNotivaInboxRouteCache({
+      conversations,
+      conversation_total: conversationTotal || conversations.length,
+      conversation_next_offset: conversationNextOffset || conversations.length,
+      has_more_conversations: hasMoreConversations,
+      available_campaign_types: availableCampaignTypes,
+      available_projects: availableProjects,
+      last_updated: lastUpdated?.toISOString?.() || new Date().toISOString()
+    })
+  }, [
+    conversations,
+    conversationTotal,
+    conversationNextOffset,
+    hasMoreConversations,
+    availableCampaignTypes,
+    availableProjects,
+    lastUpdated,
+    searchText,
+    campaignTypeFilter,
+    projectFilter
+  ])
+
+  useEffect(() => {
     loadMessagesRef.current = loadMessages
     loadConversationsRef.current = loadConversations
   })
@@ -1124,7 +1272,53 @@ export default function InboxPage() {
       setMobileView('chat')
     }
 
-    loadConversations()
+    let cancelled = false
+    const routePhone =
+      router.query.phone && typeof router.query.phone === 'string'
+        ? router.query.phone
+        : ''
+    const hasWarmRouteCache =
+      conversations.length > 0 &&
+      (!routePhone || selectedConversation?.phone === routePhone)
+    const warmCacheAge = initialInboxCache?.saved_at
+      ? Date.now() - Number(initialInboxCache.saved_at)
+      : Number.POSITIVE_INFINITY
+
+    if (hasWarmRouteCache) {
+      setLoading(false)
+
+      if (selectedPhoneRef.current && loadMessagesRef.current) {
+        loadMessagesRef.current(selectedPhoneRef.current, true, true)
+      }
+
+      // If the list was refreshed very recently, do not fire another expensive
+      // full Inbox request just because the user changed menus and came back.
+      // The normal 15-second polling below will refresh it when needed.
+      if (warmCacheAge > 15000 && loadConversationsRef.current) {
+        loadConversationsRef.current(true, false)
+      }
+    } else {
+      ;(async () => {
+        const quickLoaded = await loadQuickConversations()
+        if (cancelled) return
+
+        if (!quickLoaded) {
+          if (loadConversationsRef.current) {
+            await loadConversationsRef.current(false, false)
+          }
+          return
+        }
+
+        // The fast list is already visible. Enrich it with the existing full
+        // Inbox logic in the background without blocking the screen.
+        setTimeout(() => {
+          if (!cancelled && loadConversationsRef.current) {
+            loadConversationsRef.current(true, false)
+          }
+        }, 120)
+      })()
+    }
+
     loadQuickReplies()
 
     pollingRef.current = setInterval(() => {
@@ -1134,6 +1328,7 @@ export default function InboxPage() {
     }, 15000)
 
     return () => {
+      cancelled = true
       if (pollingRef.current) clearInterval(pollingRef.current)
     }
   }, [router.isReady])
