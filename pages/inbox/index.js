@@ -82,6 +82,13 @@ export default function InboxPage() {
     Boolean(initialInboxCache?.has_more_conversations)
   )
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
+  const [conversationPage, setConversationPage] = useState(
+    Math.max(1, Number(initialInboxCache?.conversation_page || 1))
+  )
+  const [conversationFilteredTotal, setConversationFilteredTotal] = useState(
+    Number(initialInboxCache?.conversation_filtered_total || initialInboxCache?.conversation_total || cachedConversations.length || 0)
+  )
+  const [pendingConversationPage, setPendingConversationPage] = useState(null)
   const [availableCampaignTypes, setAvailableCampaignTypes] = useState(
     Array.isArray(initialInboxCache?.available_campaign_types)
       ? initialInboxCache.available_campaign_types
@@ -95,10 +102,18 @@ export default function InboxPage() {
 
   // NOTIVA_PATCH_02_SAFE_PAGINATION_V1
   // NOTIVA_PATCH_02C_SAFE_PROGRESSIVE_50_100_200_V1
+  // NOTIVA_PATCH_05B_SAFE_TRUE_PAGING_100_V1
+  // Fast bootstrap stays at 50 rows. Real page navigation is fixed at 100 rows/page.
   const CONVERSATION_PAGE_SIZE = 50
+  const CONVERSATION_PAGING_SIZE = 100
   const CONVERSATION_FILTER_DEBOUNCE_MS = 350
 
   const selectedPhoneRef = useRef(cachedFirstConversation?.phone || null)
+  // Track the page the admin most recently requested. A slower background
+  // Page 1 response is ignored if the admin already requested Page 2/3/etc.
+  const conversationPageTargetRef = useRef(
+    Math.max(1, Number(initialInboxCache?.conversation_page || 1))
+  )
   const pollingRef = useRef(null)
   const messagesEndRef = useRef(null)
   const messagesScrollRef = useRef(null)
@@ -472,14 +487,19 @@ export default function InboxPage() {
 
       setConversations(list)
       setConversationTotal(Number(data.page?.total || list.length))
+      setConversationFilteredTotal(Number(data.page?.filtered_total || data.page?.total || list.length))
+      conversationPageTargetRef.current = 1
+      setConversationPage(1)
       setConversationNextOffset(
         data.page?.next_offset === null || data.page?.next_offset === undefined
           ? list.length
           : Number(data.page.next_offset)
       )
-      // Quick rows are display-only. Enable progressive pagination again
-      // after the existing full Inbox endpoint has reconciled the exact order.
-      setHasMoreConversations(false)
+      // Keep paging controls visible immediately from the lightweight total.
+      // Exact total/order will be reconciled by the existing full Inbox endpoint.
+      setHasMoreConversations(
+        Number(data.page?.total || list.length) > CONVERSATION_PAGING_SIZE
+      )
       setLastUpdated(new Date())
       setLoading(false)
 
@@ -508,8 +528,15 @@ export default function InboxPage() {
   }
 
   async function loadConversations(silent = false, append = false, options = {}) {
-    if (append) setLoadingMoreConversations(true)
-    else if (!silent && conversations.length === 0) setLoading(true)
+    const isPageNavigation = Boolean(options.pageNavigation)
+    const requestedPage = Math.max(1, Number(options.page || conversationPage || 1))
+
+    if (append || isPageNavigation) {
+      setLoadingMoreConversations(true)
+      if (isPageNavigation) setPendingConversationPage(requestedPage)
+    } else if (!silent && conversations.length === 0) {
+      setLoading(true)
+    }
 
     setError('')
 
@@ -524,14 +551,13 @@ export default function InboxPage() {
       const projectValue = Object.prototype.hasOwnProperty.call(options, 'projectFilter')
         ? String(options.projectFilter || 'all')
         : projectFilter
-      const currentLoaded = Math.max(CONVERSATION_PAGE_SIZE, conversations.length || 0)
-      const requestedAppendLimit = Number(options.appendLimit || CONVERSATION_PAGE_SIZE)
+      const requestedAppendLimit = Number(options.appendLimit || CONVERSATION_PAGING_SIZE)
       const requestLimit = append
-        ? Math.max(1, Math.min(100, requestedAppendLimit))
-        : silent
-          ? currentLoaded
-          : CONVERSATION_PAGE_SIZE
-      const requestOffset = append ? conversationNextOffset : 0
+        ? Math.max(1, Math.min(CONVERSATION_PAGING_SIZE, requestedAppendLimit))
+        : CONVERSATION_PAGING_SIZE
+      const requestOffset = append
+        ? conversationNextOffset
+        : (requestedPage - 1) * CONVERSATION_PAGING_SIZE
 
       params.set('limit', String(requestLimit))
       params.set('offset', String(requestOffset))
@@ -560,6 +586,12 @@ export default function InboxPage() {
         throw new Error(data.message || 'Gagal memuat inbox')
       }
 
+      // Anti-reset guard: do not let an older background request overwrite
+      // a newer page selected by the admin.
+      if (!append && requestedPage !== conversationPageTargetRef.current) {
+        return
+      }
+
       const rawList = data.conversations || []
       const activePhoneForRead = selectedPhoneRef.current
 
@@ -572,13 +604,20 @@ export default function InboxPage() {
           : item
       )
 
-      setConversationTotal(Number(data.page?.total || list.length))
+      const exactFilteredTotal = Number(
+        data.page?.filtered_total ?? data.page?.total ?? list.length
+      )
+      setConversationTotal(Number(data.page?.total || exactFilteredTotal || list.length))
+      setConversationFilteredTotal(exactFilteredTotal)
       setConversationNextOffset(
         data.page?.next_offset === null || data.page?.next_offset === undefined
-          ? 0
+          ? requestedPage * CONVERSATION_PAGING_SIZE
           : Number(data.page.next_offset)
       )
-      setHasMoreConversations(Boolean(data.page?.has_more))
+      setHasMoreConversations(
+        requestedPage * CONVERSATION_PAGING_SIZE < exactFilteredTotal
+      )
+      if (!append) setConversationPage(requestedPage)
 
       if (Array.isArray(data.filters?.campaign_types)) {
         setAvailableCampaignTypes(data.filters.campaign_types)
@@ -661,22 +700,44 @@ export default function InboxPage() {
 
       await loadMessages(nextSelected.phone, true, !silent)
     } catch (err) {
+      if (isPageNavigation && conversationPageTargetRef.current === requestedPage) {
+        conversationPageTargetRef.current = conversationPage
+      }
       setError(err.message || 'Gagal memuat inbox')
     } finally {
-      if (append) setLoadingMoreConversations(false)
-      else if (!silent) setLoading(false)
+      if (append || isPageNavigation) {
+        setLoadingMoreConversations(false)
+        if (isPageNavigation) setPendingConversationPage(null)
+      } else if (!silent) {
+        setLoading(false)
+      }
     }
   }
 
-  async function loadMoreConversations() {
-    if (loadingMoreConversations || !hasMoreConversations) return
+  function getConversationPageCount() {
+    const total = Math.max(
+      0,
+      Number(conversationFilteredTotal || conversationTotal || conversations.length || 0)
+    )
+    return Math.max(1, Math.ceil(total / CONVERSATION_PAGING_SIZE))
+  }
 
-    const currentLoadedCount = conversations.length || 0
-    const nextTarget = currentLoadedCount < 100 ? 100 : currentLoadedCount + 100
-    const appendLimit = Math.max(1, nextTarget - currentLoadedCount)
+  async function goToConversationPage(targetPage) {
+    if (loadingMoreConversations) return
 
-    // NOTIVA_PATCH_02C_SAFE_PROGRESSIVE_50_100_200_V1: 50 -> 100 -> 200 -> 300 -> ... without loading the whole Inbox.
-    await loadConversations(true, true, { appendLimit })
+    const totalPages = getConversationPageCount()
+    const nextPage = Math.max(1, Math.min(totalPages, Number(targetPage || 1)))
+
+    if (nextPage === conversationPage && conversations.length) return
+
+    // Set this synchronously before the request so an older background
+    // response cannot send the list back to Page 1.
+    conversationPageTargetRef.current = nextPage
+
+    await loadConversations(true, false, {
+      page: nextPage,
+      pageNavigation: true
+    })
   }
 
   async function selectConversation(conversation) {
@@ -1215,6 +1276,8 @@ export default function InboxPage() {
     setNotivaInboxRouteCache({
       conversations,
       conversation_total: conversationTotal || conversations.length,
+      conversation_filtered_total: conversationFilteredTotal || conversationTotal || conversations.length,
+      conversation_page: conversationPage,
       conversation_next_offset: conversationNextOffset || conversations.length,
       has_more_conversations: hasMoreConversations,
       available_campaign_types: availableCampaignTypes,
@@ -1224,6 +1287,8 @@ export default function InboxPage() {
   }, [
     conversations,
     conversationTotal,
+    conversationFilteredTotal,
+    conversationPage,
     conversationNextOffset,
     hasMoreConversations,
     availableCampaignTypes,
@@ -1252,8 +1317,10 @@ export default function InboxPage() {
     }
 
     conversationFilterTimerRef.current = setTimeout(() => {
+      conversationPageTargetRef.current = 1
+      setConversationPage(1)
       if (loadConversationsRef.current) {
-        loadConversationsRef.current(true, false)
+        loadConversationsRef.current(true, false, { page: 1 })
       }
     }, CONVERSATION_FILTER_DEBOUNCE_MS)
 
@@ -1559,26 +1626,81 @@ export default function InboxPage() {
                     )
                   })}
 
-                  {hasMoreConversations ? (
-                    <div className="p-4">
-                      <button
-                        type="button"
-                        onClick={loadMoreConversations}
-                        disabled={loadingMoreConversations}
-                        className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-60"
-                      >
-                        {loadingMoreConversations
-                          ? 'Loading...'
-                          : `Load sampai ${Math.min(
-                              conversationTotal || conversations.length + 100,
-                              conversations.length < 100 ? 100 : conversations.length + 100
-                            )} chat`}
-                      </button>
-                      <p className="mt-2 text-center text-xs text-slate-400">
-                        Loaded {conversations.length} dari {conversationTotal || conversations.length} conversation
-                      </p>
-                    </div>
-                  ) : null}
+                  {(() => {
+                    const pagingTotal = Math.max(
+                      0,
+                      Number(conversationFilteredTotal || conversationTotal || conversations.length || 0)
+                    )
+                    const totalPages = Math.max(1, Math.ceil(pagingTotal / CONVERSATION_PAGING_SIZE))
+                    const safePage = Math.max(1, Math.min(conversationPage, totalPages))
+                    const startRow = pagingTotal
+                      ? (safePage - 1) * CONVERSATION_PAGING_SIZE + 1
+                      : 0
+                    const endRow = pagingTotal
+                      ? Math.min(safePage * CONVERSATION_PAGING_SIZE, pagingTotal)
+                      : conversations.length
+
+                    return pagingTotal > 0 ? (
+                      <div className="shrink-0 border-t border-slate-200 bg-white p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                          <span className="font-semibold text-slate-700">
+                            Page {safePage} dari {totalPages}
+                          </span>
+                          <span>{pagingTotal} conversation</span>
+                        </div>
+
+                        <div className="grid grid-cols-5 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => goToConversationPage(1)}
+                            disabled={loadingMoreConversations || safePage <= 1}
+                            className="rounded-lg bg-slate-100 px-2 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            title="First Page"
+                          >
+                            &lt;&lt; First
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => goToConversationPage(safePage - 1)}
+                            disabled={loadingMoreConversations || safePage <= 1}
+                            className="rounded-lg bg-slate-100 px-2 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            title="Previous Page"
+                          >
+                            &lt; Prev
+                          </button>
+                          <div className="flex items-center justify-center rounded-lg bg-slate-900 px-2 py-2 text-[11px] font-black text-white">
+                            {loadingMoreConversations && pendingConversationPage
+                              ? `... ${pendingConversationPage}`
+                              : safePage}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => goToConversationPage(safePage + 1)}
+                            disabled={loadingMoreConversations || safePage >= totalPages}
+                            className="rounded-lg bg-slate-100 px-2 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            title="Next 100"
+                          >
+                            Next &gt;
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => goToConversationPage(totalPages)}
+                            disabled={loadingMoreConversations || safePage >= totalPages}
+                            className="rounded-lg bg-slate-100 px-2 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            title="End Page"
+                          >
+                            End &gt;&gt;
+                          </button>
+                        </div>
+
+                        <p className="mt-2 text-center text-[10px] text-slate-400">
+                          {loadingMoreConversations && pendingConversationPage
+                            ? `Loading page ${pendingConversationPage}... halaman sekarang tetap ditampilkan`
+                            : `Menampilkan ${startRow}-${endRow} dari ${pagingTotal}`}
+                        </p>
+                      </div>
+                    ) : null
+                  })()}
                   </>
                 )}
               </div>
