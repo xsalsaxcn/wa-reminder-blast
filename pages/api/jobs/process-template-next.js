@@ -29,6 +29,79 @@ function isForce(req) {
   return value === '1'
 }
 
+function isResumeStalled(req) {
+  const value = cleanText(
+    req.query.resume_stalled ||
+    req.body?.resume_stalled ||
+    req.query.resumeStalled ||
+    req.body?.resumeStalled
+  ).toLowerCase()
+
+  return ['1', 'true', 'yes'].includes(value)
+}
+
+function getResumeStaleSeconds(req) {
+  const raw = req.query.stale_seconds || req.body?.stale_seconds || 120
+  const value = Number(raw)
+
+  if (!Number.isFinite(value) || value < 60) return 120
+
+  return Math.min(value, 3600)
+}
+
+function isWorkerOrRunnerAuthorized(req) {
+  const workerSecret = cleanText(req.headers['x-worker-secret'])
+  const expectedWorkerSecret = cleanText(process.env.WORKER_SECRET)
+
+  if (expectedWorkerSecret && workerSecret === expectedWorkerSecret) {
+    return true
+  }
+
+  const runnerSecret = cleanText(req.headers['x-job-runner-secret'])
+  const expectedRunnerSecret = cleanText(process.env.JOB_RUNNER_SECRET)
+
+  if (expectedRunnerSecret && runnerSecret === expectedRunnerSecret) {
+    return true
+  }
+
+  return false
+}
+
+async function findStalledTemplateJob(req) {
+  const staleSeconds = getResumeStaleSeconds(req)
+  const cutoffMs = Date.now() - staleSeconds * 1000
+
+  const result = await supabaseAdmin
+    .from('send_jobs')
+    .select('id, status, send_mode, created_at, updated_at')
+    .eq('send_mode', 'template')
+    .eq('status', 'processing')
+    .order('created_at', { ascending: true })
+    .limit(100)
+
+  if (result.error) {
+    return {
+      error: result.error,
+      staleSeconds,
+      job: null
+    }
+  }
+
+  const jobs = Array.isArray(result.data) ? result.data : []
+  const job = jobs.find((item) => {
+    const reference = item.updated_at || item.created_at
+    const timestamp = new Date(reference || '').getTime()
+
+    return Number.isFinite(timestamp) && timestamp <= cutoffMs
+  }) || null
+
+  return {
+    error: null,
+    staleSeconds,
+    job
+  }
+}
+
 function isDue(item, force) {
   if (force) return true
   if (!item.scheduled_at) return false
@@ -161,10 +234,7 @@ export default async function handler(req, res) {
   res.setHeader('Expires', '0')
 
   try {
-    const secret = req.headers['x-worker-secret']
-    const expectedSecret = process.env.WORKER_SECRET
-
-    if (!expectedSecret || secret !== expectedSecret) {
+    if (!isWorkerOrRunnerAuthorized(req)) {
       const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
       if (!authUser) return
     }
@@ -180,7 +250,43 @@ export default async function handler(req, res) {
     const limitRaw = req.query.limit || req.body?.limit || 10
     const limit = Number(limitRaw)
     const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 50) : 10
-    const jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
+    let jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
+    const resumeStalled = isResumeStalled(req)
+    let resumedJob = null
+    let staleSeconds = null
+
+    // Recovery ini hanya memilih job template yang SUDAH processing tetapi
+    // berhenti bergerak. Job pending/future tidak diambil, sehingga flow
+    // scheduler/template yang sudah benar tetap berjalan seperti sebelumnya.
+    if (!jobId && resumeStalled) {
+      const stalledResult = await findStalledTemplateJob(req)
+      staleSeconds = stalledResult.staleSeconds
+
+      if (stalledResult.error) {
+        return res.status(500).json({
+          success: false,
+          message: stalledResult.error.message || 'Gagal mencari template job yang stale.'
+        })
+      }
+
+      if (!stalledResult.job?.id) {
+        return res.status(200).json({
+          success: true,
+          message: 'Tidak ada template job stale yang perlu dilanjutkan.',
+          mode: 'resume_stalled',
+          resumed_job_id: null,
+          stale_seconds: staleSeconds,
+          processed: 0,
+          sent: 0,
+          failed: 0
+        })
+      }
+
+      resumedJob = stalledResult.job
+      jobId = cleanText(resumedJob.id)
+    }
+
+    const effectiveForce = force || Boolean(resumedJob)
 
     let query = supabaseAdmin
       .from('send_job_items')
@@ -202,16 +308,22 @@ export default async function handler(req, res) {
     }
 
     const allItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
-    const futureItems = allItems.filter((item) => isFuture(item, force))
-    const dueItems = allItems.filter((item) => isDue(item, force)).slice(0, safeLimit)
+    const futureItems = allItems.filter((item) => isFuture(item, effectiveForce))
+    const dueItems = allItems.filter((item) => isDue(item, effectiveForce)).slice(0, safeLimit)
 
     if (!dueItems.length) {
+      if (resumedJob?.id) {
+        await updateJobSafe(resumedJob.id)
+      }
+
       return res.status(200).json({
         success: true,
         message: futureItems.length
           ? 'Belum ada template item yang waktunya due.'
           : 'Tidak ada template item pending untuk diproses.',
-        mode: force ? 'now' : 'scheduled',
+        mode: resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'),
+        resumed_job_id: resumedJob?.id || null,
+        stale_seconds: staleSeconds,
         checked: allItems.length,
         future_items: futureItems.length,
         processed: 0,
@@ -310,7 +422,9 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       message: 'Process template batch selesai.',
-      mode: force ? 'now' : 'scheduled',
+      mode: resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'),
+      resumed_job_id: resumedJob?.id || null,
+      stale_seconds: staleSeconds,
       checked: allItems.length,
       future_items: futureItems.length,
       processed: dueItems.length,

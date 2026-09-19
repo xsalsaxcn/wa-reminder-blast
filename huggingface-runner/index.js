@@ -5,6 +5,8 @@ const JOB_RUNNER_SECRET = process.env.JOB_RUNNER_SECRET
 const INTERVAL_MS = Number(process.env.INTERVAL_MS || 15000)
 const JOB_TYPE = process.env.JOB_TYPE || ''
 const JOB_BATCH_LIMIT = process.env.JOB_BATCH_LIMIT || '10'
+const TEMPLATE_RECOVERY_STALE_SECONDS = 120
+const TEMPLATE_RECOVERY_MAX_BATCHES = 10
 const PORT = Number(process.env.PORT || 7860)
 
 if (!APP_URL) {
@@ -21,6 +23,8 @@ let running = false
 let lastRunAt = null
 let lastSchedulerResult = null
 let lastProcessorResult = null
+let lastTemplateProcessorResult = null
+let activeTemplateRecoveryJobId = ''
 let lastCleanupResult = null
 
 async function callEndpoint(path, params = {}) {
@@ -41,6 +45,76 @@ async function callEndpoint(path, params = {}) {
   })
 
   return response.json()
+}
+
+async function processTemplateRecovery() {
+  let totalProcessed = 0
+  let totalSent = 0
+  let totalFailed = 0
+  let last = null
+
+  try {
+    for (let batch = 0; batch < TEMPLATE_RECOVERY_MAX_BATCHES; batch += 1) {
+      const params = activeTemplateRecoveryJobId
+        ? {
+            job_id: activeTemplateRecoveryJobId,
+            limit: '10',
+            force: '1'
+          }
+        : {
+            limit: '10',
+            resume_stalled: '1',
+            stale_seconds: String(TEMPLATE_RECOVERY_STALE_SECONDS)
+          }
+
+      const result = await callEndpoint('/api/jobs/process-template-next', params)
+      last = result
+
+      if (!result?.success) {
+        return {
+          success: false,
+          active_job_id: activeTemplateRecoveryJobId || null,
+          processed: totalProcessed,
+          sent: totalSent,
+          failed: totalFailed,
+          last: result
+        }
+      }
+
+      if (!activeTemplateRecoveryJobId && result.resumed_job_id) {
+        activeTemplateRecoveryJobId = result.resumed_job_id
+      }
+
+      const processed = Number(result.processed || 0)
+      totalProcessed += processed
+      totalSent += Number(result.sent || 0)
+      totalFailed += Number(result.failed || 0)
+
+      if (processed <= 0) {
+        activeTemplateRecoveryJobId = ''
+        break
+      }
+    }
+
+    return {
+      success: true,
+      active_job_id: activeTemplateRecoveryJobId || null,
+      processed: totalProcessed,
+      sent: totalSent,
+      failed: totalFailed,
+      last
+    }
+  } catch (error) {
+    return {
+      success: false,
+      active_job_id: activeTemplateRecoveryJobId || null,
+      processed: totalProcessed,
+      sent: totalSent,
+      failed: totalFailed,
+      message: error.message || 'Template recovery gagal.',
+      last
+    }
+  }
 }
 
 async function tick() {
@@ -65,10 +139,15 @@ async function tick() {
       limit: JOB_BATCH_LIMIT
     })
 
+    // Template Blast normal tetap diproses oleh halaman admin.
+    // Runner hanya mengambil alih job yang sudah processing tetapi stale.
+    lastTemplateProcessorResult = await processTemplateRecovery()
+
     console.log(lastRunAt, JSON.stringify({
       cleanup: lastCleanupResult,
       scheduler: lastSchedulerResult,
-      processor: lastProcessorResult
+      processor: lastProcessorResult,
+      templateRecovery: lastTemplateProcessorResult
     }))
   } catch (error) {
     lastProcessorResult = {
@@ -96,7 +175,9 @@ const server = http.createServer((req, res) => {
     lastRunAt,
     lastCleanupResult,
     lastSchedulerResult,
-    lastProcessorResult
+    lastProcessorResult,
+    lastTemplateProcessorResult,
+    activeTemplateRecoveryJobId: activeTemplateRecoveryJobId || null
   }, null, 2))
 })
 
@@ -107,6 +188,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('INTERVAL_MS:', INTERVAL_MS)
   console.log('JOB_TYPE:', JOB_TYPE || 'all')
   console.log('JOB_BATCH_LIMIT:', JOB_BATCH_LIMIT)
+  console.log('TEMPLATE_RECOVERY_STALE_SECONDS:', TEMPLATE_RECOVERY_STALE_SECONDS)
+  console.log('TEMPLATE_RECOVERY_MAX_BATCHES:', TEMPLATE_RECOVERY_MAX_BATCHES)
 
   tick()
   setInterval(tick, INTERVAL_MS)
