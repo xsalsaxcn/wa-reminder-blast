@@ -1,4 +1,4 @@
-﻿import http from 'http'
+import http from 'http'
 
 const APP_URL = process.env.APP_URL
 const JOB_RUNNER_SECRET = process.env.JOB_RUNNER_SECRET
@@ -7,6 +7,7 @@ const JOB_TYPE = process.env.JOB_TYPE || ''
 const JOB_BATCH_LIMIT = process.env.JOB_BATCH_LIMIT || '10'
 const TEMPLATE_RECOVERY_STALE_SECONDS = 120
 const TEMPLATE_RECOVERY_MAX_BATCHES = 10
+const REQUEST_TIMEOUT_MS = 60000
 const PORT = Number(process.env.PORT || 7860)
 
 if (!APP_URL) {
@@ -21,6 +22,8 @@ if (!JOB_RUNNER_SECRET) {
 
 let running = false
 let lastRunAt = null
+let lastFinishedAt = null
+let nextRunAt = null
 let lastSchedulerResult = null
 let lastProcessorResult = null
 let lastTemplateProcessorResult = null
@@ -36,15 +39,71 @@ async function callEndpoint(path, params = {}) {
     }
   }
 
-  const response = await fetch(url.toString(), {
-    method: 'POST',
-    headers: {
-      'x-job-runner-secret': JOB_RUNNER_SECRET,
-      'Content-Type': 'application/json'
-    }
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const startedAt = Date.now()
 
-  return response.json()
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'x-job-runner-secret': JOB_RUNNER_SECRET,
+        'Content-Type': 'application/json'
+      },
+      signal: controller.signal
+    })
+
+    const raw = await response.text()
+    let data = {}
+
+    if (raw) {
+      try {
+        data = JSON.parse(raw)
+      } catch (error) {
+        data = {
+          success: false,
+          message: `HTTP ${response.status}: response bukan JSON`,
+          response_preview: raw.slice(0, 300)
+        }
+      }
+    }
+
+    if (!response.ok) {
+      return {
+        ...data,
+        success: false,
+        http_status: response.status,
+        duration_ms: Date.now() - startedAt
+      }
+    }
+
+    return {
+      ...data,
+      http_status: response.status,
+      duration_ms: Date.now() - startedAt
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Timeout ${REQUEST_TIMEOUT_MS}ms saat memanggil ${path}`)
+    }
+
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function callEndpointSafe(path, params = {}) {
+  try {
+    return await callEndpoint(path, params)
+  } catch (error) {
+    return {
+      success: false,
+      message: error.message || `Gagal memanggil ${path}`,
+      endpoint: path,
+      failed_at: new Date().toISOString()
+    }
+  }
 }
 
 async function processTemplateRecovery() {
@@ -128,13 +187,15 @@ async function tick() {
   try {
     lastRunAt = new Date().toISOString()
 
-    lastCleanupResult = await callEndpoint('/api/admin/auto-cleanup')
+    // Tiap endpoint non-template diisolasi. Jika cleanup/scheduler/normal worker
+    // timeout atau error, Template Recovery tetap harus mendapat kesempatan jalan.
+    lastCleanupResult = await callEndpointSafe('/api/admin/auto-cleanup')
 
-    lastSchedulerResult = await callEndpoint('/api/scheduler/create-due-reminder-job', {
+    lastSchedulerResult = await callEndpointSafe('/api/scheduler/create-due-reminder-job', {
       limit: JOB_BATCH_LIMIT
     })
 
-    lastProcessorResult = await callEndpoint('/api/jobs/process-next', {
+    lastProcessorResult = await callEndpointSafe('/api/jobs/process-next', {
       type: JOB_TYPE,
       limit: JOB_BATCH_LIMIT
     })
@@ -158,7 +219,26 @@ async function tick() {
     console.error(new Date().toISOString(), error.message)
   } finally {
     running = false
+    lastFinishedAt = new Date().toISOString()
   }
+}
+
+let loopTimer = null
+
+function scheduleNextTick(delayMs = INTERVAL_MS) {
+  if (loopTimer) clearTimeout(loopTimer)
+
+  nextRunAt = new Date(Date.now() + delayMs).toISOString()
+  loopTimer = setTimeout(async () => {
+    loopTimer = null
+    nextRunAt = null
+
+    try {
+      await tick()
+    } finally {
+      scheduleNextTick(INTERVAL_MS)
+    }
+  }, delayMs)
 }
 
 const server = http.createServer((req, res) => {
@@ -172,7 +252,10 @@ const server = http.createServer((req, res) => {
     jobType: JOB_TYPE || 'all',
     batchLimit: JOB_BATCH_LIMIT,
     running,
+    requestTimeoutMs: REQUEST_TIMEOUT_MS,
     lastRunAt,
+    lastFinishedAt,
+    nextRunAt,
     lastCleanupResult,
     lastSchedulerResult,
     lastProcessorResult,
@@ -190,7 +273,13 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('JOB_BATCH_LIMIT:', JOB_BATCH_LIMIT)
   console.log('TEMPLATE_RECOVERY_STALE_SECONDS:', TEMPLATE_RECOVERY_STALE_SECONDS)
   console.log('TEMPLATE_RECOVERY_MAX_BATCHES:', TEMPLATE_RECOVERY_MAX_BATCHES)
+  console.log('REQUEST_TIMEOUT_MS:', REQUEST_TIMEOUT_MS)
 
   tick()
-  setInterval(tick, INTERVAL_MS)
+    .catch((error) => {
+      console.error(new Date().toISOString(), error.message)
+    })
+    .finally(() => {
+      scheduleNextTick(INTERVAL_MS)
+    })
 })
