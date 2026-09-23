@@ -52,8 +52,6 @@ async function callProcessor(req, path) {
 function isAuthorized(req) {
   const cronSecret = cleanText(process.env.CRON_SECRET)
 
-  // Kalau CRON_SECRET belum diset, endpoint tetap boleh jalan.
-  // Nanti kalau mau dikunci, set CRON_SECRET di Vercel.
   if (!cronSecret) return true
 
   const authHeader = cleanText(req.headers.authorization)
@@ -63,6 +61,10 @@ function isAuthorized(req) {
   if (querySecret === cronSecret) return true
 
   return false
+}
+
+function numberFrom(data, key) {
+  return Number(data?.[key] || 0)
 }
 
 export default async function handler(req, res) {
@@ -85,9 +87,23 @@ export default async function handler(req, res) {
       })
     }
 
-    // PENTING:
-    // Tidak pakai force=1.
-    // Jadi mode ini hanya akan kirim item yang scheduled_at <= now().
+    // Template Blast dibuat MANUAL-ONLY. Cron tidak boleh lagi melanjutkan
+    // job template lama/pending secara otomatis. Attachment/text flow tetap sama.
+    const templateResult = {
+      ok: true,
+      status: 200,
+      path: null,
+      data: {
+        success: true,
+        skipped: true,
+        message: 'Template auto processing dinonaktifkan. Gunakan Manual Run di Job Performance.',
+        processed: 0,
+        sent: 0,
+        failed: 0,
+        future_items: 0
+      }
+    }
+
     const attachmentResult = await callProcessor(
       req,
       '/api/jobs/process-attachment-next?limit=10'
@@ -98,24 +114,29 @@ export default async function handler(req, res) {
       '/api/jobs/process-next?limit=10'
     )
 
+    const templateData = templateResult.data || {}
     const attachmentData = attachmentResult.data || {}
     const textData = textResult.data || {}
 
     const processed =
-      Number(attachmentData.processed || 0) +
-      Number(textData.processed || 0)
+      numberFrom(templateData, 'processed') +
+      numberFrom(attachmentData, 'processed') +
+      numberFrom(textData, 'processed')
 
     const sent =
-      Number(attachmentData.sent || 0) +
-      Number(textData.sent || 0)
+      numberFrom(templateData, 'sent') +
+      numberFrom(attachmentData, 'sent') +
+      numberFrom(textData, 'sent')
 
     const failed =
-      Number(attachmentData.failed || 0) +
-      Number(textData.failed || 0)
+      numberFrom(templateData, 'failed') +
+      numberFrom(attachmentData, 'failed') +
+      numberFrom(textData, 'failed')
 
     const futureItems =
-      Number(attachmentData.future_items || 0) +
-      Number(textData.future_items || 0)
+      numberFrom(templateData, 'future_items') +
+      numberFrom(attachmentData, 'future_items') +
+      numberFrom(textData, 'future_items')
 
     return res.status(200).json({
       success: true,
@@ -125,6 +146,7 @@ export default async function handler(req, res) {
       sent,
       failed,
       future_items: futureItems,
+      template: templateResult,
       attachment: attachmentResult,
       text: textResult,
       executed_at: new Date().toISOString()

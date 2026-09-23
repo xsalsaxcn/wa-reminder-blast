@@ -200,9 +200,18 @@ async function tick() {
       limit: JOB_BATCH_LIMIT
     })
 
-    // Template Blast normal tetap diproses oleh halaman admin.
-    // Runner hanya mengambil alih job yang sudah processing tetapi stale.
-    lastTemplateProcessorResult = await processTemplateRecovery()
+    // Template Blast recovery dibuat MANUAL-ONLY. Runner tidak lagi
+    // mengirim job template lama/stuck secara otomatis.
+    activeTemplateRecoveryJobId = ''
+    lastTemplateProcessorResult = {
+      success: true,
+      skipped: true,
+      mode: 'manual_only',
+      message: 'Auto Template Recovery dinonaktifkan. Gunakan Manual Run di Job Performance.',
+      processed: 0,
+      sent: 0,
+      failed: 0
+    }
 
     console.log(lastRunAt, JSON.stringify({
       cleanup: lastCleanupResult,

@@ -255,6 +255,25 @@ export default async function handler(req, res) {
     let resumedJob = null
     let staleSeconds = null
 
+    // AUTO RECOVERY DINONAKTIFKAN. Template job lama/stuck hanya boleh
+    // dilanjutkan secara eksplisit oleh admin melalui Manual Run dengan job_id.
+    // Ini juga membuat runner versi lama yang masih memanggil resume_stalled
+    // menjadi aman: request sukses tetapi tidak mengirim pesan apa pun.
+    if (!jobId && resumeStalled) {
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        message: 'Auto template recovery dinonaktifkan. Gunakan Manual Run di Job Performance.',
+        mode: 'manual_only',
+        resumed_job_id: null,
+        processed: 0,
+        sent: 0,
+        failed: 0
+      })
+    }
+
+    // Legacy recovery code di bawah tetap dipertahankan sebagai safety history,
+    // tetapi tidak akan tercapai selama mode manual-only aktif.
     // Recovery ini hanya memilih job template yang SUDAH processing tetapi
     // berhenti bergerak. Job pending/future tidak diambil, sehingga flow
     // scheduler/template yang sudah benar tetap berjalan seperti sebelumnya.

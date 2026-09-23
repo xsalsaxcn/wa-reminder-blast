@@ -107,6 +107,7 @@ function normalizeRow(row) {
     jobName: getFirst(row, ['job_name', 'name', 'title', 'database_name', 'campaign_name'], 'Campaign'),
     databaseName: getFirst(row, ['database_name', 'databaseName'], ''),
     type: getFirst(row, ['type', 'job_type'], '-'),
+    sendMode: getFirst(row, ['send_mode', 'mode'], ''),
     status: getFirst(row, ['status', 'job_status'], '-'),
     createdAt: getFirst(row, ['created_at', 'createdAt', 'started_at'], ''),
     target,
@@ -353,7 +354,72 @@ function DetailPanel({ detail, loading, error, onClose }) {
   )
 }
 
-function JobCard({ item, onMetricClick }) {
+function JobCard({ item, onMetricClick, onManualRunDone }) {
+  const [manualRunning, setManualRunning] = useState(false)
+  const [manualMessage, setManualMessage] = useState('')
+
+  const sendMode = cleanText(item?.sendMode || item?.raw?.send_mode || item?.raw?.mode).toLowerCase()
+  const jobName = cleanText(item?.jobName).toLowerCase()
+  const isTemplateJob = sendMode === 'template' || jobName.startsWith('template blast')
+  const remaining = Math.max(0, toNumber(item?.target) - toNumber(item?.sent) - toNumber(item?.failed))
+  const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
+
+  async function manualRun() {
+    if (!canManualRun || manualRunning) return
+
+    const ok = window.confirm(
+      `Manual Run akan mengirim maksimal 10 kontak pending dari job ini.\n\n` +
+      `Job: ${item.jobName}\n` +
+      `Sisa perkiraan: ${remaining}\n\nLanjutkan?`
+    )
+
+    if (!ok) return
+
+    setManualRunning(true)
+    setManualMessage('')
+
+    try {
+      const response = await fetch('/api/jobs/process-template-next', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          job_id: item.id,
+          limit: 10,
+          force: 1
+        })
+      })
+
+      const data = await response.json().catch(function () {
+        return {}
+      })
+
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || 'Manual Run gagal.')
+      }
+
+      const processed = toNumber(data.processed)
+      const sent = toNumber(data.sent)
+      const failed = toNumber(data.failed)
+
+      setManualMessage(
+        processed > 0
+          ? `Manual Run selesai: ${processed} diproses, ${sent} terkirim, ${failed} gagal.`
+          : (data.message || 'Tidak ada item pending untuk diproses.')
+      )
+
+      if (onManualRunDone) {
+        await onManualRunDone()
+      }
+    } catch (err) {
+      setManualMessage(err.message || 'Manual Run gagal.')
+    } finally {
+      setManualRunning(false)
+    }
+  }
+
   function exportSegment(segment) {
     if (!item?.id) {
       alert('Job ID tidak ditemukan.')
@@ -384,7 +450,25 @@ function JobCard({ item, onMetricClick }) {
             <span className={'rounded-full px-3 py-1 text-xs font-black ring-1 ' + statusClass(item.status)}>
               {item.status}
             </span>
+
+            {canManualRun ? (
+              <button
+                type="button"
+                onClick={manualRun}
+                disabled={manualRunning}
+                className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                title="Mengirim maksimal 10 kontak pending dari job ini per klik"
+              >
+                {manualRunning ? 'Running...' : 'Manual Run'}
+              </button>
+            ) : null}
           </div>
+
+          {manualMessage ? (
+            <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+              {manualMessage}
+            </p>
+          ) : null}
 
           <p className="mt-2 text-xs text-slate-400">
             {formatDate(item.createdAt)}
@@ -859,6 +943,7 @@ export default function JobPerformancePage() {
                     key={item.id || index}
                     item={item}
                     onMetricClick={openMetricDetail}
+                    onManualRunDone={loadData}
                   />
                 )
               })}
