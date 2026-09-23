@@ -368,53 +368,78 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
     if (!canManualRun || manualRunning) return
 
     const ok = window.confirm(
-      `Manual Run akan mengirim maksimal 10 kontak pending dari job ini.\n\n` +
+      `Manual Run akan mengirim SEMUA kontak yang masih pending dari job ini.\n\n` +
       `Job: ${item.jobName}\n` +
-      `Sisa perkiraan: ${remaining}\n\nLanjutkan?`
+      `Sisa perkiraan: ${remaining}\n\n` +
+      `Pengiriman berjalan bertahap di browser sampai pending habis. Lanjutkan?`
     )
 
     if (!ok) return
 
     setManualRunning(true)
-    setManualMessage('')
+    setManualMessage('Menyiapkan Manual Run...')
+
+    let totalProcessed = 0
+    let totalSent = 0
+    let totalFailed = 0
 
     try {
-      const response = await fetch('/api/jobs/process-template-next', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: JSON.stringify({
-          job_id: item.id,
-          limit: 10,
-          force: 1
+      // Satu klik untuk user, tetapi request dibagi internal per 50 agar tidak
+      // membuat satu serverless request terlalu panjang/timeout.
+      for (let guard = 0; guard < 1000; guard += 1) {
+        const response = await fetch('/api/jobs/process-template-next', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          },
+          body: JSON.stringify({
+            job_id: item.id,
+            limit: 50,
+            force: 1,
+            manual_run: 1
+          })
         })
-      })
 
-      const data = await response.json().catch(function () {
-        return {}
-      })
+        const data = await response.json().catch(function () {
+          return {}
+        })
 
-      if (!response.ok || data.success === false) {
-        throw new Error(data.message || 'Manual Run gagal.')
+        if (!response.ok || data.success === false) {
+          throw new Error(data.message || 'Manual Run gagal.')
+        }
+
+        const processed = toNumber(data.processed)
+        const sent = toNumber(data.sent)
+        const failed = toNumber(data.failed)
+
+        totalProcessed += processed
+        totalSent += sent
+        totalFailed += failed
+
+        if (processed <= 0) break
+
+        setManualMessage(
+          `Manual Run berjalan... ${totalProcessed} diproses, ${totalSent} terkirim, ${totalFailed} gagal.`
+        )
       }
 
-      const processed = toNumber(data.processed)
-      const sent = toNumber(data.sent)
-      const failed = toNumber(data.failed)
-
       setManualMessage(
-        processed > 0
-          ? `Manual Run selesai: ${processed} diproses, ${sent} terkirim, ${failed} gagal.`
-          : (data.message || 'Tidak ada item pending untuk diproses.')
+        `Manual Run selesai: ${totalProcessed} diproses, ${totalSent} terkirim, ${totalFailed} gagal.`
       )
 
       if (onManualRunDone) {
         await onManualRunDone()
       }
     } catch (err) {
-      setManualMessage(err.message || 'Manual Run gagal.')
+      setManualMessage(
+        `Manual Run berhenti setelah ${totalProcessed} diproses (${totalSent} terkirim, ${totalFailed} gagal). ` +
+        `${err.message || 'Silakan jalankan lagi untuk sisa pending.'}`
+      )
+
+      if (onManualRunDone) {
+        await onManualRunDone().catch(function () {})
+      }
     } finally {
       setManualRunning(false)
     }
@@ -457,9 +482,9 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 onClick={manualRun}
                 disabled={manualRunning}
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title="Mengirim maksimal 10 kontak pending dari job ini per klik"
+                title="Satu klik mengirim semua kontak pending dari job ini"
               >
-                {manualRunning ? 'Running...' : 'Manual Run'}
+                {manualRunning ? 'Running All...' : 'Manual Run All'}
               </button>
             ) : null}
           </div>

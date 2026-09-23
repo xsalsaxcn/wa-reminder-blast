@@ -29,6 +29,17 @@ function isForce(req) {
   return value === '1'
 }
 
+function isManualRun(req) {
+  const value = cleanText(
+    req.query.manual_run ||
+    req.body?.manual_run ||
+    req.query.manualRun ||
+    req.body?.manualRun
+  ).toLowerCase()
+
+  return ['1', 'true', 'yes'].includes(value)
+}
+
 function isResumeStalled(req) {
   const value = cleanText(
     req.query.resume_stalled ||
@@ -234,11 +245,6 @@ export default async function handler(req, res) {
   res.setHeader('Expires', '0')
 
   try {
-    if (!isWorkerOrRunnerAuthorized(req)) {
-      const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
-      if (!authUser) return
-    }
-
     if (req.method !== 'GET' && req.method !== 'POST') {
       return res.status(405).json({
         success: false,
@@ -246,29 +252,41 @@ export default async function handler(req, res) {
       })
     }
 
-    const force = isForce(req)
-    const limitRaw = req.query.limit || req.body?.limit || 10
-    const limit = Number(limitRaw)
-    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 50) : 10
-    let jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
-    const resumeStalled = isResumeStalled(req)
-    let resumedJob = null
-    let staleSeconds = null
+    const manualRun = isManualRun(req)
 
-    // AUTO RECOVERY DINONAKTIFKAN. Template job lama/stuck hanya boleh
-    // dilanjutkan secara eksplisit oleh admin melalui Manual Run dengan job_id.
-    // Ini juga membuat runner versi lama yang masih memanggil resume_stalled
-    // menjadi aman: request sukses tetapi tidak mengirim pesan apa pun.
-    if (!jobId && resumeStalled) {
+    // HARD KILL-SWITCH: seluruh pemrosesan Template Blast background/non-manual
+    // dibuat NO-OP. Ini menghentikan cron lama, HF runner lama/baru, dan tab
+    // Template Blast lama yang masih mencoba melanjutkan job secara otomatis.
+    // Hanya tombol Manual Run dari user login yang boleh mengirim.
+    if (!manualRun) {
       return res.status(200).json({
         success: true,
         skipped: true,
-        message: 'Auto template recovery dinonaktifkan. Gunakan Manual Run di Job Performance.',
+        message: 'Template Blast auto-run dinonaktifkan. Gunakan Manual Run di Job Performance.',
         mode: 'manual_only',
-        resumed_job_id: null,
         processed: 0,
         sent: 0,
         failed: 0
+      })
+    }
+
+    // Manual Run wajib berasal dari session user, bukan worker secret.
+    const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    if (!authUser) return
+
+    const force = true
+    const limitRaw = req.query.limit || req.body?.limit || 50
+    const limit = Number(limitRaw)
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 50) : 50
+    let jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
+    const resumeStalled = false
+    let resumedJob = null
+    let staleSeconds = null
+
+    if (!jobId) {
+      return res.status(400).json({
+        success: false,
+        message: 'job_id wajib untuk Manual Run Template Blast.'
       })
     }
 
