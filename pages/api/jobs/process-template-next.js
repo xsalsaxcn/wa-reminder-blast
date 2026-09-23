@@ -150,6 +150,43 @@ function normalizeParams(value) {
   return []
 }
 
+async function saveOutgoingHistorySafe({ phone, message, metaMessageId, sentAt }) {
+  try {
+    if (!phone || !message) return
+
+    if (metaMessageId) {
+      const existing = await supabaseAdmin
+        .from('wa_outgoing_messages')
+        .select('id')
+        .eq('meta_message_id', metaMessageId)
+        .limit(1)
+
+      if (!existing.error && Array.isArray(existing.data) && existing.data.length) {
+        return
+      }
+    }
+
+    const insertResult = await supabaseAdmin
+      .from('wa_outgoing_messages')
+      .insert({
+        phone,
+        message,
+        status: 'sent',
+        meta_message_id: metaMessageId || null,
+        message_type: 'template',
+        sent_at: sentAt,
+        created_at: sentAt
+      })
+
+    if (insertResult.error) {
+      console.error('saveOutgoingHistorySafe failed:', insertResult.error.message)
+    }
+  } catch (error) {
+    // History snapshot tidak boleh menggagalkan pengiriman WhatsApp yang sudah sukses.
+    console.error('saveOutgoingHistorySafe failed:', error.message)
+  }
+}
+
 function isSentStatus(status) {
   const text = cleanText(status).toLowerCase()
   return ['sent', 'delivered', 'read', 'success', 'completed', 'done'].includes(text)
@@ -400,9 +437,11 @@ export default async function handler(req, res) {
           params
         })
 
+        const sentAt = new Date().toISOString()
+
         await updateItemSafe(itemId, {
           status: 'sent',
-          processed_at: new Date().toISOString(),
+          processed_at: sentAt,
           error_message: null
         })
 
@@ -414,6 +453,13 @@ export default async function handler(req, res) {
           status: 'success',
           mode: 'template',
           meta_response: sendResult || null
+        })
+
+        await saveOutgoingHistorySafe({
+          phone,
+          message,
+          metaMessageId: sendResult?.meta_message_id || null,
+          sentAt
         })
 
         sent += 1

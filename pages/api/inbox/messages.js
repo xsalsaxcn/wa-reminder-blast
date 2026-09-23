@@ -319,20 +319,69 @@ function buildJobItemMessage(row) {
   }
 }
 
+function buildDeliveryLogMessage(row) {
+  const createdAt = row?.created_at || row?.sent_at || row?.updated_at || ''
+  const body = getBody(row)
+  const mode = cleanText(row?.mode).toLowerCase()
+
+  return {
+    id: row.id ? 'delivery-' + row.id : 'delivery-' + createdAt,
+    source_id: row.id || null,
+    job_id: row.job_id || null,
+    job_item_id: row.item_id || null,
+    direction: 'outgoing',
+    type: mode === 'template' ? 'template' : 'text',
+    message_type: mode === 'template' ? 'template' : 'text',
+    message: body || '[Outgoing history]',
+    body: body || '[Outgoing history]',
+    text: body || '[Outgoing history]',
+    created_at: createdAt,
+    timestamp: createdAt,
+    phone: cleanPhone(row?.phone),
+    status: row?.status || '',
+    meta_message_id: getMetaMessageId(row) || null,
+    is_blast_history: ['template', 'blast', 'reminder'].includes(mode),
+    history_mode: mode || '',
+    raw: row
+  }
+}
+
+function outgoingFingerprint(message) {
+  if (message?.direction !== 'outgoing') return ''
+
+  const time = getTime(message?.created_at)
+  const minuteBucket = time ? Math.floor(time / 60000) : 0
+  const phone = cleanPhone(message?.phone)
+  const body = cleanText(message?.message)
+
+  if (!phone || !body || !minuteBucket) return ''
+
+  return [phone, minuteBucket, body].join('::')
+}
+
 function dedupeMessages(messages) {
-  const map = new Map()
+  const result = []
+  const metaIds = new Set()
+  const jobItemIds = new Set()
+  const outgoingFingerprints = new Set()
 
   for (const message of messages || []) {
-    const metaId = cleanText(message.meta_message_id)
+    const metaId = cleanText(message?.meta_message_id)
+    const jobItemId = cleanText(message?.job_item_id)
+    const fingerprint = outgoingFingerprint(message)
 
-    const key = metaId
-      ? 'meta::' + metaId
-      : message.id || [message.direction, message.phone, message.created_at, message.message].join('::')
+    if (metaId && metaIds.has(metaId)) continue
+    if (jobItemId && jobItemIds.has(jobItemId)) continue
+    if (fingerprint && outgoingFingerprints.has(fingerprint)) continue
 
-    map.set(key, message)
+    if (metaId) metaIds.add(metaId)
+    if (jobItemId) jobItemIds.add(jobItemId)
+    if (fingerprint) outgoingFingerprints.add(fingerprint)
+
+    result.push(message)
   }
 
-  return Array.from(map.values())
+  return result
 }
 
 export default async function handler(req, res) {
@@ -369,10 +418,11 @@ export default async function handler(req, res) {
 
     const variants = phoneVariants(targetPhone)
 
-    const [incomingRows, outgoingRows, jobItemRows] = await Promise.all([
+    const [incomingRows, outgoingRows, jobItemRows, deliveryLogRows] = await Promise.all([
       queryByPhone('wa_incoming_messages', variants, 700),
       queryByPhone('wa_outgoing_messages', variants, 700),
-      queryByPhone('send_job_items', variants, 700)
+      queryByPhone('send_job_items', variants, 700),
+      queryByPhone('send_delivery_logs', variants, 700)
     ])
 
     let relevantJobItems = (jobItemRows || []).filter((item) => {
@@ -393,10 +443,30 @@ export default async function handler(req, res) {
 
     const blastOutgoing = relevantJobItems.map(buildJobItemMessage)
 
+    // send_delivery_logs menjadi fallback untuk history kirim yang job/item-nya
+    // sudah tidak tersedia. Jika item masih ada, gunakan send_job_items sebagai
+    // source utama supaya metadata template/campaign tetap paling lengkap.
+    const jobItemIds = new Set(
+      relevantJobItems.map((item) => cleanText(item?.id)).filter(Boolean)
+    )
+
+    const deliveryOutgoing = (deliveryLogRows || [])
+      .filter((row) => getOutgoingPhone(row) === targetPhone)
+      .filter((row) => {
+        const status = cleanText(row?.status).toLowerCase()
+        return ['success', 'sent', 'delivered', 'read', 'done', 'completed'].includes(status)
+      })
+      .filter((row) => {
+        const itemId = cleanText(row?.item_id)
+        return !itemId || !jobItemIds.has(itemId)
+      })
+      .map(buildDeliveryLogMessage)
+
     const allMessages = dedupeMessages([
       ...incoming,
       ...outgoing,
-      ...blastOutgoing
+      ...blastOutgoing,
+      ...deliveryOutgoing
     ])
       .filter((item) => item.created_at)
       .sort((a, b) => getTime(a.created_at) - getTime(b.created_at))
@@ -438,11 +508,19 @@ export default async function handler(req, res) {
       oldest_cursor: oldestCursor,
       oldestCursor,
       total: allMessages.length,
+      page: {
+        limit,
+        has_more: hasMore,
+        hasMore,
+        oldest_cursor: oldestCursor,
+        oldestCursor
+      },
       debug: {
         optimized_query: true,
         incoming_total: incoming.length,
         outgoing_total: outgoing.length,
         blast_history_total: blastOutgoing.length,
+        delivery_history_fallback_total: deliveryOutgoing.length,
         focus_item_id: focusItemId || null,
         focus_item_found: Boolean(focusItem)
       }

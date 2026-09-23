@@ -413,9 +413,10 @@ export default function InboxPage() {
       }
 
       const nextMessages = data.messages || []
+      const messagePage = data.page || data || {}
 
-      setHasMoreMessages(Boolean(data.page?.has_more))
-      setOldestCursor(data.page?.oldest_cursor || '')
+      setHasMoreMessages(Boolean(messagePage.has_more ?? messagePage.hasMore))
+      setOldestCursor(messagePage.oldest_cursor || messagePage.oldestCursor || '')
 
       if (appendOlder) {
         setMessages((current) => {
@@ -1802,6 +1803,19 @@ export default function InboxPage() {
                 }}
                 className="min-h-[45dvh] flex-1 space-y-3 overflow-y-auto overscroll-contain bg-slate-50 p-3 md:min-h-0 md:p-4"
               >
+                {selectedConversation && hasMoreMessages && !messageSearchText ? (
+                  <div className="sticky top-0 z-10 flex justify-center pb-1">
+                    <button
+                      type="button"
+                      onClick={loadOlderMessages}
+                      disabled={loadingOlder}
+                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {loadingOlder ? 'Memuat riwayat...' : 'Muat riwayat sebelumnya'}
+                    </button>
+                  </div>
+                ) : null}
+
                 {!selectedConversation ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-500">
                     Pilih conversation.
@@ -1826,6 +1840,14 @@ export default function InboxPage() {
                             outgoing ? 'bg-green-600 text-white' : 'bg-white text-slate-900'
                           }`}
                         >
+                          {outgoing && (msg.is_blast_history || msg.type === 'template' || msg.message_type === 'template') ? (
+                            <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-green-100">
+                              {msg.type === 'template' || msg.message_type === 'template'
+                                ? 'Template Blast'
+                                : 'Riwayat Pesan Keluar'}
+                            </div>
+                          ) : null}
+
                           {renderMedia(msg)}
 
                           {shouldRenderMessageText(msg) ? (
