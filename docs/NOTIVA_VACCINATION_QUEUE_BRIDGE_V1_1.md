@@ -1,90 +1,83 @@
-# Notiva Vaccination Queue Bridge V1.1 — Rebased 2026-09-25
+# Notiva Vaccination Queue Bridge V1.2 — Prepare + Called
 
-Endpoint transactional baru:
+Endpoint transactional tetap:
 
 `/api/internal/vaccination-queue-call`
 
-Bridge ini sengaja **tidak memakai** Blast, Template Blast, `send_jobs`, `send_job_items`, cron, worker, scheduler, atau Manual Run.
+V1.2 mempertahankan mode `called` dari V1.1 dan menambahkan mode `prepare`
+untuk notifikasi saat peserta tinggal 1 antrean sebelum gilirannya.
 
-## Baseline yang dipakai
+Bridge tetap tidak masuk Blast, Template Blast, send_jobs, send_job_items,
+cron, worker, scheduler, Reminder, atau Manual Run.
 
-V1.1 direbase terhadap baseline aktual yang dikumpulkan dari project lokal Notiva pada 2026-09-25 14:12.
-Runner menerima working tree yang memang sudah memiliki perubahan lokal, tetapi mengunci seluruh tracked file existing agar byte-nya tidak berubah selama apply/build. Runner hanya men-stage dua file baru bridge ini.
+## Environment
 
-## Environment Notiva
+Existing:
+- `VACCINATION_QUEUE_INTERNAL_SECRET`
+- `VACCINATION_QUEUE_TEMPLATE_NAME` = template called
+- `VACCINATION_QUEUE_TEMPLATE_LANGUAGE` = `id` (default)
 
-Tambahkan di deployment Notiva:
+Prepare:
+- `VACCINATION_QUEUE_PREPARE_TEMPLATE_NAME` = `vaccination_queue_prepare`
 
-- `VACCINATION_QUEUE_INTERNAL_SECRET` — secret panjang/random khusus Vaccination -> Notiva.
-- `VACCINATION_QUEUE_TEMPLATE_NAME` — nama template Meta yang sudah APPROVED.
-- `VACCINATION_QUEUE_TEMPLATE_LANGUAGE` — opsional, default `id`.
+`VACCINATION_QUEUE_PREPARE_TEMPLATE_NAME` opsional karena V1.2 default ke
+`vaccination_queue_prepare`.
 
-Environment Meta existing tetap dipakai melalui `lib/whatsappTemplateSender.js`; file sender existing **tidak diubah**.
+Kedua template harus ada di `wa_templates` dan status `APPROVED`.
 
-## Template
-
-Direkomendasikan category `UTILITY`, tanpa media header.
-
-Parameter body:
-
-1. `{{1}}` = nama peserta
-2. `{{2}}` = nomor antrean
-3. `{{3}}` = nama session/event, bila template memakai parameter ketiga
-
-Contoh dua parameter:
-
-`Halo {{1}}, nomor antrean {{2}} Anda sudah dipanggil. Silakan menuju area vaksinasi sekarang.`
-
-## Health check
-
-GET `/api/internal/vaccination-queue-call`
-
-Header:
-
-`x-vaccination-queue-secret: <secret>`
-
-Response sukses mengembalikan nama template, language, status approval, category, header type, dan jumlah placeholder.
-
-## Kirim panggilan
-
-POST JSON:
+## POST prepare
 
 ```json
 {
   "phone": "081234567890",
   "participant_name": "Ina",
   "queue_number": "Q-0019",
-  "session_name": "Vaksinasi Karyawan"
+  "notification_type": "prepare"
 }
 ```
 
-Header:
+Template prepare:
+- `{{1}}` = nama peserta
+- `{{2}}` = nomor antrean
 
-`x-vaccination-queue-secret: <secret>`
+Contoh body:
+`Halo {{1}}, nomor antrean {{2}} Anda akan segera dipanggil. Saat ini tinggal 1 antrean lagi sebelum giliran Anda. Mohon bersiap dan menuju area vaksinasi.`
 
-Jika sukses:
+## POST called
 
-- langsung mengirim approved Meta template melalui sender Notiva existing;
-- menulis `send_delivery_logs` dengan channel `vaccination_queue`;
-- menulis `wa_outgoing_messages` agar histori outgoing tersedia di Inbox;
-- mengembalikan `meta_message_id` ke caller;
-- webhook Meta existing tetap menangani status sent/delivered/read/failed.
+Tetap backward-compatible. Jika `notification_type` tidak dikirim, default = `called`.
 
-## Safety lock
+```json
+{
+  "phone": "081234567890",
+  "participant_name": "Ina",
+  "queue_number": "Q-0019",
+  "notification_type": "called"
+}
+```
 
-Patch hanya ADD:
+## Health check
 
+GET `/api/internal/vaccination-queue-call`
+
+V1.2 mengembalikan dua template:
+- `templates.called`
+- `templates.prepare`
+
+## Safety scope V1.2
+
+Hanya memodifikasi:
 - `pages/api/internal/vaccination-queue-call.js`
 - `docs/NOTIVA_VACCINATION_QUEUE_BRIDGE_V1_1.md`
 
 Tidak mengubah:
-
 - `package.json` / `package-lock.json`
 - `lib/whatsappTemplateSender.js`
 - `lib/sendDeliveryLog.js`
+- `lib/supabaseAdmin.js`
 - webhook Meta
 - Inbox
-- Template Blast / Manual Run
+- Blast / Template Blast / Manual Run
 - Reminder
 - worker / cron / scheduler
 - database schema

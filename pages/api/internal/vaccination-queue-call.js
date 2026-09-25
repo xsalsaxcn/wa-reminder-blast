@@ -36,7 +36,10 @@ function secureEqual(left, right) {
 function getConfig() {
   return {
     secret: cleanText(process.env.VACCINATION_QUEUE_INTERNAL_SECRET),
-    templateName: cleanText(process.env.VACCINATION_QUEUE_TEMPLATE_NAME),
+    calledTemplateName: cleanText(process.env.VACCINATION_QUEUE_TEMPLATE_NAME),
+    prepareTemplateName:
+      cleanText(process.env.VACCINATION_QUEUE_PREPARE_TEMPLATE_NAME) ||
+      'vaccination_queue_prepare',
     templateLanguage: cleanText(process.env.VACCINATION_QUEUE_TEMPLATE_LANGUAGE) || 'id'
   }
 }
@@ -70,7 +73,7 @@ function buildTemplateParams({ placeholderCount, participantName, queueNumber, s
 
   if (placeholderCount > values.length) {
     throw new Error(
-      `Template membutuhkan ${placeholderCount} parameter. Bridge Vaccination V1.1 mendukung maksimal 3: nama, nomor antrean, session.`
+      `Template membutuhkan ${placeholderCount} parameter. Bridge Vaccination V1.2 mendukung maksimal 3: nama, nomor antrean, session.`
     )
   }
 
@@ -94,16 +97,16 @@ function renderTemplateBody(body, params) {
   return rendered
 }
 
-async function loadApprovedTemplate(config) {
-  if (!config.templateName) {
-    throw new Error('VACCINATION_QUEUE_TEMPLATE_NAME belum diset di environment.')
+async function loadApprovedTemplate({ templateName, templateLanguage, envName }) {
+  if (!templateName) {
+    throw new Error(`${envName} belum diset di environment.`)
   }
 
   const result = await supabaseAdmin
     .from('wa_templates')
     .select('name,language,status,category,header_type,body,components,updated_at')
-    .eq('name', config.templateName)
-    .eq('language', config.templateLanguage)
+    .eq('name', templateName)
+    .eq('language', templateLanguage)
     .limit(1)
 
   if (result.error) throw new Error(result.error.message)
@@ -112,13 +115,13 @@ async function loadApprovedTemplate(config) {
 
   if (!template) {
     throw new Error(
-      `Template ${config.templateName} (${config.templateLanguage}) belum ditemukan di wa_templates.`
+      `Template ${templateName} (${templateLanguage}) belum ditemukan di wa_templates.`
     )
   }
 
   if (cleanText(template.status).toUpperCase() !== 'APPROVED') {
     throw new Error(
-      `Template ${config.templateName} belum APPROVED. Status saat ini: ${cleanText(template.status) || 'UNKNOWN'}.`
+      `Template ${templateName} belum APPROVED. Status saat ini: ${cleanText(template.status) || 'UNKNOWN'}.`
     )
   }
 
@@ -133,7 +136,7 @@ async function loadApprovedTemplate(config) {
 
   if (headerType !== 'NONE' && headerType !== 'TEXT') {
     throw new Error(
-      `Template Vaccination Queue V1.1 harus tanpa media header. Header saat ini: ${headerType}.`
+      `Template Vaccination Queue V1.2 harus tanpa media header. Header saat ini: ${headerType}.`
     )
   }
 
@@ -215,24 +218,64 @@ export default async function handler(req, res) {
   }
 
   try {
-    const template = await loadApprovedTemplate(config)
-    const placeholderCount = getPlaceholderCount(template.body)
+    const calledTemplate = await loadApprovedTemplate({
+      templateName: config.calledTemplateName,
+      templateLanguage: config.templateLanguage,
+      envName: 'VACCINATION_QUEUE_TEMPLATE_NAME'
+    })
+
+    const prepareTemplate = await loadApprovedTemplate({
+      templateName: config.prepareTemplateName,
+      templateLanguage: config.templateLanguage,
+      envName: 'VACCINATION_QUEUE_PREPARE_TEMPLATE_NAME'
+    })
+
+    const calledPlaceholderCount = getPlaceholderCount(calledTemplate.body)
+    const preparePlaceholderCount = getPlaceholderCount(prepareTemplate.body)
 
     if (req.method === 'GET') {
       return res.status(200).json({
         success: true,
-        bridge: 'vaccination_queue_v1_1',
+        bridge: 'vaccination_queue_v1_2',
         configured: true,
-        template: {
-          name: template.name,
-          language: template.language,
-          status: template.status,
-          category: template.category || null,
-          header_type: template.header_type || 'NONE',
-          placeholder_count: placeholderCount
+        templates: {
+          called: {
+            name: calledTemplate.name,
+            language: calledTemplate.language,
+            status: calledTemplate.status,
+            category: calledTemplate.category || null,
+            header_type: calledTemplate.header_type || 'NONE',
+            placeholder_count: calledPlaceholderCount
+          },
+          prepare: {
+            name: prepareTemplate.name,
+            language: prepareTemplate.language,
+            status: prepareTemplate.status,
+            category: prepareTemplate.category || null,
+            header_type: prepareTemplate.header_type || 'NONE',
+            placeholder_count: preparePlaceholderCount
+          }
         }
       })
     }
+
+    const notificationType = cleanText(
+      req.body?.notification_type || req.body?.type || 'called'
+    ).toLowerCase()
+
+    if (!['called', 'prepare'].includes(notificationType)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_NOTIFICATION_TYPE',
+        message: 'notification_type harus called atau prepare.'
+      })
+    }
+
+    const template = notificationType === 'prepare' ? prepareTemplate : calledTemplate
+    const placeholderCount =
+      notificationType === 'prepare'
+        ? preparePlaceholderCount
+        : calledPlaceholderCount
 
     const phone = cleanPhone(req.body?.phone)
     const participantName = cleanText(req.body?.participant_name || req.body?.name)
@@ -289,7 +332,10 @@ export default async function handler(req, res) {
         message: renderedMessage,
         status: 'success',
         channel: 'vaccination_queue',
-        mode: 'vaccination_queue_template',
+        mode:
+          notificationType === 'prepare'
+            ? 'vaccination_queue_prepare_template'
+            : 'vaccination_queue_called_template',
         meta_message_id: metaMessageId,
         meta_response: sendResult || null
       })
@@ -304,7 +350,11 @@ export default async function handler(req, res) {
       return res.status(200).json({
         success: true,
         channel: 'whatsapp',
-        mode: 'vaccination_queue_template',
+        mode:
+          notificationType === 'prepare'
+            ? 'vaccination_queue_prepare_template'
+            : 'vaccination_queue_called_template',
+        notification_type: notificationType,
         phone,
         queue_number: queueNumber,
         template: {
@@ -320,7 +370,10 @@ export default async function handler(req, res) {
         message: renderedMessage,
         status: 'failed',
         channel: 'vaccination_queue',
-        mode: 'vaccination_queue_template',
+        mode:
+          notificationType === 'prepare'
+            ? 'vaccination_queue_prepare_template'
+            : 'vaccination_queue_called_template',
         error_message: sendError.message || 'Gagal kirim WhatsApp Vaccination Queue.'
       })
 
