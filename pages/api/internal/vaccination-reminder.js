@@ -215,7 +215,8 @@ export default async function handler(req, res) {
         success: true,
         bridge: 'vaccination_reminder_v1',
         configured: true,
-        schedule: ['H3', 'H1'],
+        automatic_schedule: ['H3', 'H1'],
+        accepted_manual_stages: ['H7', 'H3', 'H1', 'H0'],
         template: {
           name: template.name,
           language: template.language,
@@ -250,15 +251,16 @@ export default async function handler(req, res) {
     if (!dueDate) {
       return res.status(400).json({ success: false, code: 'DUE_DATE_REQUIRED', message: 'due_date wajib diisi.' })
     }
-    if (!['H3', 'H1'].includes(reminderStage)) {
+    if (!['H7', 'H3', 'H1', 'H0'].includes(reminderStage)) {
       return res.status(400).json({
         success: false,
         code: 'INVALID_REMINDER_STAGE',
-        message: 'WhatsApp Vaccination Reminder hanya mendukung H3 atau H1.'
+        message: 'Reminder stage harus H7, H3, H1, atau H0.'
       })
     }
 
-    const reminderLabel = reminderStage === 'H3' ? 'H-3' : 'H-1'
+    const reminderLabelMap = { H7: 'H-7', H3: 'H-3', H1: 'H-1', H0: 'Hari H' }
+    const reminderLabel = reminderLabelMap[reminderStage]
     const params = buildTemplateParams({
       placeholderCount: template.placeholderCount,
       recipientName,
