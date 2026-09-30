@@ -1,26 +1,34 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 export default async function handler(req, res) {
   const authUser = requireRole(req, res, ['master', 'admin', 'user'])
   if (!authUser) return
 
+  const context = await requireClientContext(req, res, authUser)
+  if (!context) return
+
   if (req.method !== 'GET') {
-    return res.status(405).json({
-      success: false,
-      message: 'Method not allowed'
-    })
+    return res.status(405).json({ success: false, message: 'Method not allowed' })
   }
 
   try {
     const { databaseId, page = 1, pageSize = 25 } = req.query
 
     if (!databaseId) {
-      return res.status(400).json({
-        success: false,
-        message: 'databaseId wajib diisi'
-      })
+      return res.status(400).json({ success: false, message: 'databaseId wajib diisi' })
     }
+
+    const ownerResult = await supabaseAdmin
+      .from('contact_databases')
+      .select('id')
+      .eq('id', databaseId)
+      .eq('client_id', context.clientId)
+      .maybeSingle()
+
+    if (ownerResult.error) throw ownerResult.error
+    if (!ownerResult.data) return res.status(404).json({ success: false, message: 'Database tidak ditemukan pada client aktif.' })
 
     const safePageSize = Math.min(Math.max(Number(pageSize || 25), 1), 100)
     const safePage = Math.max(Number(page || 1), 1)
@@ -47,9 +55,6 @@ export default async function handler(req, res) {
       }
     })
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Gagal mengambil contacts'
-    })
+    return res.status(500).json({ success: false, message: error.message || 'Gagal mengambil contacts' })
   }
 }

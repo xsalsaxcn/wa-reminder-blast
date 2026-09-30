@@ -1,4 +1,6 @@
 import { requireRole } from '../../../lib/auth'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { requireClientContext } from '../../../lib/clientScope'
 import { buildJobPerformanceRows } from '../../../lib/jobPerformanceBuilder'
 
 function csvEscape(value) {
@@ -10,7 +12,11 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
 
   try {
-    await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    if (!authUser) return
+
+    const context = await requireClientContext(req, res, authUser)
+    if (!context) return
 
     if (req.method !== 'GET') {
       return res.status(405).json({
@@ -19,7 +25,7 @@ export default async function handler(req, res) {
       })
     }
 
-    const { rows } = await buildJobPerformanceRows({
+    const performance = await buildJobPerformanceRows({
       start: req.query.start || '',
       end: req.query.end || '',
       type: req.query.type || 'all',
@@ -27,6 +33,16 @@ export default async function handler(req, res) {
       q: req.query.q || '',
       limit: 1000
     })
+
+    const jobsResult = await supabaseAdmin
+      .from('send_jobs')
+      .select('id')
+      .eq('client_id', context.clientId)
+
+    if (jobsResult.error) throw jobsResult.error
+
+    const allowedJobIds = new Set((jobsResult.data || []).map((job) => String(job.id || '')))
+    const rows = (performance.rows || []).filter((row) => allowedJobIds.has(String(row.id || row.job_id || '')))
 
     const header = [
       'job_id',

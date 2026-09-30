@@ -1,4 +1,4 @@
-﻿import bcrypt from 'bcryptjs'
+import bcrypt from 'bcryptjs'
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { signToken, setAuthCookie } from '../../../lib/auth'
 
@@ -22,7 +22,7 @@ export default async function handler(req, res) {
 
     const { data: user, error } = await supabaseAdmin
       .from('app_users')
-      .select('id, username, password_hash, role, is_active')
+      .select('id, username, password_hash, role, is_active, client_id')
       .eq('username', username)
       .maybeSingle()
 
@@ -62,7 +62,8 @@ export default async function handler(req, res) {
       token = signToken({
         id: user.id,
         username: user.username,
-        role: user.role
+        role: user.role,
+        client_id: user.client_id || null
       })
     } catch (tokenError) {
       console.error('TOKEN_ERROR:', tokenError)
@@ -90,7 +91,8 @@ export default async function handler(req, res) {
       user: {
         id: user.id,
         username: user.username,
-        role: user.role
+        role: user.role,
+        client_id: user.client_id || null
       }
     })
   } catch (error) {

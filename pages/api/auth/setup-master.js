@@ -1,4 +1,4 @@
-﻿import bcrypt from 'bcryptjs'
+import bcrypt from 'bcryptjs'
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 
 export default async function handler(req, res) {
@@ -34,15 +34,24 @@ export default async function handler(req, res) {
 
     const hash = await bcrypt.hash(password, 10)
 
+    const { data: legacyClient, error: legacyClientError } = await supabaseAdmin
+      .from('clients')
+      .select('id')
+      .eq('code', 'IHC')
+      .maybeSingle()
+
+    if (legacyClientError) throw legacyClientError
+
     const { data, error } = await supabaseAdmin
       .from('app_users')
       .insert({
         username,
         password_hash: hash,
         role: 'master',
-        is_active: true
+        is_active: true,
+        client_id: legacyClient?.id || null
       })
-      .select('id, username, role, is_active, created_at')
+      .select('id, username, role, is_active, client_id, created_at')
       .single()
 
     if (error) throw error

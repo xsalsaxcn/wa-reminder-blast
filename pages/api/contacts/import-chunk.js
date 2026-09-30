@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 const MAX_CHUNK_SIZE = 150
 
@@ -177,6 +178,9 @@ export default async function handler(req, res) {
     const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
     if (!authUser) return
 
+    const context = await requireClientContext(req, res, authUser)
+    if (!context) return
+
     if (req.method !== 'POST') {
       return res.status(405).json({
         success: false,
@@ -194,6 +198,21 @@ export default async function handler(req, res) {
         success: false,
         message: 'database_id wajib diisi.'
       })
+    }
+
+    const databaseOwner = await supabaseAdmin
+      .from('contact_databases')
+      .select('id')
+      .eq('id', databaseId)
+      .eq('client_id', context.clientId)
+      .maybeSingle()
+
+    if (databaseOwner.error) {
+      return res.status(500).json({ success: false, message: databaseOwner.error.message })
+    }
+
+    if (!databaseOwner.data) {
+      return res.status(404).json({ success: false, message: 'Database tidak ditemukan pada client aktif.' })
     }
 
     if (!rows.length) {

@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 function cleanText(value) {
 return String(value || '').trim()
@@ -15,6 +16,9 @@ res.setHeader('Expires', '0')
 try {
 const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 if (!authUser) return
+
+const context = await requireClientContext(req, res, authUser)
+if (!context) return
 
 if (req.method !== 'POST') {
 return res.status(405).json({
@@ -49,6 +53,7 @@ message: 'Type harus blast atau reminder.'
 
 const insertData = {
 name: databaseName,
+client_id: context.clientId,
 type,
 default_attachment_url: defaultAttachmentUrl || null,
 default_attachment_type: defaultAttachmentType || null,

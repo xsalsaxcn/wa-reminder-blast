@@ -1,7 +1,8 @@
-﻿
+
 
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 const DEFAULT_BATCH_LIMIT = 10
 const MAX_BATCH_LIMIT = 100
@@ -113,6 +114,9 @@ try {
 const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 if (!authUser) return
 
+const context = await requireClientContext(req, res, authUser)
+if (!context) return
+
 if (req.method !== 'POST') {
 return res.status(405).json({
 success: false,
@@ -152,6 +156,7 @@ const { data: database, error: databaseError } = await supabaseAdmin
 'id, name, type, default_attachment_url, default_attachment_type, default_attachment_filename, default_attachment_caption'
 )
 .eq('id', selectedDatabaseId)
+.eq('client_id', context.clientId)
 .single()
 
 if (databaseError || !database) {
@@ -195,6 +200,7 @@ const { data: job, error: jobError } = await supabaseAdmin
 name: jobName,
 title: jobName,
 type,
+client_id: context.clientId,
 database_id: selectedDatabaseId,
 status: 'pending',
 total_items: validContacts.length,

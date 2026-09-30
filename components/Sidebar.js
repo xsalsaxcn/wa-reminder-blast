@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
+import ClientSwitcher from './ClientSwitcher'
 
 const LOGO_URL = 'https://cdn.phototourl.com/free/2026-06-21-c4d82306-6ffd-4d1e-badb-95ea9484d1b9.jpg'
 
@@ -140,6 +141,11 @@ const ADMIN_MENUS = [
     label: 'WhatsApp Settings',
     href: '/admin/whatsapp-settings',
     roles: ['master', 'admin']
+  },
+  {
+    label: 'Clients',
+    href: '/admin/clients',
+    roles: ['master']
   },
   {
     label: 'Manage Users',
@@ -409,6 +415,8 @@ export default function Sidebar() {
           userName={loadingUser ? 'Loading...' : userName}
           role={loadingUser ? '-' : role}
         />
+
+        {!loadingUser ? <ClientSwitcher /> : null}
 
         <nav className="space-y-1">
           {operationalMenus.map((item) => (

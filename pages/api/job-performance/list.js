@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 function cleanText(value) {
   return String(value || '').trim()
@@ -285,7 +286,7 @@ function buildScore({ sent, interestedOnly, followUp, notInterested, optOut, hot
   return Math.min(100, Math.max(0, score))
 }
 
-async function fetchAll(table, maxRows = 50000) {
+async function fetchAll(table, maxRows = 50000, filters = {}) {
   const pageSize = 1000
   let from = 0
   let rows = []
@@ -293,10 +294,16 @@ async function fetchAll(table, maxRows = 50000) {
   while (from < maxRows) {
     const to = from + pageSize - 1
 
-    const result = await supabaseAdmin
+    let query = supabaseAdmin
       .from(table)
       .select('*')
       .range(from, to)
+
+    for (const [column, value] of Object.entries(filters || {})) {
+      if (value !== undefined && value !== null && value !== '') query = query.eq(column, value)
+    }
+
+    const result = await query
 
     if (result.error) {
       throw new Error(result.error.message)
@@ -313,9 +320,9 @@ async function fetchAll(table, maxRows = 50000) {
   return rows
 }
 
-async function safeFetchAll(table, maxRows = 50000) {
+async function safeFetchAll(table, maxRows = 50000, filters = {}) {
   try {
-    return await fetchAll(table, maxRows)
+    return await fetchAll(table, maxRows, filters)
   } catch (error) {
     return []
   }
@@ -660,6 +667,9 @@ export default async function handler(req, res) {
     const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
     if (!authUser) return
 
+    const context = await requireClientContext(req, res, authUser)
+    if (!context) return
+
     if (req.method !== 'GET') {
       return res.status(405).json({
         success: false,
@@ -669,7 +679,7 @@ export default async function handler(req, res) {
 
     const paidRate = toNumber(process.env.WA_ESTIMATED_PAID_MESSAGE_COST_IDR, 0)
 
-    const jobs = await fetchAll('send_jobs', 1000)
+    const jobs = await fetchAll('send_jobs', 1000, { client_id: context.clientId })
     const jobMap = new Map(jobs.map((job) => [getJobId(job), job]))
 
     const allItems = await safeFetchAll('send_job_items', 50000)
@@ -678,7 +688,7 @@ export default async function handler(req, res) {
 
     const incomingRows = await safeFetchAll('wa_incoming_messages', 50000)
     const outgoingRows = await safeFetchAll('wa_outgoing_messages', 50000)
-    const databases = await safeFetchAll('contact_databases', 5000)
+    const databases = await safeFetchAll('contact_databases', 5000, { client_id: context.clientId })
 
     const databaseMap = new Map(
       databases.map((database) => [cleanText(database.id), database])

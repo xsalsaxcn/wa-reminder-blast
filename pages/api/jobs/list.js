@@ -1,9 +1,13 @@
-﻿import { supabaseAdmin } from '../../../lib/supabaseAdmin'
+import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 export default async function handler(req, res) {
   const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
   if (!authUser) return
+
+  const context = await requireClientContext(req, res, authUser)
+  if (!context) return
 
   if (req.method !== 'GET') {
     return res.status(405).json({
@@ -25,6 +29,7 @@ export default async function handler(req, res) {
           total_contacts
         )
       `)
+      .eq('client_id', context.clientId)
       .order('created_at', { ascending: false })
 
     if (type) {

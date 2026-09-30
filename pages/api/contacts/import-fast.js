@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 const MAX_IMPORT_CONTACTS = 5000
 const CHUNK_SIZE = 300
@@ -133,6 +134,9 @@ try {
 const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
 if (!authUser) return
 
+const context = await requireClientContext(req, res, authUser)
+if (!context) return
+
 if (req.method !== 'POST') {
 return res.status(405).json({
 success: false,
@@ -178,6 +182,7 @@ supabaseAdmin
 .from('contact_databases')
 .insert({
 name: databaseName,
+client_id: context.clientId,
 type
 })
 .select('id, name, type, created_at')

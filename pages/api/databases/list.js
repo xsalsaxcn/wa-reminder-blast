@@ -1,53 +1,45 @@
-﻿
-
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 export default async function handler(req, res) {
-res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-res.setHeader('Pragma', 'no-cache')
-res.setHeader('Expires', '0')
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
 
-try {
-await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+  try {
+    const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+    if (!authUser) return
 
-if (req.method !== 'GET') {
-return res.status(405).json({
-success: false,
-message: 'Method not allowed'
-})
-}
+    const context = await requireClientContext(req, res, authUser)
+    if (!context) return
 
-const type = String(req.query.type || '').trim().toLowerCase()
+    if (req.method !== 'GET') {
+      return res.status(405).json({ success: false, message: 'Method not allowed' })
+    }
 
-let query = supabaseAdmin
-.from('contact_databases')
-.select('*')
-.order('created_at', { ascending: false })
-.limit(500)
+    const type = String(req.query.type || '').trim().toLowerCase()
 
-if (type === 'blast' || type === 'reminder') {
-query = query.eq('type', type)
-}
+    let query = supabaseAdmin
+      .from('contact_databases')
+      .select('*')
+      .eq('client_id', context.clientId)
+      .order('created_at', { ascending: false })
+      .limit(500)
 
-const { data, error } = await query
+    if (type === 'blast' || type === 'reminder') query = query.eq('type', type)
 
-if (error) {
-return res.status(500).json({
-success: false,
-message: error.message
-})
-}
+    const { data, error } = await query
 
-return res.status(200).json({
-success: true,
-data: data || [],
-databases: data || []
-})
-} catch (error) {
-return res.status(401).json({
-success: false,
-message: error.message || 'Unauthorized'
-})
-}
+    if (error) return res.status(500).json({ success: false, message: error.message })
+
+    return res.status(200).json({
+      success: true,
+      client: context.client,
+      data: data || [],
+      databases: data || []
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || 'Gagal mengambil database.' })
+  }
 }

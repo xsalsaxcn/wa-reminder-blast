@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 function cleanText(value) {
   return String(value || '').trim()
@@ -84,6 +85,9 @@ export default async function handler(req, res) {
     const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
     if (!authUser) return
 
+    const context = await requireClientContext(req, res, authUser)
+    if (!context) return
+
     if (req.method !== 'GET') {
       return res.status(405).json({
         success: false,
@@ -96,6 +100,7 @@ export default async function handler(req, res) {
     const jobsResult = await supabaseAdmin
       .from('send_jobs')
       .select('*')
+      .eq('client_id', context.clientId)
       .order('created_at', { ascending: false })
       .limit(Number.isFinite(limit) ? limit : 100)
 

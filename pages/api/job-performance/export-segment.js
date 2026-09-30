@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
+import { requireClientContext } from '../../../lib/clientScope'
 
 function cleanText(value) {
   return String(value || '').trim()
@@ -274,6 +275,9 @@ export default async function handler(req, res) {
     const authUser = requireRole(req, res, ['master', 'admin', 'user', 'agent'])
     if (!authUser) return
 
+    const context = await requireClientContext(req, res, authUser)
+    if (!context) return
+
     if (req.method !== 'GET') {
       return res.status(405).json({
         success: false,
@@ -295,6 +299,7 @@ export default async function handler(req, res) {
       .from('send_jobs')
       .select('*')
       .eq('id', jobId)
+      .eq('client_id', context.clientId)
       .maybeSingle()
 
     if (jobResult.error) {
