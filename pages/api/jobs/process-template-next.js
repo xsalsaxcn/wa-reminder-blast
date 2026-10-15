@@ -51,6 +51,27 @@ function isRetryFailed(req) {
   return ['1', 'true', 'yes'].includes(value)
 }
 
+function getRetryItemIds(req) {
+  const raw =
+    req.body?.retry_item_ids ??
+    req.body?.retryItemIds ??
+    req.query.retry_item_ids ??
+    req.query.retryItemIds
+
+  if (!raw) return new Set()
+
+  if (Array.isArray(raw)) {
+    return new Set(raw.map(cleanText).filter(Boolean))
+  }
+
+  return new Set(
+    String(raw)
+      .split(',')
+      .map(cleanText)
+      .filter(Boolean)
+  )
+}
+
 function isResumeStalled(req) {
   const value = cleanText(
     req.query.resume_stalled ||
@@ -393,6 +414,7 @@ export default async function handler(req, res) {
 
     const manualRun = isManualRun(req)
     const retryFailed = manualRun && isRetryFailed(req)
+    const retryItemIds = retryFailed ? getRetryItemIds(req) : new Set()
 
     // HARD KILL-SWITCH: seluruh pemrosesan Template Blast background/non-manual
     // dibuat NO-OP. Ini menghentikan cron lama, HF runner lama/baru, dan tab
@@ -487,11 +509,14 @@ export default async function handler(req, res) {
 
     const allItems = loadedItems.filter((item) => {
       const status = cleanText(item.status).toLowerCase()
+      const itemId = cleanText(item.id)
+      const retrySelectionAllows =
+        retryItemIds.size === 0 || retryItemIds.has(itemId)
 
       if (status === 'pending' || status === 'queued') return true
 
-      if (retryFailed && status === 'failed') return true
-      if (retryFailed && finalFailedIds.has(cleanText(item.id))) return true
+      if (retryFailed && retrySelectionAllows && status === 'failed') return true
+      if (retryFailed && retrySelectionAllows && finalFailedIds.has(itemId)) return true
 
       return false
     })

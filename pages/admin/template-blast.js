@@ -98,6 +98,67 @@ function fileToBase64(file) {
   })
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isPermanentDeliveryFailure(row) {
+  const reason = cleanText(
+    row?.error_message ||
+    row?.errorMessage ||
+    row?.failure_reason ||
+    row?.reason ||
+    ''
+  ).toLowerCase()
+
+  if (!reason) return false
+
+  const permanentPatterns = [
+    'payment',
+    'eligibility',
+    'business eligibility',
+    'message undeliverable',
+    'undeliverable',
+    're-engagement',
+    'outside the allowed',
+    'not a valid whatsapp',
+    'invalid recipient',
+    'recipient is not',
+    'blocked',
+    'opted out',
+    'template paused',
+    'template disabled',
+    'quality',
+    '131026',
+    '131042',
+    '131047',
+    '131049'
+  ]
+
+  return permanentPatterns.some((pattern) => reason.includes(pattern))
+}
+
+function summarizeDelivery(data) {
+  const summary = data?.summary || {}
+  const target = Number(summary.target || 0)
+  const accepted = Number(summary.accepted ?? summary.sent ?? 0)
+  const delivered = Number(summary.delivered || 0)
+  const read = Number(summary.read || 0)
+  const failed = Number(summary.failed || 0)
+  const acceptedOnly = Math.max(0, accepted - delivered)
+  const pending = Math.max(0, target - accepted - failed)
+
+  return {
+    target,
+    accepted,
+    acceptedOnly,
+    delivered,
+    read,
+    failed,
+    pending
+  }
+}
+
 export default function TemplateBlastPage() {
   const fileInputRef = useRef(null)
 
@@ -391,6 +452,170 @@ export default function TemplateBlastPage() {
     }
   }
 
+  async function loadDeliveryDetail(jobId) {
+    const params = new URLSearchParams()
+    params.set('job_id', jobId)
+    params.set('bucket', 'all')
+    params.set('t', String(Date.now()))
+
+    const response = await fetch('/api/job-performance/detail?' + params.toString(), {
+      cache: 'no-store'
+    })
+
+    const data = await readResponse(response)
+
+    if (!response.ok || !data.success) {
+      throw new Error(getErrorMessage(data, 'Gagal membaca status delivery.'))
+    }
+
+    return data
+  }
+
+  async function retrySelectedFailed(jobId, itemIds) {
+    const ids = Array.from(new Set((itemIds || []).map(cleanText).filter(Boolean)))
+
+    if (!ids.length) {
+      return {
+        processed: 0,
+        sent: 0,
+        failed: 0
+      }
+    }
+
+    let totalProcessed = 0
+    let totalSent = 0
+    let totalFailed = 0
+
+    for (let guard = 0; guard < 200; guard += 1) {
+      const response = await fetch('/api/jobs/process-template-next', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          job_id: jobId,
+          limit: 50,
+          force: 1,
+          manual_run: 1,
+          retry_failed: 1,
+          retry_item_ids: ids
+        })
+      })
+
+      const data = await readResponse(response)
+
+      if (!response.ok || !data.success) {
+        throw new Error(getErrorMessage(data, 'Retry delivery gagal.'))
+      }
+
+      const processed = Number(data.processed || 0)
+      totalProcessed += processed
+      totalSent += Number(data.sent || 0)
+      totalFailed += Number(data.failed || 0)
+
+      if (processed <= 0) break
+    }
+
+    return {
+      processed: totalProcessed,
+      sent: totalSent,
+      failed: totalFailed
+    }
+  }
+
+  async function assureDelivery(jobId, initialSummary) {
+    const maxRetryRounds = 2
+    const pollDelayMs = 5000
+    const pollsPerRound = 6
+    let retryRound = 0
+    let latest = null
+
+    for (let round = 0; round <= maxRetryRounds; round += 1) {
+      for (let poll = 0; poll < pollsPerRound; poll += 1) {
+        if (poll > 0 || round > 0) {
+          await sleep(pollDelayMs)
+        }
+
+        latest = await loadDeliveryDetail(jobId)
+        const counts = summarizeDelivery(latest)
+
+        setMessage(
+          `Memastikan delivery... Target: ${counts.target}, Delivered/Read: ${counts.delivered}, ` +
+          `Accepted menunggu final: ${counts.acceptedOnly}, Failed: ${counts.failed}.`
+        )
+
+        if (counts.target > 0 && counts.delivered >= counts.target) {
+          return {
+            status: 'all_delivered',
+            retry_rounds: retryRound,
+            counts,
+            detail: latest
+          }
+        }
+
+        const failedRows = (latest.rows || []).filter((row) => row?.failed)
+        const permanentFailed = failedRows.filter(isPermanentDeliveryFailure)
+        const retryableFailed = failedRows.filter((row) => !isPermanentDeliveryFailure(row))
+
+        if (permanentFailed.length) {
+          return {
+            status: 'blocked_by_meta',
+            retry_rounds: retryRound,
+            counts,
+            permanent_failed: permanentFailed,
+            retryable_failed: retryableFailed,
+            detail: latest
+          }
+        }
+
+        if (retryableFailed.length && retryRound < maxRetryRounds) {
+          retryRound += 1
+
+          setMessage(
+            `Ada ${retryableFailed.length} gagal final. Retry aman ${retryRound}/${maxRetryRounds}...`
+          )
+
+          await retrySelectedFailed(
+            jobId,
+            retryableFailed.map((row) => row.item_id || row.id)
+          )
+
+          break
+        }
+
+        if (retryableFailed.length && retryRound >= maxRetryRounds) {
+          return {
+            status: 'retry_exhausted',
+            retry_rounds: retryRound,
+            counts,
+            retryable_failed: retryableFailed,
+            detail: latest
+          }
+        }
+
+        if (counts.pending <= 0 && counts.acceptedOnly <= 0 && counts.failed <= 0) {
+          return {
+            status: 'final_no_failures',
+            retry_rounds: retryRound,
+            counts,
+            detail: latest
+          }
+        }
+      }
+    }
+
+    latest = latest || await loadDeliveryDetail(jobId)
+
+    return {
+      status: 'waiting_final_callback',
+      retry_rounds: retryRound,
+      counts: summarizeDelivery(latest),
+      detail: latest,
+      initial: initialSummary
+    }
+  }
+
   async function processJob(job) {
     const targetJob = job || createdJob
 
@@ -456,7 +681,44 @@ export default function TemplateBlastPage() {
       }
 
       setDetail(summary)
-      setMessage(`Selesai. Processed: ${totalProcessed}, Accepted: ${totalSent}, Failed: ${totalFailed}.`)
+      setMessage(
+        `Pengiriman awal selesai. Processed: ${totalProcessed}, Accepted: ${totalSent}, Failed: ${totalFailed}. ` +
+        `Sekarang memastikan status final...`
+      )
+
+      const assurance = await assureDelivery(targetJob.id, summary)
+      const counts = assurance.counts || {}
+
+      setDetail({
+        ...summary,
+        delivery_assurance: assurance
+      })
+
+      if (assurance.status === 'all_delivered' || assurance.status === 'final_no_failures') {
+        setMessage(
+          `Selesai. ${counts.delivered || 0}/${counts.target || 0} sudah Delivered/Read. ` +
+          `Retry otomatis: ${assurance.retry_rounds || 0}.`
+        )
+      } else if (assurance.status === 'blocked_by_meta') {
+        const firstBlocked = assurance.permanent_failed?.[0]
+        const reason = cleanText(firstBlocked?.error_message || firstBlocked?.errorMessage) || 'Ditolak Meta.'
+
+        setMessage(
+          `Pengiriman sudah dicoba, tetapi ${counts.failed || 0} pesan diblokir final oleh Meta. ` +
+          `Tidak di-retry otomatis untuk mencegah spam/biaya berulang. Alasan: ${shortText(reason, 160)}`
+        )
+      } else if (assurance.status === 'retry_exhausted') {
+        setMessage(
+          `Pengiriman sudah di-retry ${assurance.retry_rounds || 0}x. ` +
+          `${counts.failed || 0} masih gagal final; cek Failure Reason di Job Performance.`
+        )
+      } else {
+        setMessage(
+          `Pengiriman awal selesai. Delivered/Read: ${counts.delivered || 0}/${counts.target || 0}. ` +
+          `${counts.acceptedOnly || 0} masih Accepted menunggu callback Meta. ` +
+          `Accepted tidak diulang agar tidak terjadi pesan duplikat.`
+        )
+      }
     } catch (error) {
       setMessage(error.message || 'Process template batch gagal.')
     } finally {
