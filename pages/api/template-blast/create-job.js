@@ -116,6 +116,8 @@ export default async function handler(req, res) {
     const databaseId = cleanText(body.database_id || body.databaseId)
     const templateId = cleanText(body.template_id || body.templateId)
     const templateNameInput = cleanText(body.template_name || body.templateName)
+    const requestedHeaderMediaId = cleanText(body.header_media_id || body.headerMediaId)
+    const requestedHeaderMediaFilename = cleanText(body.header_media_filename || body.headerMediaFilename)
 
     if (!databaseId) {
       return res.status(400).json({
@@ -207,12 +209,15 @@ export default async function handler(req, res) {
       const phone = cleanPhone(contact.phone)
       const params = buildParams(contact, template)
 
+      const itemHeaderMediaId = requestedHeaderMediaId
+
       const attachmentUrl =
         cleanText(contact.attachment_url) ||
         cleanText(database.default_attachment_url) ||
         cleanText(template.sample_url)
 
       const attachmentFilename =
+        requestedHeaderMediaFilename ||
         cleanText(contact.attachment_filename) ||
         cleanText(database.default_attachment_filename) ||
         cleanText(template.sample_filename) ||
@@ -227,11 +232,11 @@ export default async function handler(req, res) {
         continue
       }
 
-      if (headerType !== 'NONE' && !attachmentUrl) {
+      if (headerType !== 'NONE' && !itemHeaderMediaId && !attachmentUrl) {
         skipped.push({
           name: contact.name,
           phone,
-          reason: `Template ${template.name} butuh attachment_url karena header ${headerType}.`
+          reason: `Template ${template.name} butuh header_media_id atau attachment_url karena header ${headerType}.`
         })
         continue
       }
@@ -245,7 +250,8 @@ export default async function handler(req, res) {
         template_language: template.language || 'id',
         template_header_type: headerType,
         template_params: params,
-        attachment_url: attachmentUrl || null,
+        ...(itemHeaderMediaId ? { header_media_id: itemHeaderMediaId } : {}),
+        attachment_url: itemHeaderMediaId ? null : (attachmentUrl || null),
         attachment_type: headerType !== 'NONE' ? headerType.toLowerCase() : null,
         attachment_filename: attachmentFilename || null,
         attachment_caption: null
@@ -304,7 +310,8 @@ export default async function handler(req, res) {
       message: 'Template blast job berhasil dibuat.',
       job,
       items_created: rows.length,
-      skipped
+      skipped,
+      media_mode: requestedHeaderMediaId ? 'meta_media_id' : 'attachment_url_fallback'
     })
   } catch (error) {
     return res.status(500).json({
