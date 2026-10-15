@@ -37,6 +37,58 @@ function normalizeHeaderMediaType(template) {
   return ''
 }
 
+function parseTemplateComponents(value) {
+  if (Array.isArray(value)) return value
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch (error) {
+      return []
+    }
+  }
+
+  return []
+}
+
+function getResponsiveUrlButton(template) {
+  const components = parseTemplateComponents(template?.components)
+  const group = components.find((component) => {
+    return cleanText(component?.type).toUpperCase() === 'BUTTONS'
+  })
+
+  const buttons = Array.isArray(group?.buttons) ? group.buttons : []
+
+  const index = buttons.findIndex((button) => {
+    const type = cleanText(button?.type).toUpperCase()
+    const url = cleanText(button?.url)
+
+    return type === 'URL' && url.includes('/view-image?src={{1}}')
+  })
+
+  if (index < 0) return null
+
+  return {
+    index,
+    text: cleanText(buttons[index]?.text),
+    url: cleanText(buttons[index]?.url)
+  }
+}
+
+function hasUrlButton(template) {
+  const components = parseTemplateComponents(template?.components)
+  const group = components.find((component) => {
+    return cleanText(component?.type).toUpperCase() === 'BUTTONS'
+  })
+
+  const buttons = Array.isArray(group?.buttons) ? group.buttons : []
+
+  return buttons.some((button) => {
+    return cleanText(button?.type).toUpperCase() === 'URL'
+  })
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -64,6 +116,7 @@ export default function TemplateBlastPage() {
   const [mediaUrl, setMediaUrl] = useState('')
   const [mediaUrlAssetName, setMediaUrlAssetName] = useState('')
   const [importingMediaUrl, setImportingMediaUrl] = useState(false)
+  const [responsiveImageUrl, setResponsiveImageUrl] = useState('')
 
   const [loading, setLoading] = useState(false)
   const [processing, setProcessing] = useState(false)
@@ -74,6 +127,22 @@ export default function TemplateBlastPage() {
   const selectedTemplate = useMemo(() => {
     return templates.find((item) => item.id === templateId) || null
   }, [templates, templateId])
+
+  const responsiveUrlButton = useMemo(() => {
+    return getResponsiveUrlButton(selectedTemplate)
+  }, [selectedTemplate])
+
+  const selectedTemplateHasUrlButton = useMemo(() => {
+    return hasUrlButton(selectedTemplate)
+  }, [selectedTemplate])
+
+  const responsiveViewerUrl = useMemo(() => {
+    const source = cleanText(responsiveImageUrl)
+
+    if (!source) return ''
+
+    return `https://wa-reminder-blast.vercel.app/view-image?src=${encodeURIComponent(source)}`
+  }, [responsiveImageUrl])
 
   const selectedMediaAsset = useMemo(() => {
     return mediaAssets.find((item) => item.id === mediaAssetId) || null
@@ -293,7 +362,8 @@ export default function TemplateBlastPage() {
           template_id: templateId,
           header_media_id: selectedMediaAsset?.meta_media_id || '',
           header_media_type: selectedMediaAsset?.media_type || '',
-          header_media_filename: selectedMediaAsset?.filename || ''
+          header_media_filename: selectedMediaAsset?.filename || '',
+          responsive_image_url: responsiveUrlButton ? cleanText(responsiveImageUrl) : ''
         })
       })
 
@@ -342,7 +412,7 @@ export default function TemplateBlastPage() {
 
       for (let i = 0; i < 200; i += 1) {
         const response = await fetch(
-          `/api/jobs/process-template-next?job_id=${encodeURIComponent(targetJob.id)}&limit=10&force=1`
+          `/api/jobs/process-template-next?job_id=${encodeURIComponent(targetJob.id)}&limit=50&force=1&manual_run=1`
         )
 
         const data = await readResponse(response)
@@ -386,7 +456,7 @@ export default function TemplateBlastPage() {
       }
 
       setDetail(summary)
-      setMessage(`Selesai. Processed: ${totalProcessed}, Sent: ${totalSent}, Failed: ${totalFailed}.`)
+      setMessage(`Selesai. Processed: ${totalProcessed}, Accepted: ${totalSent}, Failed: ${totalFailed}.`)
     } catch (error) {
       setMessage(error.message || 'Process template batch gagal.')
     } finally {
@@ -474,6 +544,7 @@ export default function TemplateBlastPage() {
                       onChange={(event) => {
                         setTemplateId(event.target.value)
                         setMediaAssetId('')
+                        setResponsiveImageUrl('')
                       }}
                       className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400"
                     >
@@ -500,6 +571,58 @@ export default function TemplateBlastPage() {
                       Belum ada template APPROVED. Buka Admin → Meta Templates lalu sync status.
                     </div>
                   )}
+
+                  {selectedTemplateHasUrlButton ? (
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4">
+                      <p className="text-sm font-black text-violet-900">
+                        URL Button Responsive · Hemat Egress
+                      </p>
+
+                      {responsiveUrlButton ? (
+                        <>
+                          <p className="mt-1 text-xs leading-5 text-violet-700">
+                            Template ini sudah dynamic. Tempel URL gambar asli; Notiva otomatis
+                            mengirim parameter URL Button ke viewer responsive.
+                          </p>
+
+                          <label className="mt-4 block text-xs font-bold uppercase tracking-wide text-violet-800">
+                            URL gambar asli
+                          </label>
+                          <input
+                            value={responsiveImageUrl}
+                            onChange={(event) => setResponsiveImageUrl(event.target.value)}
+                            placeholder="https://cdn.phototourl.com/...jpg"
+                            inputMode="url"
+                            className="mt-2 w-full rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm outline-none focus:border-violet-500"
+                          />
+
+                          {responsiveViewerUrl ? (
+                            <div className="mt-3 rounded-xl bg-white p-3 text-xs leading-5 text-violet-900 ring-1 ring-violet-100">
+                              <div className="font-black">Responsive URL hasil:</div>
+                              <div className="mt-1 break-all">{responsiveViewerUrl}</div>
+                              <a
+                                href={responsiveViewerUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mt-2 inline-block font-black text-violet-700 underline"
+                              >
+                                Test viewer
+                              </a>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                          URL Button template ini masih static. Link lama akan tetap dipakai.
+                          <br />
+                          Duplicate template sekali di Meta dengan URL Button:
+                          <div className="mt-2 break-all rounded-lg bg-white p-2 font-mono text-[11px] ring-1 ring-amber-100">
+                            https://wa-reminder-blast.vercel.app/view-image?src={'{{1}}'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
 
                   {headerNeedsMedia(selectedTemplate) ? (
                     <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">

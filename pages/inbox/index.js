@@ -1263,8 +1263,8 @@ export default function InboxPage() {
     }
 
     return (
-      <span className="ml-2 font-black text-green-100" title="Sent">
-        ✓
+      <span className="ml-2 font-bold text-green-100" title="Accepted by Meta; menunggu status delivered/read">
+        accepted ✓
       </span>
     )
   }

@@ -164,6 +164,88 @@ function isFailedStatus(value) {
   )
 }
 
+function getDeliveryLogTime(row) {
+  return getTime(
+    row?.created_at ||
+    row?.updated_at ||
+    row?.sent_at ||
+    row?.processed_at ||
+    ''
+  )
+}
+
+function normalizeDeliveryStatus(value) {
+  const status = normalizeStatus(value)
+
+  if (status === 'read') return 'read'
+  if (status === 'delivered') return 'delivered'
+  if (status === 'failed' || status === 'error' || status === 'undelivered' || status === 'rejected') {
+    return 'failed'
+  }
+  if (status === 'success' || status === 'sent' || status === 'accepted') return 'accepted'
+  if (status === 'processing' || status === 'queued' || status === 'pending') return 'pending'
+
+  return status || 'pending'
+}
+
+function buildDeliveryStatusByItem(rows) {
+  const attemptsByItem = new Map()
+  const callbacksByMeta = new Map()
+
+  for (const row of rows || []) {
+    const itemId = cleanText(row?.item_id || row?.send_job_item_id || '')
+    const metaId = cleanText(row?.meta_message_id || '')
+    const mode = cleanText(row?.mode).toLowerCase()
+
+    if (itemId) {
+      const existing = attemptsByItem.get(itemId)
+      if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
+        attemptsByItem.set(itemId, row)
+      }
+    }
+
+    if (metaId && mode === 'webhook_status') {
+      const existing = callbacksByMeta.get(metaId)
+      if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
+        callbacksByMeta.set(metaId, row)
+      }
+    }
+  }
+
+  const result = new Map()
+
+  for (const [itemId, attempt] of attemptsByItem.entries()) {
+    const metaId = cleanText(attempt?.meta_message_id || '')
+    const callback = metaId ? callbacksByMeta.get(metaId) : null
+    const source = callback || attempt
+
+    result.set(itemId, {
+      status: normalizeDeliveryStatus(source?.status),
+      meta_message_id: metaId || null,
+      error_message: cleanText(source?.error_message || attempt?.error_message || '') || null,
+      updated_at: source?.created_at || attempt?.created_at || null
+    })
+  }
+
+  return result
+}
+
+function getItemDelivery(item, deliveryByItem) {
+  const itemId = cleanText(item?.id || '')
+  const fromLog = itemId ? deliveryByItem.get(itemId) : null
+
+  if (fromLog) return fromLog
+
+  const status = normalizeDeliveryStatus(item?.status)
+
+  return {
+    status,
+    meta_message_id: null,
+    error_message: cleanText(item?.error_message || item?.error || '') || null,
+    updated_at: item?.updated_at || item?.processed_at || item?.created_at || null
+  }
+}
+
 function classifyReply(text) {
   const value = cleanText(text).toLowerCase()
 
@@ -432,26 +514,15 @@ function getJobTitle(job) {
   )
 }
 
-function isItemFailed(item) {
-  return isFailedStatus(item?.status)
-}
-
-function isItemSent({ item, job, outgoingByPhone }) {
-  const phone = getItemPhone(item)
-  const startAt = getItemTime(item) || getJobTime(job)
-
-  if (isItemFailed(item)) return false
-  if (isSentStatus(item?.status)) return true
-  if (cleanText(item?.sent_at)) return true
-  if (cleanText(item?.delivered_at)) return true
-  if (cleanText(item?.read_at)) return true
-  if (hasOutgoingAfter({ phone, startAt, outgoingByPhone })) return true
-  if (isJobDone(job)) return true
-
-  return false
-}
-
-function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, databaseMap, paidRate }) {
+function buildPerformanceForJob({
+  job,
+  items,
+  incomingByPhone,
+  outgoingByPhone,
+  databaseMap,
+  paidRate,
+  deliveryByItem
+}) {
   const jobId = getJobId(job)
   const safeItems = Array.isArray(items) ? items : []
 
@@ -464,7 +535,9 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
     toNumber(job?.contacts_count, 0)
   )
 
-  let sent = 0
+  let accepted = 0
+  let delivered = 0
+  let read = 0
   let failed = 0
   let replies = 0
   let needResponse = 0
@@ -482,15 +555,22 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
     if (!phone) continue
 
     const itemStartAt = getItemTime(item) || getJobTime(job)
-    const itemFailed = isItemFailed(item)
-    const itemSent = isItemSent({
-      item,
-      job,
-      outgoingByPhone
-    })
+    const delivery = getItemDelivery(item, deliveryByItem)
+    const deliveryStatus = delivery.status
 
-    if (itemFailed) failed += 1
-    if (itemSent) sent += 1
+    if (deliveryStatus === 'failed') failed += 1
+
+    if (deliveryStatus === 'accepted' || deliveryStatus === 'delivered' || deliveryStatus === 'read') {
+      accepted += 1
+    }
+
+    if (deliveryStatus === 'delivered' || deliveryStatus === 'read') {
+      delivered += 1
+    }
+
+    if (deliveryStatus === 'read') {
+      read += 1
+    }
 
     const incomingAfter = getIncomingListAfter({
       phone,
@@ -539,15 +619,8 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
     else neutral += 1
   }
 
-  const fallbackSent = Math.max(
-    sent,
-    toNumber(job?.sent, 0),
-    toNumber(job?.sent_count, 0),
-    toNumber(job?.sent_items, 0)
-  )
-
-  const finalSent = fallbackSent
-  const responseBase = Math.max(finalSent, target)
+  const finalSent = accepted
+  const responseBase = Math.max(finalSent, replies)
   const noResponse = Math.max(0, responseBase - replies)
   const interested = interestedOnly + hotLead
 
@@ -594,6 +667,12 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
 
     sent: finalSent,
     sent_count: finalSent,
+    accepted: finalSent,
+    accepted_count: finalSent,
+    delivered,
+    delivered_count: delivered,
+    read,
+    read_count: read,
 
     failed,
     failed_count: failed,
@@ -645,7 +724,8 @@ function buildPerformanceForJob({ job, items, incomingByPhone, outgoingByPhone, 
     debug: {
       items_loaded: safeItems.length,
       job_total_items: job?.total_items || null,
-      repaired_target_fallback: true,
+      final_delivery_status: true,
+      sent_alias_means_accepted: true,
       latest_reply_logic: true
     }
   }
@@ -678,6 +758,7 @@ export default async function handler(req, res) {
 
     const incomingRows = await safeFetchAll('wa_incoming_messages', 50000)
     const outgoingRows = await safeFetchAll('wa_outgoing_messages', 50000)
+    const deliveryRows = await safeFetchAll('send_delivery_logs', 50000)
     const databases = await safeFetchAll('contact_databases', 5000)
 
     const databaseMap = new Map(
@@ -686,6 +767,7 @@ export default async function handler(req, res) {
 
     const incomingByPhone = groupByPhone(incomingRows, getIncomingPhone, getIncomingTime)
     const outgoingByPhone = groupByPhone(outgoingRows, getOutgoingPhone, getOutgoingTime)
+    const deliveryByItem = buildDeliveryStatusByItem(deliveryRows)
 
     const rows = jobs
       .map((job) => {
@@ -697,7 +779,8 @@ export default async function handler(req, res) {
           incomingByPhone,
           outgoingByPhone,
           databaseMap,
-          paidRate
+          paidRate,
+          deliveryByItem
         })
       })
       .sort((a, b) => getTime(b.created_at) - getTime(a.created_at))
@@ -707,6 +790,9 @@ export default async function handler(req, res) {
         acc.jobs += 1
         acc.target += toNumber(item.target)
         acc.sent += toNumber(item.sent)
+        acc.accepted += toNumber(item.accepted)
+        acc.delivered += toNumber(item.delivered)
+        acc.read += toNumber(item.read)
         acc.failed += toNumber(item.failed)
         acc.replies += toNumber(item.replies)
         acc.no_response += toNumber(item.no_response)
@@ -724,6 +810,9 @@ export default async function handler(req, res) {
         jobs: 0,
         target: 0,
         sent: 0,
+        accepted: 0,
+        delivered: 0,
+        read: 0,
         failed: 0,
         replies: 0,
         no_response: 0,
@@ -755,7 +844,8 @@ export default async function handler(req, res) {
         job_items_loaded: items.length,
         incoming_loaded: incomingRows.length,
         outgoing_loaded: outgoingRows.length,
-        target_fallback_enabled: true
+        delivery_logs_loaded: deliveryRows.length,
+        final_delivery_status: true
       }
     })
   } catch (error) {

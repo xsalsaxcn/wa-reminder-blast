@@ -96,6 +96,82 @@ function normalizeHeaderType(value) {
   return 'NONE'
 }
 
+function parseTemplateComponents(value) {
+  if (Array.isArray(value)) return value
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch (error) {
+      return []
+    }
+  }
+
+  return []
+}
+
+function getResponsiveUrlButton(template) {
+  const components = parseTemplateComponents(template?.components)
+  const group = components.find((component) => {
+    return cleanText(component?.type).toUpperCase() === 'BUTTONS'
+  })
+
+  const buttons = Array.isArray(group?.buttons) ? group.buttons : []
+
+  const index = buttons.findIndex((button) => {
+    const type = cleanText(button?.type).toUpperCase()
+    const url = cleanText(button?.url)
+
+    return type === 'URL' && url.includes('/view-image?src={{1}}')
+  })
+
+  if (index < 0) return null
+
+  return {
+    index,
+    text: cleanText(buttons[index]?.text),
+    url: cleanText(buttons[index]?.url)
+  }
+}
+
+function normalizeHttpUrl(value) {
+  const raw = cleanText(value)
+
+  if (!raw) return ''
+
+  try {
+    const parsed = new URL(raw)
+
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return ''
+    }
+
+    return parsed.toString()
+  } catch (error) {
+    return ''
+  }
+}
+
+function buildTemplateParamsWithResponsiveButton({
+  bodyParams,
+  responsiveButton,
+  responsiveImageUrl
+}) {
+  if (!responsiveButton) return bodyParams
+
+  return {
+    body: bodyParams,
+    buttons: [
+      {
+        type: 'url',
+        index: String(responsiveButton.index),
+        text: encodeURIComponent(responsiveImageUrl)
+      }
+    ]
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -118,6 +194,9 @@ export default async function handler(req, res) {
     const templateNameInput = cleanText(body.template_name || body.templateName)
     const requestedHeaderMediaId = cleanText(body.header_media_id || body.headerMediaId)
     const requestedHeaderMediaFilename = cleanText(body.header_media_filename || body.headerMediaFilename)
+    const requestedResponsiveImageUrlRaw = cleanText(
+      body.responsive_image_url || body.responsiveImageUrl
+    )
 
     if (!databaseId) {
       return res.status(400).json({
@@ -159,6 +238,30 @@ export default async function handler(req, res) {
       return res.status(400).json({
         success: false,
         message: `Template belum APPROVED. Status sekarang: ${template.status || '-'}`
+      })
+    }
+
+    const responsiveButton = getResponsiveUrlButton(template)
+    const requestedResponsiveImageUrl = normalizeHttpUrl(requestedResponsiveImageUrlRaw)
+
+    if (responsiveButton && !requestedResponsiveImageUrlRaw) {
+      return res.status(400).json({
+        success: false,
+        message: 'Template ini memakai Responsive URL Button. Isi URL gambar asli dulu.'
+      })
+    }
+
+    if (requestedResponsiveImageUrlRaw && !requestedResponsiveImageUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL gambar asli tidak valid. Gunakan URL http/https.'
+      })
+    }
+
+    if (requestedResponsiveImageUrl && !responsiveButton) {
+      return res.status(400).json({
+        success: false,
+        message: 'Template ini belum memakai URL Button dinamis Notiva: https://wa-reminder-blast.vercel.app/view-image?src={{1}}'
       })
     }
 
@@ -249,7 +352,11 @@ export default async function handler(req, res) {
         template_name: template.name,
         template_language: template.language || 'id',
         template_header_type: headerType,
-        template_params: params,
+        template_params: buildTemplateParamsWithResponsiveButton({
+          bodyParams: params,
+          responsiveButton,
+          responsiveImageUrl: requestedResponsiveImageUrl
+        }),
         ...(itemHeaderMediaId ? { header_media_id: itemHeaderMediaId } : {}),
         attachment_url: itemHeaderMediaId ? null : (attachmentUrl || null),
         attachment_type: headerType !== 'NONE' ? headerType.toLowerCase() : null,
@@ -311,7 +418,12 @@ export default async function handler(req, res) {
       job,
       items_created: rows.length,
       skipped,
-      media_mode: requestedHeaderMediaId ? 'meta_media_id' : 'attachment_url_fallback'
+      media_mode: requestedHeaderMediaId ? 'meta_media_id' : 'attachment_url_fallback',
+      button_mode: responsiveButton ? 'responsive_url' : 'none',
+      responsive_button_index: responsiveButton ? responsiveButton.index : null,
+      responsive_viewer_url: responsiveButton && requestedResponsiveImageUrl
+        ? `https://wa-reminder-blast.vercel.app/view-image?src=${encodeURIComponent(requestedResponsiveImageUrl)}`
+        : null
     })
   } catch (error) {
     return res.status(500).json({

@@ -47,7 +47,9 @@ function getFirst(row, keys, fallback) {
 
 function normalizeRow(row) {
   const target = toNumber(getFirst(row, ['target', 'total', 'total_items', 'total_contacts'], 0))
-  const sent = toNumber(getFirst(row, ['sent', 'sent_items', 'sent_count'], 0))
+  const sent = toNumber(getFirst(row, ['accepted', 'accepted_count', 'sent', 'sent_items', 'sent_count'], 0))
+  const delivered = toNumber(getFirst(row, ['delivered', 'delivered_count'], 0))
+  const read = toNumber(getFirst(row, ['read', 'read_count'], 0))
   const failed = toNumber(getFirst(row, ['failed', 'failed_items', 'failed_count'], 0))
   const replies = toNumber(getFirst(row, ['replies', 'reply_count', 'total_replies'], 0))
 
@@ -112,6 +114,9 @@ function normalizeRow(row) {
     createdAt: getFirst(row, ['created_at', 'createdAt', 'started_at'], ''),
     target,
     sent,
+    accepted: sent,
+    delivered,
+    read,
     failed,
     replies,
     noResponse,
@@ -168,7 +173,10 @@ function typeClass(type) {
 function bucketLabel(bucket) {
   const map = {
     target: 'Target',
-    sent: 'Sent',
+    sent: 'Accepted',
+    accepted: 'Accepted',
+    delivered: 'Delivered',
+    read: 'Read',
     failed: 'Failed',
     replies: 'Replies',
     no_response: 'No Response',
@@ -304,7 +312,7 @@ function DetailPanel({ detail, loading, error, onClose }) {
 
                       <td className="px-3 py-4">
                         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                          {row.status || '-'}
+                          {row.delivery_status || row.status || '-'}
                         </span>
                       </td>
 
@@ -362,16 +370,18 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   const jobName = cleanText(item?.jobName).toLowerCase()
   const isTemplateJob = sendMode === 'template' || jobName.startsWith('template blast')
   const remaining = Math.max(0, toNumber(item?.target) - toNumber(item?.sent) - toNumber(item?.failed))
-  const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
+  const retryableFailed = Math.max(0, toNumber(item?.failed))
+  const canManualRun = Boolean(item?.id) && isTemplateJob && (remaining > 0 || retryableFailed > 0)
 
   async function manualRun() {
     if (!canManualRun || manualRunning) return
 
     const ok = window.confirm(
-      `Manual Run akan mengirim SEMUA kontak yang masih pending dari job ini.\n\n` +
+      `Manual Run akan memproses kontak pending dan retry kontak yang status finalnya gagal.\n\n` +
       `Job: ${item.jobName}\n` +
-      `Sisa perkiraan: ${remaining}\n\n` +
-      `Pengiriman berjalan bertahap di browser sampai pending habis. Lanjutkan?`
+      `Pending perkiraan: ${remaining}\n` +
+      `Failed: ${retryableFailed}\n\n` +
+      `Kontak yang sudah Accepted/Delivered/Read tidak dikirim ulang. Lanjutkan?`
     )
 
     if (!ok) return
@@ -397,7 +407,8 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
             job_id: item.id,
             limit: 50,
             force: 1,
-            manual_run: 1
+            manual_run: 1,
+            retry_failed: 1
           })
         })
 
@@ -420,12 +431,12 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
         if (processed <= 0) break
 
         setManualMessage(
-          `Manual Run berjalan... ${totalProcessed} diproses, ${totalSent} terkirim, ${totalFailed} gagal.`
+          `Manual Run berjalan... ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal.`
         )
       }
 
       setManualMessage(
-        `Manual Run selesai: ${totalProcessed} diproses, ${totalSent} terkirim, ${totalFailed} gagal.`
+        `Manual Run selesai: ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal.`
       )
 
       if (onManualRunDone) {
@@ -433,7 +444,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
       }
     } catch (err) {
       setManualMessage(
-        `Manual Run berhenti setelah ${totalProcessed} diproses (${totalSent} terkirim, ${totalFailed} gagal). ` +
+        `Manual Run berhenti setelah ${totalProcessed} diproses (${totalSent} accepted, ${totalFailed} gagal). ` +
         `${err.message || 'Silakan jalankan lagi untuk sisa pending.'}`
       )
 
@@ -482,9 +493,9 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 onClick={manualRun}
                 disabled={manualRunning}
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title="Satu klik mengirim semua kontak pending dari job ini"
+                title="Fallback: proses pending dan retry yang finalnya failed"
               >
-                {manualRunning ? 'Running All...' : 'Manual Run All'}
+                {manualRunning ? 'Running...' : 'Manual Run / Retry'}
               </button>
             ) : null}
           </div>
@@ -512,9 +523,11 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
           ) : null}
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 xl:w-[650px]">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[820px] xl:grid-cols-7">
           <MiniStat label="Target" value={item.target} onClick={() => onMetricClick(item, 'target')} />
-          <MiniStat label="Sent" value={item.sent} className="text-emerald-700" onClick={() => onMetricClick(item, 'sent')} />
+          <MiniStat label="Accepted" value={item.sent} className="text-cyan-700" onClick={() => onMetricClick(item, 'accepted')} />
+          <MiniStat label="Delivered" value={item.delivered} className="text-emerald-700" onClick={() => onMetricClick(item, 'delivered')} />
+          <MiniStat label="Read" value={item.read} className="text-blue-700" onClick={() => onMetricClick(item, 'read')} />
           <MiniStat label="Failed" value={item.failed} className="text-red-700" onClick={() => onMetricClick(item, 'failed')} />
           <MiniStat
             label="Interest Rate"
@@ -606,7 +619,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
       </div>
 
       <div className="mt-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 text-xs text-slate-500">
-        <b>Rate:</b> Interested / Sent. <b>Avg Response:</b> waktu rata-rata CS membalas setelah customer reply. <b>Score:</b> kualitas lead 0–100.
+        <b>Rate:</b> Interested / Accepted. <b>Avg Response:</b> waktu rata-rata CS membalas setelah customer reply. <b>Score:</b> kualitas lead 0–100.
       </div>
     </div>
   )
@@ -752,7 +765,9 @@ export default function JobPerformancePage() {
       return {
         jobs: summary.jobs || summary.total_jobs || items.length || 0,
         target: summary.target || summary.total || 0,
-        sent: summary.sent || 0,
+        sent: summary.accepted || summary.sent || 0,
+        delivered: summary.delivered || 0,
+        read: summary.read || 0,
         failed: summary.failed || 0,
         replies: summary.replies || 0,
         noResponse: summary.no_response || summary.noResponse || 0,
@@ -768,6 +783,8 @@ export default function JobPerformancePage() {
         acc.jobs += 1
         acc.target += item.target
         acc.sent += item.sent
+        acc.delivered += item.delivered
+        acc.read += item.read
         acc.failed += item.failed
         acc.replies += item.replies
         acc.noResponse += item.noResponse
@@ -780,6 +797,8 @@ export default function JobPerformancePage() {
         jobs: 0,
         target: 0,
         sent: 0,
+        delivered: 0,
+        read: 0,
         failed: 0,
         replies: 0,
         noResponse: 0,
@@ -930,10 +949,12 @@ export default function JobPerformancePage() {
             </div>
           </section>
 
-          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-9">
+          <section className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-11">
             <MetricCard label="Jobs" value={safeSummary.jobs} />
             <MetricCard label="Target" value={safeSummary.target} />
-            <MetricCard label="Sent" value={safeSummary.sent} />
+            <MetricCard label="Accepted" value={safeSummary.sent} />
+            <MetricCard label="Delivered" value={safeSummary.delivered} />
+            <MetricCard label="Read" value={safeSummary.read} />
             <MetricCard label="Failed" value={safeSummary.failed} />
             <MetricCard label="Replies" value={safeSummary.replies} />
             <MetricCard label="No Response" value={safeSummary.noResponse} />

@@ -40,6 +40,17 @@ function isManualRun(req) {
   return ['1', 'true', 'yes'].includes(value)
 }
 
+function isRetryFailed(req) {
+  const value = cleanText(
+    req.query.retry_failed ||
+    req.body?.retry_failed ||
+    req.query.retryFailed ||
+    req.body?.retryFailed
+  ).toLowerCase()
+
+  return ['1', 'true', 'yes'].includes(value)
+}
+
 function isResumeStalled(req) {
   const value = cleanText(
     req.query.resume_stalled ||
@@ -202,6 +213,97 @@ function isPendingStatus(status) {
   return ['pending', 'queued', 'processing'].includes(text)
 }
 
+function normalizeDeliveryStatus(value) {
+  const status = cleanText(value).toLowerCase()
+
+  if (status === 'read') return 'read'
+  if (status === 'delivered') return 'delivered'
+  if (['failed', 'error', 'undelivered', 'rejected'].includes(status)) return 'failed'
+  if (['success', 'sent', 'accepted'].includes(status)) return 'accepted'
+
+  return status
+}
+
+function getLogTime(row) {
+  const time = new Date(
+    row?.created_at ||
+    row?.updated_at ||
+    row?.sent_at ||
+    row?.processed_at ||
+    0
+  ).getTime()
+
+  return Number.isFinite(time) ? time : 0
+}
+
+async function getFinalFailedItemIds(jobId) {
+  const result = await supabaseAdmin
+    .from('send_delivery_logs')
+    .select('item_id, meta_message_id, status, mode, error_message, created_at')
+    .eq('job_id', jobId)
+    .not('item_id', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(10000)
+
+  if (result.error) return new Set()
+
+  const attemptsByItem = new Map()
+
+  for (const row of result.data || []) {
+    const itemId = cleanText(row.item_id)
+    if (!itemId) continue
+    attemptsByItem.set(itemId, row)
+  }
+
+  const metaIds = Array.from(
+    new Set(
+      Array.from(attemptsByItem.values())
+        .map((row) => cleanText(row.meta_message_id))
+        .filter(Boolean)
+    )
+  )
+
+  const latestCallbackByMeta = new Map()
+
+  for (let start = 0; start < metaIds.length; start += 200) {
+    const batch = metaIds.slice(start, start + 200)
+
+    const callbackResult = await supabaseAdmin
+      .from('send_delivery_logs')
+      .select('meta_message_id, status, mode, error_message, created_at')
+      .in('meta_message_id', batch)
+      .eq('mode', 'webhook_status')
+      .order('created_at', { ascending: true })
+      .limit(10000)
+
+    if (callbackResult.error) continue
+
+    for (const row of callbackResult.data || []) {
+      const metaId = cleanText(row.meta_message_id)
+      if (!metaId) continue
+
+      const existing = latestCallbackByMeta.get(metaId)
+      if (!existing || getLogTime(row) >= getLogTime(existing)) {
+        latestCallbackByMeta.set(metaId, row)
+      }
+    }
+  }
+
+  const failedIds = new Set()
+
+  for (const [itemId, attempt] of attemptsByItem.entries()) {
+    const metaId = cleanText(attempt.meta_message_id)
+    const callback = metaId ? latestCallbackByMeta.get(metaId) : null
+    const finalStatus = normalizeDeliveryStatus(callback?.status || attempt.status)
+
+    if (finalStatus === 'failed') {
+      failedIds.add(itemId)
+    }
+  }
+
+  return failedIds
+}
+
 async function updateItemSafe(itemId, payload) {
   const fullPayload = {
     ...payload,
@@ -290,6 +392,7 @@ export default async function handler(req, res) {
     }
 
     const manualRun = isManualRun(req)
+    const retryFailed = manualRun && isRetryFailed(req)
 
     // HARD KILL-SWITCH: seluruh pemrosesan Template Blast background/non-manual
     // dibuat NO-OP. Ini menghentikan cron lama, HF runner lama/baru, dan tab
@@ -362,17 +465,13 @@ export default async function handler(req, res) {
 
     const effectiveForce = force || Boolean(resumedJob)
 
-    let query = supabaseAdmin
+    const itemsResult = await supabaseAdmin
       .from('send_job_items')
       .select('*')
-      .in('status', ['pending', 'queued'])
+      .eq('job_id', jobId)
       .not('template_name', 'is', null)
       .order('created_at', { ascending: true })
-      .limit(500)
-
-    if (jobId) query = query.eq('job_id', jobId)
-
-    const itemsResult = await query
+      .limit(10000)
 
     if (itemsResult.error) {
       return res.status(500).json({
@@ -381,7 +480,22 @@ export default async function handler(req, res) {
       })
     }
 
-    const allItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
+    const loadedItems = Array.isArray(itemsResult.data) ? itemsResult.data : []
+    const finalFailedIds = retryFailed
+      ? await getFinalFailedItemIds(jobId)
+      : new Set()
+
+    const allItems = loadedItems.filter((item) => {
+      const status = cleanText(item.status).toLowerCase()
+
+      if (status === 'pending' || status === 'queued') return true
+
+      if (retryFailed && status === 'failed') return true
+      if (retryFailed && finalFailedIds.has(cleanText(item.id))) return true
+
+      return false
+    })
+
     const futureItems = allItems.filter((item) => isFuture(item, effectiveForce))
     const dueItems = allItems.filter((item) => isDue(item, effectiveForce)).slice(0, safeLimit)
 
@@ -395,7 +509,7 @@ export default async function handler(req, res) {
         message: futureItems.length
           ? 'Belum ada template item yang waktunya due.'
           : 'Tidak ada template item pending untuk diproses.',
-        mode: resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'),
+        mode: retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled')),
         resumed_job_id: resumedJob?.id || null,
         stale_seconds: staleSeconds,
         checked: allItems.length,
@@ -416,7 +530,7 @@ export default async function handler(req, res) {
       const itemJobId = item.job_id
       const phone = cleanPhone(item.phone)
       const message = cleanText(item.message)
-      const params = normalizeParams(item.template_params)
+      const params = item.template_params
 
       affectedJobIds.add(itemJobId)
 
@@ -505,7 +619,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       message: 'Process template batch selesai.',
-      mode: resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'),
+      mode: retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled')),
       resumed_job_id: resumedJob?.id || null,
       stale_seconds: staleSeconds,
       checked: allItems.length,
@@ -513,6 +627,7 @@ export default async function handler(req, res) {
       processed: dueItems.length,
       sent,
       failed,
+      retry_failed: retryFailed,
       results
     })
   } catch (error) {

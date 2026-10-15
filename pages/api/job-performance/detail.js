@@ -139,6 +139,86 @@ function isFailedStatus(value) {
   )
 }
 
+function getDeliveryLogTime(row) {
+  return getTime(
+    row?.created_at ||
+    row?.updated_at ||
+    row?.sent_at ||
+    row?.processed_at ||
+    ''
+  )
+}
+
+function normalizeDeliveryStatus(value) {
+  const status = normalizeStatus(value)
+
+  if (status === 'read') return 'read'
+  if (status === 'delivered') return 'delivered'
+  if (status === 'failed' || status === 'error' || status === 'undelivered' || status === 'rejected') {
+    return 'failed'
+  }
+  if (status === 'success' || status === 'sent' || status === 'accepted') return 'accepted'
+  if (status === 'processing' || status === 'queued' || status === 'pending') return 'pending'
+
+  return status || 'pending'
+}
+
+function buildDeliveryStatusByItem(rows) {
+  const attemptsByItem = new Map()
+  const callbacksByMeta = new Map()
+
+  for (const row of rows || []) {
+    const itemId = cleanText(row?.item_id || row?.send_job_item_id || '')
+    const metaId = cleanText(row?.meta_message_id || '')
+    const mode = cleanText(row?.mode).toLowerCase()
+
+    if (itemId) {
+      const existing = attemptsByItem.get(itemId)
+      if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
+        attemptsByItem.set(itemId, row)
+      }
+    }
+
+    if (metaId && mode === 'webhook_status') {
+      const existing = callbacksByMeta.get(metaId)
+      if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
+        callbacksByMeta.set(metaId, row)
+      }
+    }
+  }
+
+  const result = new Map()
+
+  for (const [itemId, attempt] of attemptsByItem.entries()) {
+    const metaId = cleanText(attempt?.meta_message_id || '')
+    const callback = metaId ? callbacksByMeta.get(metaId) : null
+    const source = callback || attempt
+
+    result.set(itemId, {
+      status: normalizeDeliveryStatus(source?.status),
+      meta_message_id: metaId || null,
+      error_message: cleanText(source?.error_message || attempt?.error_message || '') || null,
+      updated_at: source?.created_at || attempt?.created_at || null
+    })
+  }
+
+  return result
+}
+
+function getItemDelivery(item, deliveryByItem) {
+  const itemId = cleanText(item?.id || '')
+  const fromLog = itemId ? deliveryByItem.get(itemId) : null
+
+  if (fromLog) return fromLog
+
+  return {
+    status: normalizeDeliveryStatus(item?.status),
+    meta_message_id: null,
+    error_message: cleanText(item?.error_message || item?.error || '') || null,
+    updated_at: item?.updated_at || item?.processed_at || item?.created_at || null
+  }
+}
+
 function classifyReply(text) {
   const value = cleanText(text).toLowerCase()
 
@@ -354,25 +434,6 @@ function hasOutgoingAfter({ phone, startAt, outgoingByPhone }) {
   return Boolean(getFirstOutgoingAfter({ phone, startAt, outgoingByPhone }))
 }
 
-function isItemFailed(item) {
-  return isFailedStatus(item?.status)
-}
-
-function isItemSent({ item, job, outgoingByPhone }) {
-  const phone = getItemPhone(item)
-  const startAt = getItemTime(item) || getJobTime(job)
-
-  if (isItemFailed(item)) return false
-  if (isSentStatus(item?.status)) return true
-  if (cleanText(item?.sent_at)) return true
-  if (cleanText(item?.delivered_at)) return true
-  if (cleanText(item?.read_at)) return true
-  if (hasOutgoingAfter({ phone, startAt, outgoingByPhone })) return true
-  if (isJobDone(job)) return true
-
-  return false
-}
-
 function getContactName(phone, contactsByPhone, item) {
   const contact = contactsByPhone.get(phone)
 
@@ -391,7 +452,9 @@ function shouldIncludeDetail(detail, selected) {
 
   if (!filter || filter === 'all' || filter === 'semua') return true
   if (filter === 'target') return true
-  if (filter === 'sent') return detail.sent
+  if (filter === 'sent' || filter === 'accepted') return detail.accepted
+  if (filter === 'delivered') return detail.delivered
+  if (filter === 'read') return detail.read
   if (filter === 'failed') return detail.failed
   if (filter === 'replies' || filter === 'reply') return detail.hasReply
   if (filter === 'no_response') return !detail.hasReply
@@ -406,7 +469,14 @@ function shouldIncludeDetail(detail, selected) {
   return true
 }
 
-function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contactsByPhone }) {
+function buildDetailRows({
+  job,
+  items,
+  incomingByPhone,
+  outgoingByPhone,
+  contactsByPhone,
+  deliveryByItem
+}) {
   const rows = []
 
   for (const item of items || []) {
@@ -451,8 +521,13 @@ function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contact
 
     const replyText = getReplyBody(latestReply)
     const replyBucket = classifyReply(replyText)
-    const failed = isItemFailed(item)
-    const sent = isItemSent({ item, job, outgoingByPhone })
+    const delivery = getItemDelivery(item, deliveryByItem)
+    const deliveryStatus = delivery.status
+    const accepted = deliveryStatus === 'accepted' || deliveryStatus === 'delivered' || deliveryStatus === 'read'
+    const delivered = deliveryStatus === 'delivered' || deliveryStatus === 'read'
+    const read = deliveryStatus === 'read'
+    const failed = deliveryStatus === 'failed'
+    const sent = accepted
 
     rows.push({
       id: item.id || `${job.id}-${phone}`,
@@ -462,10 +537,15 @@ function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contact
       name: getContactName(phone, contactsByPhone, item),
       profile_name: getContactName(phone, contactsByPhone, item),
 
-      status: item.status || '-',
+      status: deliveryStatus || item.status || '-',
+      delivery_status: deliveryStatus,
       sent,
+      accepted,
+      delivered,
+      read,
       failed,
-      pending: !sent && !failed,
+      pending: !accepted && !failed,
+      meta_message_id: delivery.meta_message_id || null,
 
       message: item.message || '',
       template_name: item.template_name || null,
@@ -488,8 +568,8 @@ function buildDetailRows({ job, items, incomingByPhone, outgoingByPhone, contact
       responseSeconds,
       responseTime: secondsToLabel(responseSeconds),
 
-      errorMessage: item.error_message || item.error || null,
-      error_message: item.error_message || item.error || null
+      errorMessage: delivery.error_message || item.error_message || item.error || null,
+      error_message: delivery.error_message || item.error_message || item.error || null
     })
   }
 
@@ -558,6 +638,8 @@ export default async function handler(req, res) {
 
     const incomingRows = await safeFetchAll('wa_incoming_messages', 50000)
     const outgoingRows = await safeFetchAll('wa_outgoing_messages', 50000)
+    const deliveryRows = await safeFetchAll('send_delivery_logs', 50000)
+    const deliveryByItem = buildDeliveryStatusByItem(deliveryRows)
 
     let contacts = []
 
@@ -588,7 +670,8 @@ export default async function handler(req, res) {
       items,
       incomingByPhone,
       outgoingByPhone,
-      contactsByPhone
+      contactsByPhone,
+      deliveryByItem
     })
 
     const filteredDetails = allDetails.filter((detail) => shouldIncludeDetail(detail, selected))
@@ -596,7 +679,12 @@ export default async function handler(req, res) {
     const summary = allDetails.reduce(
       (acc, item) => {
         acc.target += 1
-        if (item.sent) acc.sent += 1
+        if (item.accepted) {
+          acc.sent += 1
+          acc.accepted += 1
+        }
+        if (item.delivered) acc.delivered += 1
+        if (item.read) acc.read += 1
         if (item.failed) acc.failed += 1
         if (item.hasReply) acc.replies += 1
         if (!item.hasReply) acc.no_response += 1
@@ -611,6 +699,9 @@ export default async function handler(req, res) {
       {
         target: 0,
         sent: 0,
+        accepted: 0,
+        delivered: 0,
+        read: 0,
         failed: 0,
         replies: 0,
         no_response: 0,
