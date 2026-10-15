@@ -76,6 +76,34 @@ function getResponsiveUrlButton(template) {
   }
 }
 
+function getStaticResponsiveUrlButton(template) {
+  const components = parseTemplateComponents(template?.components)
+  const group = components.find((component) => {
+    return cleanText(component?.type).toUpperCase() === 'BUTTONS'
+  })
+
+  const buttons = Array.isArray(group?.buttons) ? group.buttons : []
+
+  const index = buttons.findIndex((button) => {
+    const type = cleanText(button?.type).toUpperCase()
+    const url = cleanText(button?.url)
+
+    return (
+      type === 'URL' &&
+      url.includes('/view-image?src=') &&
+      !url.includes('/view-image?src={{1}}')
+    )
+  })
+
+  if (index < 0) return null
+
+  return {
+    index,
+    text: cleanText(buttons[index]?.text),
+    url: cleanText(buttons[index]?.url)
+  }
+}
+
 function hasUrlButton(template) {
   const components = parseTemplateComponents(template?.components)
   const group = components.find((component) => {
@@ -191,6 +219,10 @@ export default function TemplateBlastPage() {
 
   const responsiveUrlButton = useMemo(() => {
     return getResponsiveUrlButton(selectedTemplate)
+  }, [selectedTemplate])
+
+  const staticResponsiveUrlButton = useMemo(() => {
+    return getStaticResponsiveUrlButton(selectedTemplate)
   }, [selectedTemplate])
 
   const selectedTemplateHasUrlButton = useMemo(() => {
@@ -873,14 +905,25 @@ export default function TemplateBlastPage() {
                             </div>
                           ) : null}
                         </>
+                      ) : staticResponsiveUrlButton ? (
+                        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-5 text-emerald-900">
+                          <div className="font-black">
+                            Responsive URL sudah aktif otomatis.
+                          </div>
+                          <div className="mt-1">
+                            Tidak perlu edit URL lagi di Template Blast. Template Meta ini sudah
+                            menyimpan viewer responsive hasil generate Notiva.
+                          </div>
+                          <div className="mt-2 break-all rounded-lg bg-white p-2 font-mono text-[11px] ring-1 ring-emerald-100">
+                            {staticResponsiveUrlButton.url}
+                          </div>
+                        </div>
                       ) : (
                         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-                          URL Button template ini masih static. Link lama akan tetap dipakai.
+                          URL Button template ini masih static dan belum memakai responsive viewer.
                           <br />
-                          Duplicate template sekali di Meta dengan URL Button:
-                          <div className="mt-2 break-all rounded-lg bg-white p-2 font-mono text-[11px] ring-1 ring-amber-100">
-                            https://wa-reminder-blast.vercel.app/view-image?src={'{{1}}'}
-                          </div>
+                          Buat/duplicate template dari halaman Meta Templates. Cukup tempel URL gambar
+                          normal; Notiva akan generate responsive URL otomatis saat submit.
                         </div>
                       )}
                     </div>

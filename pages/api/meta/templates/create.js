@@ -254,6 +254,52 @@ function parseKeyValueButtons(value, max = 2) {
     .slice(0, max)
 }
 
+const RESPONSIVE_IMAGE_VIEWER_BASE =
+  'https://wa-reminder-blast.vercel.app/view-image?src='
+
+function isResponsiveImageViewerUrl(value) {
+  const raw = cleanText(value)
+  return raw.startsWith(RESPONSIVE_IMAGE_VIEWER_BASE)
+}
+
+function isLikelyImageUrl(value) {
+  const raw = cleanText(value)
+
+  if (!raw) return false
+
+  try {
+    const parsed = new URL(raw)
+    const hostname = parsed.hostname.toLowerCase()
+    const pathname = parsed.pathname.toLowerCase()
+
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return false
+    }
+
+    if (hostname === 'cdn.phototourl.com' || hostname.endsWith('.phototourl.com')) {
+      return true
+    }
+
+    return /\.(jpg|jpeg|png|webp|gif|bmp|avif|heic|heif)$/i.test(pathname)
+  } catch (error) {
+    return false
+  }
+}
+
+function toResponsiveImageViewerUrl(value) {
+  const raw = cleanText(value)
+
+  if (!raw) return ''
+  if (isResponsiveImageViewerUrl(raw)) return raw
+  if (!isLikelyImageUrl(raw)) return raw
+
+  try {
+    return `${RESPONSIVE_IMAGE_VIEWER_BASE}${encodeURIComponent(new URL(raw).toString())}`
+  } catch (error) {
+    return raw
+  }
+}
+
 function normalizePhoneButtonNumber(value) {
   let phone = cleanText(value)
 
@@ -286,7 +332,7 @@ function buildButtons({ quickReplyButtons, urlButtons, phoneButtons }) {
     buttons.push({
       type: 'URL',
       text: item.text,
-      url: item.value
+      url: toResponsiveImageViewerUrl(item.value)
     })
   }
 

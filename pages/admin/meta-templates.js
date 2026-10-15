@@ -5,6 +5,83 @@ function cleanText(value) {
   return String(value || '').trim()
 }
 
+const RESPONSIVE_IMAGE_VIEWER_BASE =
+  'https://wa-reminder-blast.vercel.app/view-image?src='
+
+function isResponsiveImageViewerUrl(value) {
+  const raw = cleanText(value)
+  return raw.startsWith(RESPONSIVE_IMAGE_VIEWER_BASE)
+}
+
+function isLikelyImageUrl(value) {
+  const raw = cleanText(value)
+
+  if (!raw) return false
+
+  try {
+    const parsed = new URL(raw)
+    const hostname = parsed.hostname.toLowerCase()
+    const pathname = parsed.pathname.toLowerCase()
+
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return false
+    }
+
+    if (hostname === 'cdn.phototourl.com' || hostname.endsWith('.phototourl.com')) {
+      return true
+    }
+
+    return /\.(jpg|jpeg|png|webp|gif|bmp|avif|heic|heif)$/i.test(pathname)
+  } catch (error) {
+    return false
+  }
+}
+
+function toResponsiveImageViewerUrl(value) {
+  const raw = cleanText(value)
+
+  if (!raw) return ''
+  if (isResponsiveImageViewerUrl(raw)) return raw
+  if (!isLikelyImageUrl(raw)) return raw
+
+  try {
+    return `${RESPONSIVE_IMAGE_VIEWER_BASE}${encodeURIComponent(new URL(raw).toString())}`
+  } catch (error) {
+    return raw
+  }
+}
+
+function getUrlButtonPreview(value) {
+  const raw = cleanText(value)
+
+  if (!raw) return []
+
+  return raw
+    .split('|')
+    .map(cleanText)
+    .filter(Boolean)
+    .map((item) => {
+      const separatorIndex = item.indexOf('=')
+
+      if (separatorIndex < 0) return null
+
+      const label = cleanText(item.slice(0, separatorIndex))
+      const originalUrl = cleanText(item.slice(separatorIndex + 1))
+      const generatedUrl = toResponsiveImageViewerUrl(originalUrl)
+
+      if (!label || !originalUrl || generatedUrl === originalUrl) {
+        return null
+      }
+
+      return {
+        label,
+        originalUrl,
+        generatedUrl
+      }
+    })
+    .filter(Boolean)
+}
+
 function sanitizeTemplateName(value) {
   return cleanText(value)
     .toLowerCase()
@@ -117,6 +194,10 @@ export default function MetaTemplatesPage() {
   const bodyLength = useMemo(() => {
     return String(form.body || '').length
   }, [form.body])
+
+  const responsiveUrlButtonPreview = useMemo(() => {
+    return getUrlButtonPreview(form.url_buttons)
+  }, [form.url_buttons])
 
   function updateForm(key, value) {
     setForm((prev) => ({
@@ -516,6 +597,37 @@ export default function MetaTemplatesPage() {
                   <p className="mt-1 text-xs text-slate-500">
                     Format: Label=https://url. Pisahkan beberapa tombol dengan tanda pipe: |
                   </p>
+
+                  {responsiveUrlButtonPreview.length ? (
+                    <div className="mt-3 rounded-2xl border border-violet-200 bg-violet-50 p-3">
+                      <p className="text-xs font-black uppercase tracking-wide text-violet-800">
+                        Auto Responsive Image URL
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-violet-700">
+                        URL gambar terdeteksi. Anda tetap cukup menempel URL normal;
+                        Notiva otomatis membungkusnya dengan responsive viewer saat submit ke Meta.
+                      </p>
+
+                      <div className="mt-3 space-y-3">
+                        {responsiveUrlButtonPreview.map((item, index) => (
+                          <div
+                            key={`${item.label}-${index}`}
+                            className="rounded-xl bg-white p-3 text-xs leading-5 ring-1 ring-violet-100"
+                          >
+                            <div className="font-black text-violet-900">
+                              {item.label}
+                            </div>
+                            <div className="mt-1 break-all text-slate-500">
+                              Original: {item.originalUrl}
+                            </div>
+                            <div className="mt-1 break-all font-semibold text-violet-800">
+                              Generated: {item.generatedUrl}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
