@@ -1,61 +1,5 @@
-import { useEffect, useMemo } from 'react'
-import { useRouter } from 'next/router'
+import { useEffect } from 'react'
 import Head from 'next/head'
-
-
-function hideFloatingNotificationBell() {
-  if (typeof document === 'undefined') return
-
-  const viewportWidth =
-    window.innerWidth || document.documentElement.clientWidth || 0
-
-  const candidates = Array.from(
-    document.querySelectorAll('button, [role="button"], a, div')
-  )
-
-  for (const candidate of candidates) {
-    const text = String(candidate.textContent || '').replace(/\s+/g, '')
-
-    if (!text.includes('🔔')) continue
-
-    const rect = candidate.getBoundingClientRect()
-    const nearTopRight =
-      rect.top >= -20 &&
-      rect.top < 220 &&
-      rect.right > Math.max(0, viewportWidth - 220)
-
-    if (!nearTopRight) continue
-
-    let node = candidate
-
-    for (let depth = 0; depth < 5 && node; depth += 1) {
-      const style = window.getComputedStyle(node)
-
-      if (style.position === 'fixed' || style.position === 'absolute') {
-        break
-      }
-
-      node = node.parentElement
-    }
-
-    const target = node || candidate
-    const targetRect = target.getBoundingClientRect()
-    const targetStyle = window.getComputedStyle(target)
-
-    const isFloating =
-      targetStyle.position === 'fixed' ||
-      targetStyle.position === 'absolute' ||
-      (
-        targetRect.top < 220 &&
-        targetRect.right > Math.max(0, viewportWidth - 220)
-      )
-
-    if (isFloating) {
-      target.setAttribute('data-hidden-on-image-viewer', 'true')
-      target.style.setProperty('display', 'none', 'important')
-    }
-  }
-}
 
 function getSafeImageUrl(value) {
   const raw = String(value || '').trim()
@@ -75,34 +19,81 @@ function getSafeImageUrl(value) {
   }
 }
 
-export default function ResponsiveImageViewer() {
-  const router = useRouter()
+function getImageOrigin(value) {
+  try {
+    return new URL(value).origin
+  } catch (error) {
+    return ''
+  }
+}
 
-  const imageUrl = useMemo(() => {
-    return getSafeImageUrl(router.query.src)
-  }, [router.query.src])
+function hideViewerBellOnce() {
+  if (typeof document === 'undefined') return
 
-  const hasSource = Boolean(String(router.query.src || '').trim())
+  const viewportWidth =
+    window.innerWidth || document.documentElement.clientWidth || 0
+
+  const candidates = Array.from(
+    document.querySelectorAll('button, [role="button"], a')
+  )
+
+  for (const candidate of candidates) {
+    const label = [
+      candidate.textContent,
+      candidate.getAttribute('aria-label'),
+      candidate.getAttribute('title')
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    if (
+      !label.includes('🔔') &&
+      !label.includes('notification') &&
+      !label.includes('notifikasi')
+    ) {
+      continue
+    }
+
+    const rect = candidate.getBoundingClientRect()
+
+    const nearTopRight =
+      rect.top >= -20 &&
+      rect.top < 220 &&
+      rect.right > Math.max(0, viewportWidth - 220)
+
+    if (!nearTopRight) continue
+
+    let target = candidate
+
+    for (let depth = 0; depth < 4 && target?.parentElement; depth += 1) {
+      const style = window.getComputedStyle(target)
+
+      if (style.position === 'fixed' || style.position === 'absolute') {
+        break
+      }
+
+      target = target.parentElement
+    }
+
+    target.style.setProperty('display', 'none', 'important')
+  }
+}
+
+export default function ResponsiveImageViewer({ imageUrl }) {
+  const imageOrigin = getImageOrigin(imageUrl)
 
   useEffect(() => {
-    hideFloatingNotificationBell()
+    // Bell di-hide dengan beberapa lightweight one-shot attempts.
+    // Tidak memakai MutationObserver / scan terus-menerus.
+    hideViewerBellOnce()
 
-    const bellObserver = new MutationObserver(() => {
-      hideFloatingNotificationBell()
-    })
-
-    bellObserver.observe(document.body, {
-      childList: true,
-      subtree: true
-    })
-
-    const timer = window.setTimeout(() => {
-      hideFloatingNotificationBell()
-    }, 500)
+    const timer1 = window.setTimeout(hideViewerBellOnce, 250)
+    const timer2 = window.setTimeout(hideViewerBellOnce, 900)
 
     return () => {
-      window.clearTimeout(timer)
-      bellObserver.disconnect()
+      window.clearTimeout(timer1)
+      window.clearTimeout(timer2)
     }
   }, [])
 
@@ -115,24 +106,32 @@ export default function ResponsiveImageViewer() {
           content="width=device-width, initial-scale=1, viewport-fit=cover"
         />
         <meta name="robots" content="noindex,nofollow" />
+
+        {imageOrigin ? (
+          <>
+            <link rel="preconnect" href={imageOrigin} />
+            <link rel="dns-prefetch" href={imageOrigin} />
+          </>
+        ) : null}
+
+        {imageUrl ? (
+          <link rel="preload" as="image" href={imageUrl} />
+        ) : null}
       </Head>
 
       <main className="viewer">
-        {!router.isReady ? (
-          <div className="state">Memuat gambar...</div>
-        ) : imageUrl ? (
+        {imageUrl ? (
           <img
             src={imageUrl}
             alt="Preview"
             className="responsiveImage"
             referrerPolicy="no-referrer"
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
           />
         ) : (
-          <div className="state">
-            {hasSource
-              ? 'URL gambar tidak valid.'
-              : 'URL gambar belum diberikan.'}
-          </div>
+          <div className="state">URL gambar tidak valid atau belum diberikan.</div>
         )}
       </main>
 
@@ -184,21 +183,26 @@ export default function ResponsiveImageViewer() {
           line-height: 1.5;
           text-align: center;
         }
-
-        @media (orientation: portrait) {
-          .responsiveImage {
-            max-width: 100vw;
-            max-height: 100dvh;
-          }
-        }
-
-        @media (orientation: landscape) {
-          .responsiveImage {
-            max-width: 100vw;
-            max-height: 100dvh;
-          }
-        }
       `}</style>
     </>
   )
+}
+
+export async function getServerSideProps(context) {
+  const rawSource = Array.isArray(context.query.src)
+    ? context.query.src[0]
+    : context.query.src
+
+  const imageUrl = getSafeImageUrl(rawSource)
+
+  context.res.setHeader(
+    'Cache-Control',
+    'public, s-maxage=300, stale-while-revalidate=3600'
+  )
+
+  return {
+    props: {
+      imageUrl
+    }
+  }
 }
