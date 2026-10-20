@@ -191,16 +191,30 @@ function normalizeDeliveryStatus(value) {
 function buildDeliveryStatusByItem(rows) {
   const attemptsByItem = new Map()
   const callbacksByMeta = new Map()
+  const acceptedEverByItem = new Map()
+  const acceptedMetaIdByItem = new Map()
 
   for (const row of rows || []) {
     const itemId = cleanText(row?.item_id || row?.send_job_item_id || '')
     const metaId = cleanText(row?.meta_message_id || '')
     const mode = cleanText(row?.mode).toLowerCase()
+    const normalizedRowStatus = normalizeDeliveryStatus(row?.status)
 
     if (itemId) {
       const existing = attemptsByItem.get(itemId)
       if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
         attemptsByItem.set(itemId, row)
+      }
+
+      const wasAccepted =
+        Boolean(metaId) ||
+        normalizedRowStatus === 'accepted' ||
+        normalizedRowStatus === 'delivered' ||
+        normalizedRowStatus === 'read'
+
+      if (wasAccepted) {
+        acceptedEverByItem.set(itemId, true)
+        if (metaId) acceptedMetaIdByItem.set(itemId, metaId)
       }
     }
 
@@ -215,12 +229,15 @@ function buildDeliveryStatusByItem(rows) {
   const result = new Map()
 
   for (const [itemId, attempt] of attemptsByItem.entries()) {
-    const metaId = cleanText(attempt?.meta_message_id || '')
+    const attemptMetaId = cleanText(attempt?.meta_message_id || '')
+    const acceptedMetaId = cleanText(acceptedMetaIdByItem.get(itemId) || '')
+    const metaId = attemptMetaId || acceptedMetaId
     const callback = metaId ? callbacksByMeta.get(metaId) : null
     const source = callback || attempt
 
     result.set(itemId, {
       status: normalizeDeliveryStatus(source?.status),
+      was_accepted: Boolean(acceptedEverByItem.get(itemId)),
       meta_message_id: metaId || null,
       error_message: cleanText(source?.error_message || attempt?.error_message || '') || null,
       updated_at: source?.created_at || attempt?.created_at || null
@@ -238,9 +255,21 @@ function getItemDelivery(item, deliveryByItem) {
 
   const status = normalizeDeliveryStatus(item?.status)
 
+  const itemMetaId = cleanText(
+    item?.meta_message_id ||
+    item?.wamid ||
+    item?.message_id ||
+    ''
+  )
+
   return {
     status,
-    meta_message_id: null,
+    was_accepted:
+      Boolean(itemMetaId) ||
+      status === 'accepted' ||
+      status === 'delivered' ||
+      status === 'read',
+    meta_message_id: itemMetaId || null,
     error_message: cleanText(item?.error_message || item?.error || '') || null,
     updated_at: item?.updated_at || item?.processed_at || item?.created_at || null
   }
@@ -560,7 +589,12 @@ function buildPerformanceForJob({
 
     if (deliveryStatus === 'failed') failed += 1
 
-    if (deliveryStatus === 'accepted' || deliveryStatus === 'delivered' || deliveryStatus === 'read') {
+    if (
+      delivery.was_accepted ||
+      deliveryStatus === 'accepted' ||
+      deliveryStatus === 'delivered' ||
+      deliveryStatus === 'read'
+    ) {
       accepted += 1
     }
 
@@ -726,6 +760,8 @@ function buildPerformanceForJob({
       job_total_items: job?.total_items || null,
       final_delivery_status: true,
       sent_alias_means_accepted: true,
+      accepted_is_cumulative: true,
+      cost_uses_cumulative_accepted: true,
       latest_reply_logic: true
     }
   }
