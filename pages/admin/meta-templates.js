@@ -51,8 +51,32 @@ function toResponsiveImageViewerUrl(value) {
   }
 }
 
-function getUrlButtonPreview(value) {
+function addImageClickTarget(viewerUrl, targetUrl) {
+  const viewer = cleanText(viewerUrl)
+  const target = cleanText(targetUrl)
+
+  if (!viewer || !target) return viewer
+  if (!viewer.startsWith(RESPONSIVE_IMAGE_VIEWER_BASE)) return viewer
+
+  try {
+    const parsedTarget = new URL(target)
+
+    if (
+      parsedTarget.protocol !== 'https:' &&
+      parsedTarget.protocol !== 'http:'
+    ) {
+      return viewer
+    }
+
+    return `${viewer}&target=${encodeURIComponent(parsedTarget.toString())}`
+  } catch (error) {
+    return viewer
+  }
+}
+
+function getUrlButtonPreview(value, imageClickTargetUrl) {
   const raw = cleanText(value)
+  const clickTarget = cleanText(imageClickTargetUrl)
 
   if (!raw) return []
 
@@ -67,7 +91,10 @@ function getUrlButtonPreview(value) {
 
       const label = cleanText(item.slice(0, separatorIndex))
       const originalUrl = cleanText(item.slice(separatorIndex + 1))
-      const generatedUrl = toResponsiveImageViewerUrl(originalUrl)
+      const generatedUrl = addImageClickTarget(
+        toResponsiveImageViewerUrl(originalUrl),
+        clickTarget
+      )
 
       if (!label || !originalUrl || generatedUrl === originalUrl) {
         return null
@@ -180,6 +207,7 @@ export default function MetaTemplatesPage() {
     footer: 'inHarmony Clinic',
     buttons: 'Berminat | Tidak Minat',
     url_buttons: '',
+    image_click_target_url: '',
     phone_buttons: ''
   })
 
@@ -196,8 +224,11 @@ export default function MetaTemplatesPage() {
   }, [form.body])
 
   const responsiveUrlButtonPreview = useMemo(() => {
-    return getUrlButtonPreview(form.url_buttons)
-  }, [form.url_buttons])
+    return getUrlButtonPreview(
+      form.url_buttons,
+      form.image_click_target_url
+    )
+  }, [form.url_buttons, form.image_click_target_url])
 
   function updateForm(key, value) {
     setForm((prev) => ({
@@ -596,6 +627,22 @@ export default function MetaTemplatesPage() {
                   />
                   <p className="mt-1 text-xs text-slate-500">
                     Format: Label=https://url. Pisahkan beberapa tombol dengan tanda pipe: |
+                  </p>
+
+                  <label className="mt-4 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Link saat gambar diklik (opsional)
+                  </label>
+                  <input
+                    value={form.image_click_target_url}
+                    onChange={(event) =>
+                      updateForm('image_click_target_url', event.target.value)
+                    }
+                    placeholder="https://website/form/pendaftaran"
+                    inputMode="url"
+                    className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Jika diisi, tap poster di responsive viewer akan membuka link ini.
                   </p>
 
                   {responsiveUrlButtonPreview.length ? (

@@ -300,6 +300,29 @@ function toResponsiveImageViewerUrl(value) {
   }
 }
 
+function addImageClickTarget(viewerUrl, targetUrl) {
+  const viewer = cleanText(viewerUrl)
+  const target = cleanText(targetUrl)
+
+  if (!viewer || !target) return viewer
+  if (!viewer.startsWith(RESPONSIVE_IMAGE_VIEWER_BASE)) return viewer
+
+  try {
+    const parsedTarget = new URL(target)
+
+    if (
+      parsedTarget.protocol !== 'https:' &&
+      parsedTarget.protocol !== 'http:'
+    ) {
+      return viewer
+    }
+
+    return `${viewer}&target=${encodeURIComponent(parsedTarget.toString())}`
+  } catch (error) {
+    return viewer
+  }
+}
+
 function normalizePhoneButtonNumber(value) {
   let phone = cleanText(value)
 
@@ -316,7 +339,12 @@ function normalizePhoneButtonNumber(value) {
   return `+${phone}`
 }
 
-function buildButtons({ quickReplyButtons, urlButtons, phoneButtons }) {
+function buildButtons({
+  quickReplyButtons,
+  urlButtons,
+  phoneButtons,
+  imageClickTargetUrl
+}) {
   const buttons = []
 
   const quickReplies = parseSimpleList(quickReplyButtons, 3)
@@ -332,7 +360,10 @@ function buildButtons({ quickReplyButtons, urlButtons, phoneButtons }) {
     buttons.push({
       type: 'URL',
       text: item.text,
-      url: toResponsiveImageViewerUrl(item.value)
+      url: addImageClickTarget(
+        toResponsiveImageViewerUrl(item.value),
+        imageClickTargetUrl
+      )
     })
   }
 
@@ -426,7 +457,8 @@ function buildComponents({
   footer,
   quickReplyButtons,
   urlButtons,
-  phoneButtons
+  phoneButtons,
+  imageClickTargetUrl
 }) {
   const components = []
 
@@ -467,7 +499,8 @@ function buildComponents({
   const buttons = buildButtons({
     quickReplyButtons,
     urlButtons,
-    phoneButtons
+    phoneButtons,
+    imageClickTargetUrl
   })
 
   if (buttons.length) {
@@ -548,6 +581,11 @@ export default async function handler(req, res) {
       bodyPayload.url_buttons ||
       bodyPayload.urlButtons
 
+    const imageClickTargetUrl = cleanText(
+      bodyPayload.image_click_target_url ||
+      bodyPayload.imageClickTargetUrl
+    )
+
     const phoneButtons =
       bodyPayload.phone_buttons ||
       bodyPayload.phoneButtons
@@ -614,7 +652,8 @@ export default async function handler(req, res) {
       footer,
       quickReplyButtons,
       urlButtons,
-      phoneButtons
+      phoneButtons,
+      imageClickTargetUrl
     })
 
     const metaPayload = {

@@ -19,6 +19,24 @@ function getSafeImageUrl(value) {
   }
 }
 
+function getSafeTargetUrl(value) {
+  const raw = String(value || '').trim()
+
+  if (!raw) return ''
+
+  try {
+    const parsed = new URL(raw)
+
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return ''
+    }
+
+    return parsed.toString()
+  } catch (error) {
+    return ''
+  }
+}
+
 function getImageOrigin(value) {
   try {
     return new URL(value).origin
@@ -80,7 +98,7 @@ function hideViewerBellOnce() {
   }
 }
 
-export default function ResponsiveImageViewer({ imageUrl }) {
+export default function ResponsiveImageViewer({ imageUrl, targetUrl }) {
   const imageOrigin = getImageOrigin(imageUrl)
 
   useEffect(() => {
@@ -121,15 +139,34 @@ export default function ResponsiveImageViewer({ imageUrl }) {
 
       <main className="viewer">
         {imageUrl ? (
-          <img
-            src={imageUrl}
-            alt="Preview"
-            className="responsiveImage"
-            referrerPolicy="no-referrer"
-            loading="eager"
-            decoding="async"
-            fetchPriority="high"
-          />
+          targetUrl ? (
+            <a
+              href={targetUrl}
+              className="imageLink"
+              aria-label="Buka tautan dari gambar"
+              rel="noopener noreferrer"
+            >
+              <img
+                src={imageUrl}
+                alt="Preview"
+                className="responsiveImage"
+                referrerPolicy="no-referrer"
+                loading="eager"
+                decoding="async"
+                fetchPriority="high"
+              />
+            </a>
+          ) : (
+            <img
+              src={imageUrl}
+              alt="Preview"
+              className="responsiveImage"
+              referrerPolicy="no-referrer"
+              loading="eager"
+              decoding="async"
+              fetchPriority="high"
+            />
+          )
         ) : (
           <div className="state">URL gambar tidak valid atau belum diberikan.</div>
         )}
@@ -161,6 +198,17 @@ export default function ResponsiveImageViewer({ imageUrl }) {
           padding: 0;
           background: #0b0b0b;
           overflow: auto;
+        }
+
+        .imageLink {
+          display: block;
+          max-width: 100vw;
+          max-height: 100vh;
+          max-height: 100dvh;
+          line-height: 0;
+          text-decoration: none;
+          cursor: pointer;
+          touch-action: manipulation;
         }
 
         .responsiveImage {
@@ -195,6 +243,12 @@ export async function getServerSideProps(context) {
 
   const imageUrl = getSafeImageUrl(rawSource)
 
+  const rawTarget = Array.isArray(context.query.target)
+    ? context.query.target[0]
+    : context.query.target
+
+  const targetUrl = getSafeTargetUrl(rawTarget)
+
   context.res.setHeader(
     'Cache-Control',
     'public, s-maxage=300, stale-while-revalidate=3600'
@@ -202,7 +256,8 @@ export async function getServerSideProps(context) {
 
   return {
     props: {
-      imageUrl
+      imageUrl,
+      targetUrl
     }
   }
 }
