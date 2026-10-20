@@ -307,6 +307,7 @@ export default async function handler(req, res) {
 
     const validItems = []
     const skipped = []
+    const seenPhones = new Set()
 
     for (const contact of contacts) {
       const phone = cleanPhone(contact.phone)
@@ -343,6 +344,17 @@ export default async function handler(req, res) {
         })
         continue
       }
+
+      if (seenPhones.has(phone)) {
+        skipped.push({
+          name: contact.name,
+          phone,
+          reason: 'Nomor duplikat di database yang sama; hanya satu pesan dibuat untuk nomor ini.'
+        })
+        continue
+      }
+
+      seenPhones.add(phone)
 
       validItems.push({
         phone,

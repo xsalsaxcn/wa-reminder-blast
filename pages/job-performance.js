@@ -370,18 +370,16 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   const jobName = cleanText(item?.jobName).toLowerCase()
   const isTemplateJob = sendMode === 'template' || jobName.startsWith('template blast')
   const remaining = Math.max(0, toNumber(item?.target) - toNumber(item?.sent) - toNumber(item?.failed))
-  const retryableFailed = Math.max(0, toNumber(item?.failed))
-  const canManualRun = Boolean(item?.id) && isTemplateJob && (remaining > 0 || retryableFailed > 0)
+  const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
 
   async function manualRun() {
     if (!canManualRun || manualRunning) return
 
     const ok = window.confirm(
-      `Manual Run akan memproses kontak pending dan retry kontak yang status finalnya gagal.\n\n` +
+      `Manual Run hanya akan melanjutkan kontak yang masih pending.\n\n` +
       `Job: ${item.jobName}\n` +
-      `Pending perkiraan: ${remaining}\n` +
-      `Failed: ${retryableFailed}\n\n` +
-      `Kontak yang sudah Accepted/Delivered/Read tidak dikirim ulang. Lanjutkan?`
+      `Pending perkiraan: ${remaining}\n\n` +
+      `Accepted/Delivered/Read/Failed/Processing tidak dikirim ulang. Lanjutkan?`
     )
 
     if (!ok) return
@@ -408,7 +406,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
             limit: 50,
             force: 1,
             manual_run: 1,
-            retry_failed: 1
+            retry_failed: 0
           })
         })
 
@@ -493,9 +491,9 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 onClick={manualRun}
                 disabled={manualRunning}
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title="Fallback: proses pending dan retry yang finalnya failed"
+                title="Lanjutkan sisa pending saja; tidak retry accepted/failed"
               >
-                {manualRunning ? 'Running...' : 'Manual Run / Retry'}
+                {manualRunning ? 'Running...' : 'Manual Run'}
               </button>
             ) : null}
           </div>

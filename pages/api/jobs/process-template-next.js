@@ -325,6 +325,80 @@ async function getFinalFailedItemIds(jobId) {
   return failedIds
 }
 
+async function claimItemForSend(item, retryFailed) {
+  const itemId = cleanText(item?.id)
+  const currentStatusRaw = cleanText(item?.status)
+  const currentStatus = currentStatusRaw.toLowerCase()
+
+  if (!itemId || !currentStatusRaw) {
+    return { claimed: false, error: 'Item/status tidak valid.' }
+  }
+
+  const normalClaim = currentStatus === 'pending' || currentStatus === 'queued'
+  const retryClaim = retryFailed && currentStatus === 'failed'
+
+  if (!normalClaim && !retryClaim) {
+    return { claimed: false, error: null }
+  }
+
+  const result = await supabaseAdmin
+    .from('send_job_items')
+    .update({
+      status: 'processing',
+      error_message: null,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', itemId)
+    .eq('status', currentStatusRaw)
+    .select('id')
+
+  if (result.error) {
+    return { claimed: false, error: result.error.message }
+  }
+
+  return {
+    claimed: Array.isArray(result.data) && result.data.length === 1,
+    error: null
+  }
+}
+
+function isProtectedFromDuplicateSend(status) {
+  const value = cleanText(status).toLowerCase()
+
+  return [
+    'processing',
+    'sent',
+    'accepted',
+    'delivered',
+    'read',
+    'success',
+    'completed',
+    'done'
+  ].includes(value)
+}
+
+async function cancelDuplicateItemSafe(item, reason) {
+  const itemId = cleanText(item?.id)
+  const currentStatusRaw = cleanText(item?.status)
+  const currentStatus = currentStatusRaw.toLowerCase()
+
+  if (!itemId || !['pending', 'queued'].includes(currentStatus)) return false
+
+  const result = await supabaseAdmin
+    .from('send_job_items')
+    .update({
+      status: 'cancelled',
+      error_message: reason,
+      processed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', itemId)
+    .eq('status', currentStatusRaw)
+    .select('id')
+
+  return !result.error && Array.isArray(result.data) && result.data.length === 1
+}
+
 async function updateItemSafe(itemId, payload) {
   const fullPayload = {
     ...payload,
@@ -413,8 +487,19 @@ export default async function handler(req, res) {
     }
 
     const manualRun = isManualRun(req)
-    const retryFailed = manualRun && isRetryFailed(req)
-    const retryItemIds = retryFailed ? getRetryItemIds(req) : new Set()
+    const retryFailedRequested = manualRun && isRetryFailed(req)
+    const retryItemIds = retryFailedRequested ? getRetryItemIds(req) : new Set()
+
+    // Safety: failed tidak boleh di-retry massal lewat Manual Run.
+    // Retry hanya boleh jika caller mengirim item ID spesifik.
+    if (retryFailedRequested && retryItemIds.size === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Retry Failed wajib memilih item spesifik. Manual Run biasa hanya memproses pending agar tidak mengirim ulang kontak lama.'
+      })
+    }
+
+    const retryFailed = retryFailedRequested && retryItemIds.size > 0
 
     // HARD KILL-SWITCH: seluruh pemrosesan Template Blast background/non-manual
     // dibuat NO-OP. Ini menghentikan cron lama, HF runner lama/baru, dan tab
@@ -507,19 +592,55 @@ export default async function handler(req, res) {
       ? await getFinalFailedItemIds(jobId)
       : new Set()
 
+    // Protect a phone that is already in-flight or already accepted/delivered/read.
+    // Among pending rows in the same job, only the oldest row for a phone may run.
+    const protectedPhones = new Set(
+      loadedItems
+        .filter((item) => isProtectedFromDuplicateSend(item.status))
+        .map((item) => cleanPhone(item.phone))
+        .filter(Boolean)
+    )
+
+    const selectedPhones = new Set(protectedPhones)
+    const duplicatePendingItems = []
+
     const allItems = loadedItems.filter((item) => {
       const status = cleanText(item.status).toLowerCase()
       const itemId = cleanText(item.id)
-      const retrySelectionAllows =
-        retryItemIds.size === 0 || retryItemIds.has(itemId)
+      const phone = cleanPhone(item.phone)
+      const retrySelectionAllows = retryItemIds.has(itemId)
 
-      if (status === 'pending' || status === 'queued') return true
+      if (status === 'pending' || status === 'queued') {
+        if (!phone || selectedPhones.has(phone)) {
+          duplicatePendingItems.push(item)
+          return false
+        }
+
+        selectedPhones.add(phone)
+        return true
+      }
 
       if (retryFailed && retrySelectionAllows && status === 'failed') return true
       if (retryFailed && retrySelectionAllows && finalFailedIds.has(itemId)) return true
 
       return false
     })
+
+    let duplicateSkipped = 0
+
+    for (const duplicateItem of duplicatePendingItems) {
+      const duplicatePhone = cleanPhone(duplicateItem.phone)
+      const skipped = await cancelDuplicateItemSafe(
+        duplicateItem,
+        `Duplicate phone ${duplicatePhone || '-'} dalam job yang sama; tidak dikirim untuk mencegah pesan ganda.`
+      )
+
+      if (skipped) duplicateSkipped += 1
+    }
+
+    if (duplicateSkipped > 0) {
+      await updateJobSafe(jobId)
+    }
 
     const futureItems = allItems.filter((item) => isFuture(item, effectiveForce))
     const dueItems = allItems.filter((item) => isDue(item, effectiveForce)).slice(0, safeLimit)
@@ -539,6 +660,7 @@ export default async function handler(req, res) {
         stale_seconds: staleSeconds,
         checked: allItems.length,
         future_items: futureItems.length,
+        duplicate_skipped: duplicateSkipped,
         processed: 0,
         sent: 0,
         failed: 0
@@ -547,6 +669,8 @@ export default async function handler(req, res) {
 
     let sent = 0
     let failed = 0
+    let claimed = 0
+    let claimSkipped = 0
     const results = []
     const affectedJobIds = new Set()
 
@@ -559,10 +683,25 @@ export default async function handler(req, res) {
 
       affectedJobIds.add(itemJobId)
 
-      await updateItemSafe(itemId, {
-        status: 'processing',
-        error_message: null
-      })
+      // Atomic compare-and-set claim. If two Manual Run requests overlap,
+      // only one request can move this exact item to processing.
+      const claimResult = await claimItemForSend(item, retryFailed)
+
+      if (!claimResult.claimed) {
+        claimSkipped += 1
+
+        results.push({
+          id: itemId,
+          phone,
+          success: false,
+          skipped: true,
+          reason: claimResult.error || 'Item sudah diproses/di-claim request lain.'
+        })
+
+        continue
+      }
+
+      claimed += 1
 
       try {
         const sendResult = await sendWhatsAppTemplate({
@@ -649,9 +788,11 @@ export default async function handler(req, res) {
       stale_seconds: staleSeconds,
       checked: allItems.length,
       future_items: futureItems.length,
-      processed: dueItems.length,
+      processed: claimed,
       sent,
       failed,
+      duplicate_skipped: duplicateSkipped,
+      claim_skipped: claimSkipped,
       retry_failed: retryFailed,
       results
     })
