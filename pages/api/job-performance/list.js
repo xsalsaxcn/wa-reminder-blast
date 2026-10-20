@@ -568,6 +568,8 @@ function buildPerformanceForJob({
   let delivered = 0
   let read = 0
   let failed = 0
+  let pendingItems = 0
+  let processingItems = 0
   let replies = 0
   let needResponse = 0
   let interestedOnly = 0
@@ -580,6 +582,16 @@ function buildPerformanceForJob({
   const responseSeconds = []
 
   for (const item of safeItems) {
+    const rawItemStatus = cleanText(item?.status).toLowerCase()
+
+    if (rawItemStatus === 'pending' || rawItemStatus === 'queued') {
+      pendingItems += 1
+    }
+
+    if (rawItemStatus === 'processing') {
+      processingItems += 1
+    }
+
     const phone = getItemPhone(item)
     if (!phone) continue
 
@@ -710,6 +722,11 @@ function buildPerformanceForJob({
 
     failed,
     failed_count: failed,
+
+    pending: pendingItems,
+    pending_count: pendingItems,
+    processing_items: processingItems,
+    processing_count: processingItems,
 
     replies,
     reply_count: replies,

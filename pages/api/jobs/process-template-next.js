@@ -522,9 +522,12 @@ export default async function handler(req, res) {
     if (!authUser) return
 
     const force = true
-    const limitRaw = req.query.limit || req.body?.limit || 50
+    // Keep each Vercel request deliberately small. Manual Run loops these
+    // mini-batches from the browser, so a slow Meta call cannot strand a 50-row
+    // request and make the whole one-click run appear stuck.
+    const limitRaw = req.query.limit || req.body?.limit || 5
     const limit = Number(limitRaw)
-    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 50) : 50
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 5) : 5
     let jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
     const resumeStalled = false
     let resumedJob = null

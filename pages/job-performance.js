@@ -51,6 +51,8 @@ function normalizeRow(row) {
   const delivered = toNumber(getFirst(row, ['delivered', 'delivered_count'], 0))
   const read = toNumber(getFirst(row, ['read', 'read_count'], 0))
   const failed = toNumber(getFirst(row, ['failed', 'failed_items', 'failed_count'], 0))
+  const pendingCount = toNumber(getFirst(row, ['pending_count', 'pending'], 0))
+  const processingCount = toNumber(getFirst(row, ['processing_count', 'processing_items'], 0))
   const replies = toNumber(getFirst(row, ['replies', 'reply_count', 'total_replies'], 0))
 
   const interested = toNumber(
@@ -118,6 +120,8 @@ function normalizeRow(row) {
     delivered,
     read,
     failed,
+    pendingCount,
+    processingCount,
     replies,
     noResponse,
     needResponse,
@@ -369,7 +373,8 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   const sendMode = cleanText(item?.sendMode || item?.raw?.send_mode || item?.raw?.mode).toLowerCase()
   const jobName = cleanText(item?.jobName).toLowerCase()
   const isTemplateJob = sendMode === 'template' || jobName.startsWith('template blast')
-  const remaining = Math.max(0, toNumber(item?.target) - toNumber(item?.sent) - toNumber(item?.failed))
+  const remaining = Math.max(0, toNumber(item?.pendingCount))
+  const processingCount = Math.max(0, toNumber(item?.processingCount))
   const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
 
   async function manualRun() {
@@ -378,7 +383,8 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
     const ok = window.confirm(
       `Manual Run hanya akan melanjutkan kontak yang masih pending.\n\n` +
       `Job: ${item.jobName}\n` +
-      `Pending perkiraan: ${remaining}\n\n` +
+      `Pending: ${remaining}\n` +
+      `Processing terkunci: ${processingCount}\n\n` +
       `Accepted/Delivered/Read/Failed/Processing tidak dikirim ulang. Lanjutkan?`
     )
 
@@ -392,31 +398,74 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
     let totalFailed = 0
 
     try {
-      // Satu klik untuk user, tetapi request dibagi internal per 50 agar tidak
-      // membuat satu serverless request terlalu panjang/timeout.
-      for (let guard = 0; guard < 1000; guard += 1) {
-        const response = await fetch('/api/jobs/process-template-next', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify({
-            job_id: item.id,
-            limit: 50,
-            force: 1,
-            manual_run: 1,
-            retry_failed: 0
+      // One click, many SMALL requests. Five sends/request gives Vercel plenty
+      // of timeout headroom. Atomic claim in the API prevents duplicate sends even
+      // if a transient 502/503/504 happens after part of a request was processed.
+      let consecutiveTransportErrors = 0
+
+      for (let guard = 0; guard < 5000; guard += 1) {
+        let response
+
+        try {
+          response = await fetch('/api/jobs/process-template-next', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json'
+            },
+            body: JSON.stringify({
+              job_id: item.id,
+              limit: 5,
+              force: 1,
+              manual_run: 1,
+              retry_failed: 0
+            })
           })
-        })
+        } catch (transportError) {
+          consecutiveTransportErrors += 1
+
+          if (consecutiveTransportErrors >= 8) {
+            throw new Error(
+              `Koneksi worker terputus berulang (${consecutiveTransportErrors}x). ${transportError.message || ''}`
+            )
+          }
+
+          setManualMessage(
+            `Koneksi worker sempat putus. Melanjutkan sisa pending... (${consecutiveTransportErrors}/8)`
+          )
+
+          await new Promise((resolve) => window.setTimeout(resolve, 1500))
+          continue
+        }
 
         const data = await response.json().catch(function () {
           return {}
         })
 
+        const transientStatus = [408, 425, 429, 502, 503, 504].includes(response.status)
+
         if (!response.ok || data.success === false) {
+          if (transientStatus) {
+            consecutiveTransportErrors += 1
+
+            if (consecutiveTransportErrors >= 8) {
+              throw new Error(
+                data.message || `Worker gagal sementara HTTP ${response.status} berulang.`
+              )
+            }
+
+            setManualMessage(
+              `Worker sempat timeout HTTP ${response.status}. Melanjutkan sisa pending... (${consecutiveTransportErrors}/8)`
+            )
+
+            await new Promise((resolve) => window.setTimeout(resolve, 1500))
+            continue
+          }
+
           throw new Error(data.message || 'Manual Run gagal.')
         }
+
+        consecutiveTransportErrors = 0
 
         const processed = toNumber(data.processed)
         const sent = toNumber(data.sent)
@@ -429,8 +478,10 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
         if (processed <= 0) break
 
         setManualMessage(
-          `Manual Run berjalan... ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal.`
+          `Manual Run berjalan... ${totalProcessed} pending diproses, ${totalSent} accepted, ${totalFailed} gagal.`
         )
+
+        await new Promise((resolve) => window.setTimeout(resolve, 250))
       }
 
       setManualMessage(
@@ -501,6 +552,13 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
           {manualMessage ? (
             <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
               {manualMessage}
+            </p>
+          ) : null}
+
+          {isTemplateJob ? (
+            <p className="mt-2 text-xs font-semibold text-slate-500">
+              Pending: {remaining} · Processing terkunci: {processingCount}
+              {processingCount > 0 ? ' · Processing tidak dikirim ulang otomatis untuk mencegah duplicate.' : ''}
             </p>
           ) : null}
 
