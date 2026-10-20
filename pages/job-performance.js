@@ -402,36 +402,46 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
       // of timeout headroom. Atomic claim in the API prevents duplicate sends even
       // if a transient 502/503/504 happens after part of a request was processed.
       let consecutiveTransportErrors = 0
+      let noProgressRetries = 0
+      let latestPendingRemaining = remaining
 
       for (let guard = 0; guard < 5000; guard += 1) {
         let response
 
         try {
-          response = await fetch('/api/jobs/process-template-next', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json'
-            },
-            body: JSON.stringify({
-              job_id: item.id,
-              limit: 5,
-              force: 1,
-              manual_run: 1,
-              retry_failed: 0
+          const controller = new AbortController()
+          const requestTimeout = window.setTimeout(() => controller.abort(), 45000)
+
+          try {
+            response = await fetch('/api/jobs/process-template-next', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+              },
+              body: JSON.stringify({
+                job_id: item.id,
+                limit: 5,
+                force: 1,
+                manual_run: 1,
+                retry_failed: 0
+              }),
+              signal: controller.signal
             })
-          })
+          } finally {
+            window.clearTimeout(requestTimeout)
+          }
         } catch (transportError) {
           consecutiveTransportErrors += 1
 
-          if (consecutiveTransportErrors >= 8) {
+          if (consecutiveTransportErrors >= 10) {
             throw new Error(
               `Koneksi worker terputus berulang (${consecutiveTransportErrors}x). ${transportError.message || ''}`
             )
           }
 
           setManualMessage(
-            `Koneksi worker sempat putus. Melanjutkan sisa pending... (${consecutiveTransportErrors}/8)`
+            `Koneksi worker sempat putus. Pending terakhir ${latestPendingRemaining}. Melanjutkan... (${consecutiveTransportErrors}/10)`
           )
 
           await new Promise((resolve) => window.setTimeout(resolve, 1500))
@@ -448,14 +458,14 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
           if (transientStatus) {
             consecutiveTransportErrors += 1
 
-            if (consecutiveTransportErrors >= 8) {
+            if (consecutiveTransportErrors >= 10) {
               throw new Error(
                 data.message || `Worker gagal sementara HTTP ${response.status} berulang.`
               )
             }
 
             setManualMessage(
-              `Worker sempat timeout HTTP ${response.status}. Melanjutkan sisa pending... (${consecutiveTransportErrors}/8)`
+              `Worker sempat timeout HTTP ${response.status}. Pending terakhir ${latestPendingRemaining}. Melanjutkan... (${consecutiveTransportErrors}/10)`
             )
 
             await new Promise((resolve) => window.setTimeout(resolve, 1500))
@@ -470,22 +480,68 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
         const processed = toNumber(data.processed)
         const sent = toNumber(data.sent)
         const failed = toNumber(data.failed)
+        const hasPendingSnapshot =
+          data.pending_remaining !== undefined &&
+          data.pending_remaining !== null &&
+          Number.isFinite(Number(data.pending_remaining))
+        const pendingRemaining = hasPendingSnapshot
+          ? Math.max(0, Number(data.pending_remaining))
+          : null
+        const processingRemaining =
+          data.processing_remaining !== undefined &&
+          data.processing_remaining !== null &&
+          Number.isFinite(Number(data.processing_remaining))
+            ? Math.max(0, Number(data.processing_remaining))
+            : null
+
+        if (pendingRemaining !== null) {
+          latestPendingRemaining = pendingRemaining
+        }
 
         totalProcessed += processed
         totalSent += sent
         totalFailed += failed
 
-        if (processed <= 0) break
+        if (processed <= 0) {
+          if (pendingRemaining !== null && pendingRemaining > 0) {
+            noProgressRetries += 1
+
+            if (noProgressRetries >= 12) {
+              throw new Error(
+                `Queue masih punya ${pendingRemaining} pending tetapi worker 12x tidak mengambil item. Stop aman tanpa resend.`
+              )
+            }
+
+            setManualMessage(
+              `Pending masih ${pendingRemaining}. Worker belum mengambil batch; mencoba lagi... (${noProgressRetries}/12)`
+            )
+
+            await new Promise((resolve) => window.setTimeout(resolve, 1200))
+            continue
+          }
+
+          if (pendingRemaining === 0 && processingRemaining > 0) {
+            setManualMessage(
+              `Pending sudah 0, tetapi ${processingRemaining} item masih processing. Tidak di-resend otomatis untuk mencegah duplicate.`
+            )
+          }
+
+          break
+        }
+
+        noProgressRetries = 0
 
         setManualMessage(
-          `Manual Run berjalan... ${totalProcessed} pending diproses, ${totalSent} accepted, ${totalFailed} gagal.`
+          `Manual Run berjalan... ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal. Pending tersisa: ${pendingRemaining === null ? '?' : pendingRemaining}.`
         )
 
-        await new Promise((resolve) => window.setTimeout(resolve, 250))
+        if (pendingRemaining === 0) break
+
+        await new Promise((resolve) => window.setTimeout(resolve, 150))
       }
 
       setManualMessage(
-        `Manual Run selesai: ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal.`
+        `Manual Run selesai: ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal. Pending tersisa: ${latestPendingRemaining}.`
       )
 
       if (onManualRunDone) {

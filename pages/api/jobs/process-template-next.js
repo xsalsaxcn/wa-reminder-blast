@@ -473,6 +473,53 @@ async function updateJobSafe(jobId) {
     .eq('id', jobId)
 }
 
+async function getJobQueueSnapshot(jobId) {
+  const result = await supabaseAdmin
+    .from('send_job_items')
+    .select('id, status')
+    .eq('job_id', jobId)
+    .limit(10000)
+
+  if (result.error) {
+    return {
+      total_items: null,
+      pending_remaining: null,
+      processing_remaining: null,
+      sent_like: null,
+      failed_items: null,
+      cancelled_items: null,
+      error: result.error.message || 'Gagal membaca queue snapshot.'
+    }
+  }
+
+  const rows = Array.isArray(result.data) ? result.data : []
+  let pendingRemaining = 0
+  let processingRemaining = 0
+  let sentLike = 0
+  let failedItems = 0
+  let cancelledItems = 0
+
+  for (const row of rows) {
+    const status = cleanText(row?.status).toLowerCase()
+
+    if (status === 'pending' || status === 'queued') pendingRemaining += 1
+    else if (status === 'processing') processingRemaining += 1
+    else if (isSentStatus(status)) sentLike += 1
+    else if (isFailedStatus(status)) failedItems += 1
+    else if (status === 'cancelled') cancelledItems += 1
+  }
+
+  return {
+    total_items: rows.length,
+    pending_remaining: pendingRemaining,
+    processing_remaining: processingRemaining,
+    sent_like: sentLike,
+    failed_items: failedItems,
+    cancelled_items: cancelledItems,
+    error: null
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -653,6 +700,8 @@ export default async function handler(req, res) {
         await updateJobSafe(resumedJob.id)
       }
 
+      const queueSnapshot = await getJobQueueSnapshot(jobId)
+
       return res.status(200).json({
         success: true,
         message: futureItems.length
@@ -666,7 +715,14 @@ export default async function handler(req, res) {
         duplicate_skipped: duplicateSkipped,
         processed: 0,
         sent: 0,
-        failed: 0
+        failed: 0,
+        total_items: queueSnapshot.total_items,
+        pending_remaining: queueSnapshot.pending_remaining,
+        processing_remaining: queueSnapshot.processing_remaining,
+        sent_like: queueSnapshot.sent_like,
+        failed_items: queueSnapshot.failed_items,
+        cancelled_items: queueSnapshot.cancelled_items,
+        queue_snapshot_error: queueSnapshot.error
       })
     }
 
@@ -783,6 +839,8 @@ export default async function handler(req, res) {
       await updateJobSafe(affectedJobId)
     }
 
+    const queueSnapshot = await getJobQueueSnapshot(jobId)
+
     return res.status(200).json({
       success: true,
       message: 'Process template batch selesai.',
@@ -797,6 +855,13 @@ export default async function handler(req, res) {
       duplicate_skipped: duplicateSkipped,
       claim_skipped: claimSkipped,
       retry_failed: retryFailed,
+      total_items: queueSnapshot.total_items,
+      pending_remaining: queueSnapshot.pending_remaining,
+      processing_remaining: queueSnapshot.processing_remaining,
+      sent_like: queueSnapshot.sent_like,
+      failed_items: queueSnapshot.failed_items,
+      cancelled_items: queueSnapshot.cancelled_items,
+      queue_snapshot_error: queueSnapshot.error,
       results
     })
   } catch (error) {
