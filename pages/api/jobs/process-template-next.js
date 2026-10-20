@@ -341,7 +341,10 @@ async function claimItemForSend(item, retryFailed) {
     return { claimed: false, error: null }
   }
 
-  const result = await supabaseAdmin
+  // Atomic compare-and-set tetap dipertahankan. Production schema lama tidak
+  // selalu punya updated_at pada send_job_items, jadi claim pertama mencoba
+  // payload lengkap lalu fallback ke payload minimal TANPA melepas guard status.
+  let result = await supabaseAdmin
     .from('send_job_items')
     .update({
       status: 'processing',
@@ -351,6 +354,18 @@ async function claimItemForSend(item, retryFailed) {
     .eq('id', itemId)
     .eq('status', currentStatusRaw)
     .select('id')
+
+  if (result.error) {
+    result = await supabaseAdmin
+      .from('send_job_items')
+      .update({
+        status: 'processing',
+        error_message: null
+      })
+      .eq('id', itemId)
+      .eq('status', currentStatusRaw)
+      .select('id')
+  }
 
   if (result.error) {
     return { claimed: false, error: result.error.message }
