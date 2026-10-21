@@ -491,6 +491,12 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
         const processed = toNumber(data.processed)
         const sent = toNumber(data.sent)
         const failed = toNumber(data.failed)
+        const claimReason = cleanText(
+          data.claim_skip_reason ||
+          (Array.isArray(data.results)
+            ? data.results.find((row) => row?.skipped)?.reason
+            : '')
+        )
         const hasPendingSnapshot =
           data.pending_remaining !== undefined &&
           data.pending_remaining !== null &&
@@ -519,12 +525,16 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
 
             if (noProgressRetries >= 12) {
               throw new Error(
-                `Queue masih punya ${pendingRemaining} pending tetapi worker 12x tidak mengambil item. Stop aman tanpa resend.`
+                claimReason
+                  ? `Queue masih punya ${pendingRemaining} pending. Claim gagal: ${claimReason}`
+                  : `Queue masih punya ${pendingRemaining} pending tetapi worker 12x tidak mengambil item. Stop aman tanpa resend.`
               )
             }
 
             setManualMessage(
-              `Pending masih ${pendingRemaining}. Worker belum mengambil batch; mencoba lagi... (${noProgressRetries}/12)`
+              claimReason
+                ? `Pending ${pendingRemaining}. Claim DB gagal: ${claimReason}`
+                : `Pending masih ${pendingRemaining}. Worker belum mengambil batch; mencoba lagi... (${noProgressRetries}/12)`
             )
 
             await new Promise((resolve) => window.setTimeout(resolve, 1200))
