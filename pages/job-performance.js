@@ -244,6 +244,151 @@ function MiniStat({ label, value, className, onClick }) {
   )
 }
 
+
+function explainFailedDeliveryReason(rawReason) {
+  const raw = String(rawReason || '').trim()
+  const value = raw.toLowerCase()
+
+  if (!raw) {
+    return {
+      diagnosis: 'Alasan gagal belum tersedia',
+      explanation:
+        'Meta belum memberikan detail error yang cukup untuk menentukan penyebab pastinya.',
+      action:
+        'Jangan retry otomatis. Cek kembali status callback dan validitas nomor sebelum mencoba ulang.',
+      raw: '-'
+    }
+  }
+
+  if (value.includes('healthy ecosystem engagement')) {
+    return {
+      diagnosis: 'Dibatasi Meta karena engagement / quality',
+      explanation:
+        'Nomor belum tentu salah. Meta memilih tidak meneruskan pesan untuk menjaga kualitas engagement ekosistem WhatsApp.',
+      action:
+        'Jangan retry otomatis. Pastikan customer memang opt-in, isi pesan relevan, dan kategori template sesuai.',
+      raw
+    }
+  }
+
+  if (
+    value.includes('not a valid whatsapp') ||
+    value.includes('invalid whatsapp') ||
+    value.includes('recipient is not valid') ||
+    value.includes('invalid recipient') ||
+    value.includes('not registered on whatsapp') ||
+    value.includes('not registered with whatsapp') ||
+    value.includes('phone number is invalid')
+  ) {
+    return {
+      diagnosis: 'Nomor tidak valid / tidak terdaftar WhatsApp',
+      explanation:
+        'Error Meta secara eksplisit menunjukkan nomor penerima tidak valid atau tidak terdaftar sebagai akun WhatsApp.',
+      action:
+        'Cek kode negara, jumlah digit, salah ketik, dan pastikan nomor masih aktif di WhatsApp sebelum retry.',
+      raw
+    }
+  }
+
+  if (value.includes('message undeliverable')) {
+    return {
+      diagnosis: 'Pesan tidak dapat dikirim ke nomor ini',
+      explanation:
+        'Meta tidak memberi penyebab tunggal. Bisa terkait kondisi nomor, akun WhatsApp, perangkat penerima, atau kondisi delivery lain. Ini belum cukup untuk menyimpulkan nomor pasti tidak valid.',
+      action:
+        'Validasi nomor dan status WhatsApp customer. Jangan retry berulang tanpa verifikasi karena bisa tetap gagal atau menjadi spam.',
+      raw
+    }
+  }
+
+  if (
+    value.includes('payment') ||
+    value.includes('business eligibility') ||
+    value.includes('billing')
+  ) {
+    return {
+      diagnosis: 'Masalah billing / eligibility akun WhatsApp Business',
+      explanation:
+        'Pengiriman ditolak karena konfigurasi pembayaran atau kelayakan akun bisnis, bukan karena nomor customer.',
+      action:
+        'Cek WhatsApp Manager / Meta Business untuk payment method, billing, dan status eligibility akun.',
+      raw
+    }
+  }
+
+  if (
+    value.includes('template') &&
+    (
+      value.includes('paused') ||
+      value.includes('disabled') ||
+      value.includes('not found') ||
+      value.includes('does not exist')
+    )
+  ) {
+    return {
+      diagnosis: 'Template WhatsApp bermasalah',
+      explanation:
+        'Meta menolak karena template tidak tersedia, dinonaktifkan, dijeda, atau tidak cocok dengan template yang dipanggil.',
+      action:
+        'Cek status APPROVED template di Meta, nama template, bahasa, dan sinkronisasi template di Notiva.',
+      raw
+    }
+  }
+
+  if (
+    value.includes('parameter') ||
+    value.includes('number of parameters') ||
+    value.includes('parameter format')
+  ) {
+    return {
+      diagnosis: 'Parameter template tidak sesuai',
+      explanation:
+        'Jumlah atau format variable yang dikirim Notiva tidak sesuai struktur template yang disetujui Meta.',
+      action:
+        'Cocokkan variable body/header/button dengan template Meta sebelum mengirim ulang.',
+      raw
+    }
+  }
+
+  if (
+    value.includes('rate limit') ||
+    value.includes('too many') ||
+    value.includes('throttl')
+  ) {
+    return {
+      diagnosis: 'Terkena rate limit / pembatasan sementara Meta',
+      explanation:
+        'Meta sementara membatasi volume request. Nomor penerima belum tentu bermasalah.',
+      action:
+        'Tunggu dan retry terkontrol setelah jeda. Jangan kirim ulang massal sekaligus.',
+      raw
+    }
+  }
+
+  if (
+    value.includes('re-engagement') ||
+    value.includes('reengagement')
+  ) {
+    return {
+      diagnosis: 'Dibatasi aturan re-engagement WhatsApp',
+      explanation:
+        'Meta tidak mengizinkan pesan tersebut pada kondisi engagement/customer session saat ini.',
+      action:
+        'Gunakan template yang sesuai kebijakan dan pastikan consent/opt-in customer tersedia.',
+      raw
+    }
+  }
+
+  return {
+    diagnosis: 'Gagal dikirim oleh Meta',
+    explanation:
+      'Meta memberikan error, tetapi error tersebut belum dapat dipetakan ke kategori yang lebih spesifik oleh Notiva.',
+    action:
+      'Gunakan pesan raw Meta di bawah sebagai acuan. Jangan retry otomatis jika penyebab belum jelas.',
+    raw
+  }
+}
+
 function DetailPanel({ detail, loading, error, onClose }) {
   if (!detail) return null
 
@@ -324,10 +469,52 @@ function DetailPanel({ detail, loading, error, onClose }) {
                       </td>
 
                       {detail.bucket === 'failed' ? (
-                        <td className="min-w-[320px] px-3 py-4">
-                          <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold leading-relaxed text-red-700">
-                            {row.errorMessage || row.error_message || 'Alasan gagal belum tersedia dari Meta.'}
-                          </div>
+                        <td className="min-w-[360px] px-3 py-4">
+                          {(() => {
+                            const failure = explainFailedDeliveryReason(
+                              row.errorMessage || row.error_message || ''
+                            )
+
+                            return (
+                              <div className="space-y-2 rounded-xl border border-red-100 bg-red-50 px-3 py-3 text-xs leading-relaxed">
+                                <div>
+                                  <div className="font-black uppercase tracking-wide text-red-500">
+                                    Diagnosis
+                                  </div>
+                                  <div className="mt-0.5 font-black text-red-800">
+                                    {failure.diagnosis}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="font-black uppercase tracking-wide text-slate-400">
+                                    Penjelasan
+                                  </div>
+                                  <div className="mt-0.5 font-semibold text-slate-700">
+                                    {failure.explanation}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="font-black uppercase tracking-wide text-slate-400">
+                                    Tindakan
+                                  </div>
+                                  <div className="mt-0.5 font-semibold text-slate-700">
+                                    {failure.action}
+                                  </div>
+                                </div>
+
+                                <details className="rounded-lg border border-red-100 bg-white px-2 py-1.5">
+                                  <summary className="cursor-pointer font-black text-red-600">
+                                    Meta raw
+                                  </summary>
+                                  <div className="mt-1 break-words font-mono text-[11px] text-slate-600">
+                                    {failure.raw}
+                                  </div>
+                                </details>
+                              </div>
+                            )
+                          })()}
                         </td>
                       ) : null}
 
