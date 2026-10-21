@@ -381,202 +381,37 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
     if (!canManualRun || manualRunning) return
 
     setManualRunning(true)
-    setManualMessage(
-      `Manual Run dimulai. Hanya ${remaining} pending yang akan diproses; status lain tidak dikirim ulang.`
-    )
-
-    // Paksa render Running/message sebelum request pertama.
-    await new Promise((resolve) => window.setTimeout(resolve, 0))
-
-    let totalProcessed = 0
-    let totalSent = 0
-    let totalFailed = 0
+    setManualMessage(`Menyiapkan background runner untuk ${remaining} pending...`)
 
     try {
-      // One click, many SMALL requests. Five sends/request gives Vercel plenty
-      // of timeout headroom. Atomic claim in the API prevents duplicate sends even
-      // if a transient 502/503/504 happens after part of a request was processed.
-      let consecutiveTransportErrors = 0
-      let noProgressRetries = 0
-      let latestPendingRemaining = remaining
-      let firstRequest = true
+      const response = await fetch('/api/jobs/start-template-background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({ job_id: item.id })
+      })
 
-      for (let guard = 0; guard < 5000; guard += 1) {
-        let response
-
-        try {
-          const controller = new AbortController()
-          const requestTimeout = window.setTimeout(() => controller.abort(), 45000)
-
-          try {
-            response = await fetch('/api/jobs/process-template-next', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json'
-              },
-              credentials: 'same-origin',
-              cache: 'no-store',
-              body: JSON.stringify({
-                job_id: item.id,
-                limit: firstRequest ? 1 : 5,
-                force: 1,
-                manual_run: 1,
-                retry_failed: 0
-              }),
-              signal: controller.signal
-            })
-          } finally {
-            window.clearTimeout(requestTimeout)
-          }
-        } catch (transportError) {
-          consecutiveTransportErrors += 1
-
-          if (consecutiveTransportErrors >= 10) {
-            throw new Error(
-              `Koneksi worker terputus berulang (${consecutiveTransportErrors}x). ${transportError.message || ''}`
-            )
-          }
-
-          setManualMessage(
-            `Koneksi worker sempat putus. Pending terakhir ${latestPendingRemaining}. Melanjutkan... (${consecutiveTransportErrors}/10)`
-          )
-
-          await new Promise((resolve) => window.setTimeout(resolve, 1500))
-          continue
-        }
-
-        const responseText = await response.text()
-        let data = {}
-
-        try {
-          data = responseText
-            ? JSON.parse(responseText)
-            : {}
-        } catch (error) {
-          data = {
-            success: false,
-            message:
-              responseText ||
-              `Worker memberi response non-JSON (HTTP ${response.status}).`
-          }
-        }
-
-        const transientStatus = [408, 425, 429, 502, 503, 504].includes(response.status)
-
-        if (!response.ok || data.success === false) {
-          if (transientStatus) {
-            consecutiveTransportErrors += 1
-
-            if (consecutiveTransportErrors >= 10) {
-              throw new Error(
-                data.message || `Worker gagal sementara HTTP ${response.status} berulang.`
-              )
-            }
-
-            setManualMessage(
-              `Worker sempat timeout HTTP ${response.status}. Pending terakhir ${latestPendingRemaining}. Melanjutkan... (${consecutiveTransportErrors}/10)`
-            )
-
-            await new Promise((resolve) => window.setTimeout(resolve, 1500))
-            continue
-          }
-
-          throw new Error(data.message || 'Manual Run gagal.')
-        }
-
-        consecutiveTransportErrors = 0
-        firstRequest = false
-
-        const processed = toNumber(data.processed)
-        const sent = toNumber(data.sent)
-        const failed = toNumber(data.failed)
-        const claimReason = cleanText(
-          data.claim_skip_reason ||
-          (Array.isArray(data.results)
-            ? data.results.find((row) => row?.skipped)?.reason
-            : '')
-        )
-        const hasPendingSnapshot =
-          data.pending_remaining !== undefined &&
-          data.pending_remaining !== null &&
-          Number.isFinite(Number(data.pending_remaining))
-        const pendingRemaining = hasPendingSnapshot
-          ? Math.max(0, Number(data.pending_remaining))
-          : null
-        const processingRemaining =
-          data.processing_remaining !== undefined &&
-          data.processing_remaining !== null &&
-          Number.isFinite(Number(data.processing_remaining))
-            ? Math.max(0, Number(data.processing_remaining))
-            : null
-
-        if (pendingRemaining !== null) {
-          latestPendingRemaining = pendingRemaining
-        }
-
-        totalProcessed += processed
-        totalSent += sent
-        totalFailed += failed
-
-        if (processed <= 0) {
-          if (pendingRemaining !== null && pendingRemaining > 0) {
-            noProgressRetries += 1
-
-            if (noProgressRetries >= 12) {
-              throw new Error(
-                claimReason
-                  ? `Queue masih punya ${pendingRemaining} pending. Claim gagal: ${claimReason}`
-                  : `Queue masih punya ${pendingRemaining} pending tetapi worker 12x tidak mengambil item. Stop aman tanpa resend.`
-              )
-            }
-
-            setManualMessage(
-              claimReason
-                ? `Pending ${pendingRemaining}. Claim DB gagal: ${claimReason}`
-                : `Pending masih ${pendingRemaining}. Worker belum mengambil batch; mencoba lagi... (${noProgressRetries}/12)`
-            )
-
-            await new Promise((resolve) => window.setTimeout(resolve, 1200))
-            continue
-          }
-
-          if (pendingRemaining === 0 && processingRemaining > 0) {
-            setManualMessage(
-              `Pending sudah 0, tetapi ${processingRemaining} item masih processing. Tidak di-resend otomatis untuk mencegah duplicate.`
-            )
-          }
-
-          break
-        }
-
-        noProgressRetries = 0
-
-        setManualMessage(
-          `Manual Run berjalan... ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal. Pending tersisa: ${pendingRemaining === null ? '?' : pendingRemaining}.`
-        )
-
-        if (pendingRemaining === 0) break
-
-        await new Promise((resolve) => window.setTimeout(resolve, 150))
+      const responseText = await response.text()
+      let data = {}
+      try {
+        data = responseText ? JSON.parse(responseText) : {}
+      } catch (error) {
+        data = { success: false, message: responseText || `Background runner response non-JSON (HTTP ${response.status}).` }
       }
 
-      setManualMessage(
-        `Manual Run selesai: ${totalProcessed} diproses, ${totalSent} accepted, ${totalFailed} gagal. Pending tersisa: ${latestPendingRemaining}.`
-      )
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || 'Gagal memulai background runner.')
+      }
+
+      setManualMessage(data.message || 'Background aktif. Notiva/tab browser boleh ditutup.')
 
       if (onManualRunDone) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900))
         await onManualRunDone()
       }
     } catch (err) {
-      setManualMessage(
-        `Manual Run berhenti setelah ${totalProcessed} diproses (${totalSent} accepted, ${totalFailed} gagal). ` +
-        `${err.message || 'Silakan jalankan lagi untuk sisa pending.'}`
-      )
-
-      if (onManualRunDone) {
-        await onManualRunDone().catch(function () {})
-      }
+      setManualMessage(`Background runner gagal dimulai: ${err.message || 'Unknown error'}`)
     } finally {
       setManualRunning(false)
     }
@@ -619,9 +454,9 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 onClick={manualRun}
                 disabled={manualRunning}
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title="Lanjutkan sisa pending saja; tidak retry accepted/failed"
+                title="Jalankan sisa pending di background; browser boleh ditutup"
               >
-                {manualRunning ? 'Running...' : 'Manual Run'}
+                {manualRunning ? 'Starting...' : 'Run Background'}
               </button>
             ) : null}
           </div>

@@ -2,6 +2,8 @@ import { supabaseAdmin } from '../../../lib/supabaseAdmin'
 import { requireRole } from '../../../lib/auth'
 import { saveDeliveryLog } from '../../../lib/sendDeliveryLog'
 import { sendWhatsAppTemplate } from '../../../lib/whatsappTemplateSender'
+import { waitUntil } from '@vercel/functions'
+import { createBackgroundRunToken, getRequestBaseUrl, verifyBackgroundRunToken } from '../../../lib/templateBackgroundAuth'
 
 function cleanText(value) {
   return String(value || '').trim()
@@ -38,6 +40,45 @@ function isManualRun(req) {
   ).toLowerCase()
 
   return ['1', 'true', 'yes'].includes(value)
+}
+
+function isBackgroundRun(req) {
+  const value = cleanText(
+    req.query.background_run ||
+    req.body?.background_run ||
+    req.query.backgroundRun ||
+    req.body?.backgroundRun
+  ).toLowerCase()
+  return ['1', 'true', 'yes'].includes(value)
+}
+
+function scheduleNextBackgroundBatch(req, jobId) {
+  const token = createBackgroundRunToken(jobId)
+  const baseUrl = getRequestBaseUrl(req)
+  const nextRequest = new Promise((resolve) => setTimeout(resolve, 250))
+    .then(() => fetch(`${baseUrl}/api/jobs/process-template-next`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'x-notiva-background-token': token
+      },
+      body: JSON.stringify({
+        job_id: jobId,
+        limit: 5,
+        force: 1,
+        background_run: 1,
+        retry_failed: 0
+      })
+    }))
+    .then(async (response) => {
+      await response.text()
+      if (!response.ok) throw new Error(`Background continuation HTTP ${response.status}`)
+    })
+    .catch((error) => {
+      console.error('Notiva background continuation failed:', error.message)
+    })
+  waitUntil(nextRequest)
 }
 
 function isRetryFailed(req) {
@@ -566,6 +607,22 @@ export default async function handler(req, res) {
     }
 
     const manualRun = isManualRun(req)
+    const requestedJobId = cleanText(
+      req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId
+    )
+    const backgroundRunRequested = isBackgroundRun(req)
+    const backgroundRun = backgroundRunRequested && verifyBackgroundRunToken(
+      requestedJobId,
+      cleanText(req.headers['x-notiva-background-token'])
+    )
+
+    if (backgroundRunRequested && !backgroundRun) {
+      return res.status(401).json({
+        success: false,
+        message: 'Background runner token tidak valid / kedaluwarsa.'
+      })
+    }
+
     const retryFailedRequested = manualRun && isRetryFailed(req)
     const retryItemIds = retryFailedRequested ? getRetryItemIds(req) : new Set()
 
@@ -580,15 +637,13 @@ export default async function handler(req, res) {
 
     const retryFailed = retryFailedRequested && retryItemIds.size > 0
 
-    // HARD KILL-SWITCH: seluruh pemrosesan Template Blast background/non-manual
-    // dibuat NO-OP. Ini menghentikan cron lama, HF runner lama/baru, dan tab
-    // Template Blast lama yang masih mencoba melanjutkan job secara otomatis.
-    // Hanya tombol Manual Run dari user login yang boleh mengirim.
-    if (!manualRun) {
+    // Runner lama/HF/cron generik tetap NO-OP.
+    // Hanya Manual Run user atau chain background bertoken yang boleh mengirim.
+    if (!manualRun && !backgroundRun) {
       return res.status(200).json({
         success: true,
         skipped: true,
-        message: 'Template Blast auto-run dinonaktifkan. Gunakan Manual Run di Job Performance.',
+        message: 'Template Blast auto-run generik dinonaktifkan. Gunakan Run Background / Manual Run dari Job Performance.',
         mode: 'manual_only',
         processed: 0,
         sent: 0,
@@ -596,9 +651,10 @@ export default async function handler(req, res) {
       })
     }
 
-    // Manual Run wajib berasal dari session user, bukan worker secret.
-    const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
-    if (!authUser) return
+    if (manualRun) {
+      const authUser = await requireRole(req, res, ['master', 'admin', 'user', 'agent'])
+      if (!authUser) return
+    }
 
     const force = true
     // Keep each Vercel request deliberately small. Manual Run loops these
@@ -607,7 +663,7 @@ export default async function handler(req, res) {
     const limitRaw = req.query.limit || req.body?.limit || 5
     const limit = Number(limitRaw)
     const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 5) : 5
-    let jobId = cleanText(req.query.job_id || req.body?.job_id || req.query.jobId || req.body?.jobId)
+    let jobId = requestedJobId
     const resumeStalled = false
     let resumedJob = null
     let staleSeconds = null
@@ -615,7 +671,7 @@ export default async function handler(req, res) {
     if (!jobId) {
       return res.status(400).json({
         success: false,
-        message: 'job_id wajib untuk Manual Run Template Blast.'
+        message: 'job_id wajib untuk Template Blast.'
       })
     }
 
@@ -739,7 +795,7 @@ export default async function handler(req, res) {
         message: futureItems.length
           ? 'Belum ada template item yang waktunya due.'
           : 'Tidak ada template item pending untuk diproses.',
-        mode: retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled')),
+        mode: backgroundRun ? 'background' : (retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'))),
         resumed_job_id: resumedJob?.id || null,
         stale_seconds: staleSeconds,
         checked: allItems.length,
@@ -873,10 +929,20 @@ export default async function handler(req, res) {
 
     const queueSnapshot = await getJobQueueSnapshot(jobId)
 
+    const shouldContinueBackground =
+      backgroundRun && Number(queueSnapshot.pending_remaining || 0) > 0
+
+    if (shouldContinueBackground) {
+      scheduleNextBackgroundBatch(req, jobId)
+    }
+
     return res.status(200).json({
       success: true,
-      message: 'Process template batch selesai.',
-      mode: retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled')),
+      message: shouldContinueBackground
+        ? 'Process template batch selesai; background lanjut ke batch berikutnya.'
+        : 'Process template batch selesai.',
+      mode: backgroundRun ? 'background' : (retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'))),
+      background_continues: shouldContinueBackground,
       resumed_job_id: resumedJob?.id || null,
       stale_seconds: staleSeconds,
       checked: allItems.length,
