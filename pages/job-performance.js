@@ -604,7 +604,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
 
   async function manualRun() {
-    if (!canManualRun || manualRunning || backgroundStarted) return
+    if (!canManualRun || manualRunning || backgroundStarted || serverBackgroundActive) return
 
     setManualRunning(true)
     setManualMessage(`Menyiapkan background runner untuk ${remaining} pending...`)
