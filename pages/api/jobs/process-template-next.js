@@ -356,11 +356,12 @@ async function claimItemForSend(item, retryFailed) {
     .select('id')
 
   if (result.error) {
+    // Compatibility fallback: jangan bergantung ke kolom error_message.
+    // Atomic compare-and-set id + current status tetap wajib.
     result = await supabaseAdmin
       .from('send_job_items')
       .update({
-        status: 'processing',
-        error_message: null
+        status: 'processing'
       })
       .eq('id', itemId)
       .eq('status', currentStatusRaw)
@@ -427,16 +428,32 @@ async function updateItemSafe(itemId, payload) {
 
   if (!first.error) return first
 
-  const minimalPayload = {}
+  // Schema compatibility: status transition harus tetap tersimpan walaupun
+  // production schema lama tidak punya error_message / updated_at.
+  const compatiblePayload = {}
 
-  if (payload.status !== undefined) minimalPayload.status = payload.status
-  if (payload.error_message !== undefined) minimalPayload.error_message = payload.error_message
-  if (payload.processed_at !== undefined) minimalPayload.processed_at = payload.processed_at
+  if (payload.status !== undefined) compatiblePayload.status = payload.status
+  if (payload.processed_at !== undefined) compatiblePayload.processed_at = payload.processed_at
 
-  return supabaseAdmin
+  const second = await supabaseAdmin
     .from('send_job_items')
-    .update(minimalPayload)
+    .update(compatiblePayload)
     .eq('id', itemId)
+
+  if (!second.error) return second
+
+  // Ultimate fallback: hanya status. Ini mencegah item sukses kirim tetap
+  // nyangkut sebagai processing karena kolom metadata berbeda antar schema.
+  if (payload.status !== undefined) {
+    return supabaseAdmin
+      .from('send_job_items')
+      .update({
+        status: payload.status
+      })
+      .eq('id', itemId)
+  }
+
+  return second
 }
 
 async function updateJobSafe(jobId) {
@@ -869,6 +886,10 @@ export default async function handler(req, res) {
       failed,
       duplicate_skipped: duplicateSkipped,
       claim_skipped: claimSkipped,
+      claim_skip_reason:
+        claimed === 0 && claimSkipped > 0
+          ? cleanText(results.find((row) => row?.skipped)?.reason || '')
+          : null,
       retry_failed: retryFailed,
       total_items: queueSnapshot.total_items,
       pending_remaining: queueSnapshot.pending_remaining,
