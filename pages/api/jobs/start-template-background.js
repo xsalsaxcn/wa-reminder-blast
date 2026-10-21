@@ -6,8 +6,66 @@ import {
   getRequestBaseUrl
 } from '../../../lib/templateBackgroundAuth'
 
+const HEARTBEAT_ACTIVE_SECONDS = 120
+
 function cleanText(value) {
   return String(value || '').trim()
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function postProcessorWithRetry({ baseUrl, jobId, token }) {
+  const delays = [0, 500, 1500, 3500]
+  let lastError = null
+
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt] > 0) {
+      await sleep(delays[attempt])
+    }
+
+    try {
+      const response = await fetch(`${baseUrl}/api/jobs/process-template-next`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'x-notiva-background-token': token
+        },
+        body: JSON.stringify({
+          job_id: jobId,
+          limit: 5,
+          force: 1,
+          background_run: 1,
+          retry_failed: 0
+        })
+      })
+
+      const bodyText = await response.text()
+
+      if (!response.ok) {
+        throw new Error(
+          `Background worker start HTTP ${response.status}: ${bodyText.slice(0, 300)}`
+        )
+      }
+
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  await supabaseAdmin
+    .from('send_jobs')
+    .update({
+      background_last_error:
+        `Initial background start failed after retry: ${lastError?.message || 'unknown error'}`,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', jobId)
+
+  throw lastError || new Error('Background worker start gagal.')
 }
 
 export default async function handler(req, res) {
@@ -30,7 +88,10 @@ export default async function handler(req, res) {
 
     const jobResult = await supabaseAdmin
       .from('send_jobs')
-      .select('id, name, status, send_mode, total_items, updated_at')
+      .select(
+        'id, name, status, send_mode, total_items, updated_at, ' +
+        'background_run_enabled, background_started_at, background_heartbeat_at'
+      )
       .eq('id', jobId)
       .single()
 
@@ -55,37 +116,27 @@ export default async function handler(req, res) {
       .in('status', ['pending', 'queued'])
 
     if (pendingResult.error) {
-      return res.status(500).json({ success: false, message: pendingResult.error.message })
-    }
-
-    const pendingRemaining = Number(pendingResult.count || 0)
-
-    const updatedAtMs = Date.parse(cleanText(jobResult.data.updated_at))
-    const heartbeatAgeSeconds = Number.isFinite(updatedAtMs)
-      ? Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000))
-      : null
-    const alreadyRunning =
-      cleanText(jobResult.data.status).toLowerCase() === 'processing' &&
-      pendingRemaining > 0 &&
-      heartbeatAgeSeconds !== null &&
-      heartbeatAgeSeconds <= 180
-
-    if (alreadyRunning) {
-      return res.status(200).json({
-        success: true,
-        started: false,
-        already_running: true,
-        background_active: true,
-        job_id: jobId,
-        pending_remaining: pendingRemaining,
-        heartbeat_age_seconds: heartbeatAgeSeconds,
-        message:
-          `Background masih aktif di server untuk ${pendingRemaining} pending. ` +
-          'Tidak membuat runner kedua.'
+      return res.status(500).json({
+        success: false,
+        message: pendingResult.error.message
       })
     }
 
+    const pendingRemaining = Number(pendingResult.count || 0)
+    const now = new Date().toISOString()
+
     if (pendingRemaining <= 0) {
+      await supabaseAdmin
+        .from('send_jobs')
+        .update({
+          background_run_enabled: false,
+          background_heartbeat_at: now,
+          background_finished_at: now,
+          background_last_error: null,
+          updated_at: now
+        })
+        .eq('id', jobId)
+
       return res.status(200).json({
         success: true,
         started: false,
@@ -96,12 +147,49 @@ export default async function handler(req, res) {
       })
     }
 
-    const heartbeatAt = new Date().toISOString()
+    const heartbeatSource =
+      jobResult.data.background_heartbeat_at ||
+      jobResult.data.updated_at ||
+      null
+
+    const heartbeatMs = Date.parse(cleanText(heartbeatSource))
+    const heartbeatAgeSeconds = Number.isFinite(heartbeatMs)
+      ? Math.max(0, Math.floor((Date.now() - heartbeatMs) / 1000))
+      : null
+
+    const alreadyRunning =
+      jobResult.data.background_run_enabled === true &&
+      heartbeatAgeSeconds !== null &&
+      heartbeatAgeSeconds <= HEARTBEAT_ACTIVE_SECONDS
+
+    if (alreadyRunning) {
+      return res.status(200).json({
+        success: true,
+        started: false,
+        already_running: true,
+        background_active: true,
+        auto_recovery_active: true,
+        job_id: jobId,
+        pending_remaining: pendingRemaining,
+        heartbeat_age_seconds: heartbeatAgeSeconds,
+        message:
+          `Background masih aktif untuk ${pendingRemaining} pending. ` +
+          'Runner kedua tidak dibuat; Auto Recovery tetap aktif.'
+      })
+    }
+
+    const startedAt = jobResult.data.background_started_at || now
+
     const markRunning = await supabaseAdmin
       .from('send_jobs')
       .update({
         status: 'processing',
-        updated_at: heartbeatAt
+        background_run_enabled: true,
+        background_started_at: startedAt,
+        background_heartbeat_at: now,
+        background_finished_at: null,
+        background_last_error: null,
+        updated_at: now
       })
       .eq('id', jobId)
 
@@ -109,7 +197,7 @@ export default async function handler(req, res) {
       return res.status(500).json({
         success: false,
         message:
-          'Gagal menyimpan heartbeat background: ' +
+          'Gagal menyimpan state background: ' +
           (markRunning.error.message || 'unknown database error')
       })
     }
@@ -117,41 +205,27 @@ export default async function handler(req, res) {
     const token = createBackgroundRunToken(jobId)
     const baseUrl = getRequestBaseUrl(req)
 
-    const backgroundRequest = fetch(`${baseUrl}/api/jobs/process-template-next`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'x-notiva-background-token': token
-      },
-      body: JSON.stringify({
-        job_id: jobId,
-        limit: 5,
-        force: 1,
-        background_run: 1,
-        retry_failed: 0
-      })
+    const backgroundRequest = postProcessorWithRetry({
+      baseUrl,
+      jobId,
+      token
+    }).catch((error) => {
+      console.error('Notiva background initial start failed:', error.message)
     })
-      .then(async (response) => {
-        await response.text()
-        if (!response.ok) throw new Error(`Background worker start HTTP ${response.status}`)
-      })
-      .catch((error) => {
-        console.error('Notiva background start failed:', error.message)
-      })
 
     waitUntil(backgroundRequest)
 
     return res.status(202).json({
       success: true,
       started: true,
+      background_active: true,
+      auto_recovery_active: true,
+      heartbeat_at: now,
       job_id: jobId,
       pending_remaining: pendingRemaining,
-      background_active: true,
-      heartbeat_at: heartbeatAt,
       message:
         `Background aktif untuk ${pendingRemaining} pending. ` +
-        'Notiva/tab browser boleh ditutup; server akan melanjutkan batch berikutnya.'
+        'Notiva/tab browser boleh ditutup; Auto Recovery akan menjaga queue sampai pending habis.'
     })
   } catch (error) {
     return res.status(500).json({

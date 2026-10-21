@@ -55,29 +55,62 @@ function isBackgroundRun(req) {
 function scheduleNextBackgroundBatch(req, jobId) {
   const token = createBackgroundRunToken(jobId)
   const baseUrl = getRequestBaseUrl(req)
-  const nextRequest = new Promise((resolve) => setTimeout(resolve, 250))
-    .then(() => fetch(`${baseUrl}/api/jobs/process-template-next`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'x-notiva-background-token': token
-      },
-      body: JSON.stringify({
-        job_id: jobId,
-        limit: 5,
-        force: 1,
-        background_run: 1,
-        retry_failed: 0
+
+  const nextRequest = (async () => {
+    const delays = [250, 750, 1500, 3500]
+    let lastError = null
+
+    for (let attempt = 0; attempt < delays.length; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]))
+
+      try {
+        const response = await fetch(
+          `${baseUrl}/api/jobs/process-template-next`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'x-notiva-background-token': token
+            },
+            body: JSON.stringify({
+              job_id: jobId,
+              limit: 5,
+              force: 1,
+              background_run: 1,
+              retry_failed: 0
+            })
+          }
+        )
+
+        const bodyText = await response.text()
+
+        if (!response.ok) {
+          throw new Error(
+            `Background continuation HTTP ${response.status}: ${bodyText.slice(0, 300)}`
+          )
+        }
+
+        return
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    await supabaseAdmin
+      .from('send_jobs')
+      .update({
+        background_last_error:
+          `Continuation failed after retry: ${lastError?.message || 'unknown error'}`
       })
-    }))
-    .then(async (response) => {
-      await response.text()
-      if (!response.ok) throw new Error(`Background continuation HTTP ${response.status}`)
-    })
-    .catch((error) => {
-      console.error('Notiva background continuation failed:', error.message)
-    })
+      .eq('id', jobId)
+
+    console.error(
+      'Notiva background continuation exhausted retries:',
+      lastError?.message || 'unknown error'
+    )
+  })()
+
   waitUntil(nextRequest)
 }
 
@@ -593,6 +626,21 @@ async function getJobQueueSnapshot(jobId) {
   }
 }
 
+async function finishBackgroundRun(jobId) {
+  const now = new Date().toISOString()
+
+  await supabaseAdmin
+    .from('send_jobs')
+    .update({
+      background_run_enabled: false,
+      background_heartbeat_at: now,
+      background_finished_at: now,
+      background_last_error: null,
+      updated_at: now
+    })
+    .eq('id', jobId)
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   res.setHeader('Pragma', 'no-cache')
@@ -673,6 +721,29 @@ export default async function handler(req, res) {
         success: false,
         message: 'job_id wajib untuk Template Blast.'
       })
+    }
+
+    if (backgroundRun) {
+      const heartbeatNow = new Date().toISOString()
+      const heartbeatResult = await supabaseAdmin
+        .from('send_jobs')
+        .update({
+          status: 'processing',
+          background_run_enabled: true,
+          background_heartbeat_at: heartbeatNow,
+          background_last_error: null,
+          updated_at: heartbeatNow
+        })
+        .eq('id', jobId)
+
+      if (heartbeatResult.error) {
+        return res.status(500).json({
+          success: false,
+          message:
+            'Background heartbeat gagal: ' +
+            (heartbeatResult.error.message || 'unknown database error')
+        })
+      }
     }
 
     if (backgroundRun) {
@@ -808,6 +879,14 @@ export default async function handler(req, res) {
       }
 
       const queueSnapshot = await getJobQueueSnapshot(jobId)
+
+      if (backgroundRun) {
+        if (Number(queueSnapshot.pending_remaining || 0) > 0) {
+          scheduleNextBackgroundBatch(req, jobId)
+        } else {
+          await finishBackgroundRun(jobId)
+        }
+      }
 
       return res.status(200).json({
         success: true,
@@ -953,6 +1032,8 @@ export default async function handler(req, res) {
 
     if (shouldContinueBackground) {
       scheduleNextBackgroundBatch(req, jobId)
+    } else if (backgroundRun) {
+      await finishBackgroundRun(jobId)
     }
 
     return res.status(200).json({
