@@ -163,6 +163,19 @@ function normalizeDeliveryStatus(value) {
   return status || 'pending'
 }
 
+function deliveryEvidenceRank(value) {
+  const status = normalizeDeliveryStatus(value)
+
+  // Delivery evidence MUST NOT regress when callbacks arrive out of order.
+  // Example: delivered callback arrives first, accepted callback arrives later.
+  if (status === 'read') return 40
+  if (status === 'delivered') return 30
+  if (status === 'failed') return 20
+  if (status === 'accepted') return 10
+
+  return 0
+}
+
 function buildDeliveryStatusByItem(rows) {
   const attemptsByItem = new Map()
   const callbacksByMeta = new Map()
@@ -195,7 +208,17 @@ function buildDeliveryStatusByItem(rows) {
 
     if (metaId && mode === 'webhook_status') {
       const existing = callbacksByMeta.get(metaId)
-      if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
+      const rowRank = deliveryEvidenceRank(row?.status)
+      const existingRank = deliveryEvidenceRank(existing?.status)
+
+      if (
+        !existing ||
+        rowRank > existingRank ||
+        (
+          rowRank === existingRank &&
+          getDeliveryLogTime(row) >= getDeliveryLogTime(existing)
+        )
+      ) {
         callbacksByMeta.set(metaId, row)
       }
     }

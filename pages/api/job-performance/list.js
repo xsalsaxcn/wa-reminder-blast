@@ -188,6 +188,19 @@ function normalizeDeliveryStatus(value) {
   return status || 'pending'
 }
 
+function deliveryEvidenceRank(value) {
+  const status = normalizeDeliveryStatus(value)
+
+  // Delivery evidence MUST NOT regress when callbacks arrive out of order.
+  // Example: delivered callback arrives first, accepted callback arrives later.
+  if (status === 'read') return 40
+  if (status === 'delivered') return 30
+  if (status === 'failed') return 20
+  if (status === 'accepted') return 10
+
+  return 0
+}
+
 function buildDeliveryStatusByItem(rows) {
   const attemptsByItem = new Map()
   const callbacksByMeta = new Map()
@@ -220,7 +233,17 @@ function buildDeliveryStatusByItem(rows) {
 
     if (metaId && mode === 'webhook_status') {
       const existing = callbacksByMeta.get(metaId)
-      if (!existing || getDeliveryLogTime(row) >= getDeliveryLogTime(existing)) {
+      const rowRank = deliveryEvidenceRank(row?.status)
+      const existingRank = deliveryEvidenceRank(existing?.status)
+
+      if (
+        !existing ||
+        rowRank > existingRank ||
+        (
+          rowRank === existingRank &&
+          getDeliveryLogTime(row) >= getDeliveryLogTime(existing)
+        )
+      ) {
         callbacksByMeta.set(metaId, row)
       }
     }
@@ -868,11 +891,75 @@ async function fetchByJobIds(table, jobIds, maxRows = 25000) {
 }
 
 async function safeFetchByJobIds(table, jobIds, maxRows = 25000) {
+  const ids = Array.from(
+    new Set((jobIds || []).map(cleanText).filter(Boolean))
+  )
+
+  if (!ids.length) return []
+
   try {
-    return await fetchByJobIds(table, jobIds, maxRows)
+    const bulkRows = await fetchByJobIds(table, ids, maxRows)
+
+    if (bulkRows.length) return bulkRows
   } catch (error) {
-    return []
+    // Fallback per job below.
   }
+
+  // Do not let one bulk-query issue zero-out every card on the page.
+  const rows = []
+
+  for (const jobId of ids) {
+    try {
+      const result = await supabaseAdmin
+        .from(table)
+        .select('*')
+        .eq('job_id', jobId)
+        .limit(maxRows)
+
+      if (!result.error && Array.isArray(result.data)) {
+        rows.push(...result.data)
+      }
+    } catch (error) {
+      // Keep other jobs readable.
+    }
+  }
+
+  return rows
+}
+
+async function safeFetchByMetaIds(
+  table,
+  metaIds,
+  maxRows = 25000
+) {
+  const ids = Array.from(
+    new Set((metaIds || []).map(cleanText).filter(Boolean))
+  )
+
+  if (!ids.length) return []
+
+  const rows = []
+  const chunkSize = 100
+
+  for (let index = 0; index < ids.length; index += chunkSize) {
+    const chunk = ids.slice(index, index + chunkSize)
+
+    try {
+      const result = await supabaseAdmin
+        .from(table)
+        .select('*')
+        .in('meta_message_id', chunk)
+        .limit(maxRows)
+
+      if (!result.error && Array.isArray(result.data)) {
+        rows.push(...result.data)
+      }
+    } catch (error) {
+      // A failed callback lookup must not break the whole page.
+    }
+  }
+
+  return rows
 }
 
 async function fetchRecentByColumn(
@@ -1120,13 +1207,35 @@ export default async function handler(req, res) {
 
     const [
       items,
-      deliveryRows,
+      deliveryAttemptRows,
       databases
     ] = await Promise.all([
       safeFetchByJobIds('send_job_items', jobIds, 20000),
       safeFetchByJobIds('send_delivery_logs', jobIds, 25000),
       safeFetchDatabases(databaseIds)
     ])
+
+    // Webhook rows are often stored by Meta message ID without job_id.
+    // Looking up delivery logs by job_id alone only sees the initial
+    // "accepted" attempt and makes Delivered/Read/Failed appear as zero.
+    const metaMessageIds = Array.from(
+      new Set(
+        (deliveryAttemptRows || [])
+          .map((row) => cleanText(row?.meta_message_id || ''))
+          .filter(Boolean)
+      )
+    )
+
+    const deliveryCallbackRows = await safeFetchByMetaIds(
+      'send_delivery_logs',
+      metaMessageIds,
+      25000
+    )
+
+    const deliveryRows = [
+      ...(deliveryAttemptRows || []),
+      ...(deliveryCallbackRows || [])
+    ]
 
     const relevantPhones = new Set(
       items.map(getItemPhone).filter(Boolean)
@@ -1250,7 +1359,10 @@ export default async function handler(req, res) {
         incoming_relevant: incomingRows.length,
         outgoing_loaded: outgoingRecent.length,
         outgoing_relevant: outgoingRows.length,
+        delivery_attempt_logs_loaded: deliveryAttemptRows.length,
+        delivery_callback_logs_loaded: deliveryCallbackRows.length,
         delivery_logs_loaded: deliveryRows.length,
+        delivery_meta_ids: metaMessageIds.length,
         analytics_since: analyticsSince || null,
         final_delivery_status: true
       }
