@@ -414,6 +414,54 @@ async function safeFetchAll(table, maxRows = 50000) {
   }
 }
 
+async function fetchDeliveryRowsForJob(jobId) {
+  const attemptsResult = await supabaseAdmin
+    .from('send_delivery_logs')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: true })
+    .limit(50000)
+
+  if (attemptsResult.error) {
+    throw new Error(attemptsResult.error.message)
+  }
+
+  const attempts = Array.isArray(attemptsResult.data)
+    ? attemptsResult.data
+    : []
+
+  const metaIds = Array.from(
+    new Set(
+      attempts
+        .map((row) => cleanText(row?.meta_message_id || ''))
+        .filter(Boolean)
+    )
+  )
+
+  const callbacks = []
+  const chunkSize = 100
+
+  for (let index = 0; index < metaIds.length; index += chunkSize) {
+    const chunk = metaIds.slice(index, index + chunkSize)
+
+    const callbackResult = await supabaseAdmin
+      .from('send_delivery_logs')
+      .select('*')
+      .in('meta_message_id', chunk)
+      .eq('mode', 'webhook_status')
+      .order('created_at', { ascending: true })
+      .limit(50000)
+
+    if (callbackResult.error) continue
+
+    if (Array.isArray(callbackResult.data)) {
+      callbacks.push(...callbackResult.data)
+    }
+  }
+
+  return [...attempts, ...callbacks]
+}
+
 function groupByPhone(rows, phoneGetter, timeGetter) {
   const map = new Map()
 
@@ -695,7 +743,7 @@ export default async function handler(req, res) {
 
     const incomingRows = await safeFetchAll('wa_incoming_messages', 50000)
     const outgoingRows = await safeFetchAll('wa_outgoing_messages', 50000)
-    const deliveryRows = await safeFetchAll('send_delivery_logs', 50000)
+    const deliveryRows = await fetchDeliveryRowsForJob(jobId)
     const deliveryByItem = buildDeliveryStatusByItem(deliveryRows)
 
     let contacts = []

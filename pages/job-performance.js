@@ -298,6 +298,9 @@ function DetailPanel({ detail, loading, error, onClose }) {
                   <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-3 py-3">Kontak</th>
                     <th className="px-3 py-3">Status</th>
+                    {detail.bucket === 'failed' ? (
+                      <th className="min-w-[320px] px-3 py-3">Alasan Gagal</th>
+                    ) : null}
                     <th className="px-3 py-3">Reply / Message</th>
                     <th className="px-3 py-3">Kategori</th>
                     <th className="px-3 py-3">Response Time</th>
@@ -319,6 +322,14 @@ function DetailPanel({ detail, loading, error, onClose }) {
                           {row.delivery_status || row.status || '-'}
                         </span>
                       </td>
+
+                      {detail.bucket === 'failed' ? (
+                        <td className="min-w-[320px] px-3 py-4">
+                          <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold leading-relaxed text-red-700">
+                            {row.errorMessage || row.error_message || 'Alasan gagal belum tersedia dari Meta.'}
+                          </div>
+                        </td>
+                      ) : null}
 
                       <td className="max-w-md px-3 py-4 text-slate-700">
                         {row.lastReply || row.lastMessage || '-'}
@@ -369,6 +380,7 @@ function DetailPanel({ detail, loading, error, onClose }) {
 function JobCard({ item, onMetricClick, onManualRunDone }) {
   const [manualRunning, setManualRunning] = useState(false)
   const [manualMessage, setManualMessage] = useState('')
+  const [backgroundStarted, setBackgroundStarted] = useState(false)
 
   const sendMode = cleanText(item?.sendMode || item?.raw?.send_mode || item?.raw?.mode).toLowerCase()
   const jobName = cleanText(item?.jobName).toLowerCase()
@@ -378,7 +390,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
 
   async function manualRun() {
-    if (!canManualRun || manualRunning) return
+    if (!canManualRun || manualRunning || backgroundStarted) return
 
     setManualRunning(true)
     setManualMessage(`Menyiapkan background runner untuk ${remaining} pending...`)
@@ -404,12 +416,9 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
         throw new Error(data.message || 'Gagal memulai background runner.')
       }
 
+      setBackgroundStarted(true)
       setManualMessage(data.message || 'Background aktif. Notiva/tab browser boleh ditutup.')
 
-      if (onManualRunDone) {
-        await new Promise((resolve) => window.setTimeout(resolve, 900))
-        await onManualRunDone()
-      }
     } catch (err) {
       setManualMessage(`Background runner gagal dimulai: ${err.message || 'Unknown error'}`)
     } finally {
@@ -452,11 +461,15 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
               <button
                 type="button"
                 onClick={manualRun}
-                disabled={manualRunning}
+                disabled={manualRunning || backgroundStarted}
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title="Jalankan sisa pending di background; browser boleh ditutup"
+                title={backgroundStarted
+                  ? 'Background sudah aktif. Tombol dikunci untuk mencegah start berulang.'
+                  : 'Jalankan sisa pending di background; browser boleh ditutup'}
               >
-                {manualRunning ? 'Starting...' : 'Run Background'}
+                {backgroundStarted
+                  ? 'Background Running'
+                  : (manualRunning ? 'Starting...' : 'Run Background')}
               </button>
             ) : null}
           </div>
