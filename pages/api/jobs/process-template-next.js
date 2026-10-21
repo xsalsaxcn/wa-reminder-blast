@@ -675,6 +675,25 @@ export default async function handler(req, res) {
       })
     }
 
+    if (backgroundRun) {
+      const heartbeatResult = await supabaseAdmin
+        .from('send_jobs')
+        .update({
+          status: 'processing',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', jobId)
+
+      if (heartbeatResult.error) {
+        return res.status(500).json({
+          success: false,
+          message:
+            'Background heartbeat gagal: ' +
+            (heartbeatResult.error.message || 'unknown database error')
+        })
+      }
+    }
+
     // Legacy recovery code di bawah tetap dipertahankan sebagai safety history,
     // tetapi tidak akan tercapai selama mode manual-only aktif.
     // Recovery ini hanya memilih job template yang SUDAH processing tetapi
@@ -943,6 +962,9 @@ export default async function handler(req, res) {
         : 'Process template batch selesai.',
       mode: backgroundRun ? 'background' : (retryFailed ? 'retry_failed' : (resumedJob ? 'resume_stalled' : (force ? 'now' : 'scheduled'))),
       background_continues: shouldContinueBackground,
+      background_heartbeat_at: backgroundRun
+        ? new Date().toISOString()
+        : null,
       resumed_job_id: resumedJob?.id || null,
       stale_seconds: staleSeconds,
       checked: allItems.length,

@@ -30,7 +30,7 @@ export default async function handler(req, res) {
 
     const jobResult = await supabaseAdmin
       .from('send_jobs')
-      .select('id, name, status, send_mode, total_items')
+      .select('id, name, status, send_mode, total_items, updated_at')
       .eq('id', jobId)
       .single()
 
@@ -59,6 +59,32 @@ export default async function handler(req, res) {
     }
 
     const pendingRemaining = Number(pendingResult.count || 0)
+
+    const updatedAtMs = Date.parse(cleanText(jobResult.data.updated_at))
+    const heartbeatAgeSeconds = Number.isFinite(updatedAtMs)
+      ? Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000))
+      : null
+    const alreadyRunning =
+      cleanText(jobResult.data.status).toLowerCase() === 'processing' &&
+      pendingRemaining > 0 &&
+      heartbeatAgeSeconds !== null &&
+      heartbeatAgeSeconds <= 180
+
+    if (alreadyRunning) {
+      return res.status(200).json({
+        success: true,
+        started: false,
+        already_running: true,
+        background_active: true,
+        job_id: jobId,
+        pending_remaining: pendingRemaining,
+        heartbeat_age_seconds: heartbeatAgeSeconds,
+        message:
+          `Background masih aktif di server untuk ${pendingRemaining} pending. ` +
+          'Tidak membuat runner kedua.'
+      })
+    }
+
     if (pendingRemaining <= 0) {
       return res.status(200).json({
         success: true,
@@ -70,10 +96,23 @@ export default async function handler(req, res) {
       })
     }
 
-    await supabaseAdmin
+    const heartbeatAt = new Date().toISOString()
+    const markRunning = await supabaseAdmin
       .from('send_jobs')
-      .update({ status: 'processing', updated_at: new Date().toISOString() })
+      .update({
+        status: 'processing',
+        updated_at: heartbeatAt
+      })
       .eq('id', jobId)
+
+    if (markRunning.error) {
+      return res.status(500).json({
+        success: false,
+        message:
+          'Gagal menyimpan heartbeat background: ' +
+          (markRunning.error.message || 'unknown database error')
+      })
+    }
 
     const token = createBackgroundRunToken(jobId)
     const baseUrl = getRequestBaseUrl(req)
@@ -108,6 +147,8 @@ export default async function handler(req, res) {
       started: true,
       job_id: jobId,
       pending_remaining: pendingRemaining,
+      background_active: true,
+      heartbeat_at: heartbeatAt,
       message:
         `Background aktif untuk ${pendingRemaining} pending. ` +
         'Notiva/tab browser boleh ditutup; server akan melanjutkan batch berikutnya.'

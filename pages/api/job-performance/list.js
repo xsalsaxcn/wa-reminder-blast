@@ -715,6 +715,22 @@ function buildPerformanceForJob({
   })
 
   const createdAt = job?.created_at || job?.scheduled_at || job?.updated_at || null
+  const updatedAt = job?.updated_at || createdAt
+  const updatedAtMs = getTime(updatedAt)
+  const heartbeatAgeSeconds = updatedAtMs > 0
+    ? Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000))
+    : null
+  const processingJob = normalizeStatus(job?.status) === 'processing'
+  const backgroundActive =
+    processingJob &&
+    pendingItems > 0 &&
+    heartbeatAgeSeconds !== null &&
+    heartbeatAgeSeconds <= 180
+  const backgroundStale =
+    processingJob &&
+    pendingItems > 0 &&
+    heartbeatAgeSeconds !== null &&
+    heartbeatAgeSeconds > 180
 
   return {
     id: jobId,
@@ -728,7 +744,11 @@ function buildPerformanceForJob({
     database_name: getDatabaseName(job, databaseMap),
     database: getDatabaseName(job, databaseMap),
     created_at: createdAt,
-    updated_at: job?.updated_at || createdAt,
+    updated_at: updatedAt,
+    background_active: backgroundActive,
+    background_stale: backgroundStale,
+    background_heartbeat_at: updatedAt,
+    background_heartbeat_age_seconds: heartbeatAgeSeconds,
 
     target,
     target_count: target,

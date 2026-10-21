@@ -114,6 +114,25 @@ function normalizeRow(row) {
     sendMode: getFirst(row, ['send_mode', 'mode'], ''),
     status: getFirst(row, ['status', 'job_status'], '-'),
     createdAt: getFirst(row, ['created_at', 'createdAt', 'started_at'], ''),
+    updatedAt: getFirst(row, ['updated_at', 'updatedAt'], ''),
+    backgroundActive: Boolean(
+      getFirst(row, ['background_active', 'backgroundActive'], false)
+    ),
+    backgroundStale: Boolean(
+      getFirst(row, ['background_stale', 'backgroundStale'], false)
+    ),
+    backgroundHeartbeatAt: getFirst(
+      row,
+      ['background_heartbeat_at', 'backgroundHeartbeatAt'],
+      ''
+    ),
+    backgroundHeartbeatAgeSeconds: toNumber(
+      getFirst(
+        row,
+        ['background_heartbeat_age_seconds', 'backgroundHeartbeatAgeSeconds'],
+        0
+      )
+    ),
     target,
     sent,
     accepted: sent,
@@ -567,7 +586,15 @@ function DetailPanel({ detail, loading, error, onClose }) {
 function JobCard({ item, onMetricClick, onManualRunDone }) {
   const [manualRunning, setManualRunning] = useState(false)
   const [manualMessage, setManualMessage] = useState('')
-  const [backgroundStarted, setBackgroundStarted] = useState(false)
+  const serverBackgroundActive = Boolean(item?.backgroundActive)
+  const serverBackgroundStale = Boolean(item?.backgroundStale)
+  const [backgroundStarted, setBackgroundStarted] = useState(
+    serverBackgroundActive
+  )
+
+  useEffect(() => {
+    setBackgroundStarted(serverBackgroundActive)
+  }, [item?.id, serverBackgroundActive])
 
   const sendMode = cleanText(item?.sendMode || item?.raw?.send_mode || item?.raw?.mode).toLowerCase()
   const jobName = cleanText(item?.jobName).toLowerCase()
@@ -604,7 +631,14 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
       }
 
       setBackgroundStarted(true)
-      setManualMessage(data.message || 'Background aktif. Notiva/tab browser boleh ditutup.')
+      setManualMessage(
+        data.message ||
+        (
+          data.already_running
+            ? 'Background masih aktif di server. Runner kedua tidak dibuat.'
+            : 'Background aktif. Notiva/tab browser boleh ditutup.'
+        )
+      )
 
     } catch (err) {
       setManualMessage(`Background runner gagal dimulai: ${err.message || 'Unknown error'}`)
@@ -648,15 +682,27 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
               <button
                 type="button"
                 onClick={manualRun}
-                disabled={manualRunning || backgroundStarted}
+                disabled={
+                  manualRunning ||
+                  backgroundStarted ||
+                  serverBackgroundActive
+                }
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title={backgroundStarted
-                  ? 'Background sudah aktif. Tombol dikunci untuk mencegah start berulang.'
-                  : 'Jalankan sisa pending di background; browser boleh ditutup'}
+                title={backgroundStarted || serverBackgroundActive
+                  ? 'Background masih aktif di server. Tombol dikunci untuk mencegah start berulang.'
+                  : (
+                      serverBackgroundStale
+                        ? 'Heartbeat background sudah stale. Klik untuk restart sisa pending.'
+                        : 'Jalankan sisa pending di background; browser boleh ditutup'
+                    )}
               >
-                {backgroundStarted
+                {backgroundStarted || serverBackgroundActive
                   ? 'Background Running'
-                  : (manualRunning ? 'Starting...' : 'Run Background')}
+                  : (
+                      manualRunning
+                        ? 'Starting...'
+                        : (serverBackgroundStale ? 'Restart Background' : 'Run Background')
+                    )}
               </button>
             ) : null}
           </div>
@@ -664,6 +710,23 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
           {manualMessage ? (
             <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
               {manualMessage}
+            </p>
+          ) : null}
+
+          {!manualMessage && serverBackgroundActive ? (
+            <p className="mt-2 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-200">
+              Background aktif di server
+              {item.backgroundHeartbeatAgeSeconds > 0
+                ? ` · heartbeat ${item.backgroundHeartbeatAgeSeconds} detik lalu`
+                : ''}
+              . Browser boleh ditutup.
+            </p>
+          ) : null}
+
+          {!manualMessage && serverBackgroundStale ? (
+            <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+              Background berhenti / heartbeat stale. Pending masih {remaining}.
+              Klik Restart Background untuk melanjutkan sisa pending.
             </p>
           ) : null}
 
