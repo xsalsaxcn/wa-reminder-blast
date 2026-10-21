@@ -380,18 +380,13 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   async function manualRun() {
     if (!canManualRun || manualRunning) return
 
-    const ok = window.confirm(
-      `Manual Run hanya akan melanjutkan kontak yang masih pending.\n\n` +
-      `Job: ${item.jobName}\n` +
-      `Pending: ${remaining}\n` +
-      `Processing terkunci: ${processingCount}\n\n` +
-      `Accepted/Delivered/Read/Failed/Processing tidak dikirim ulang. Lanjutkan?`
+    setManualRunning(true)
+    setManualMessage(
+      `Manual Run dimulai. Hanya ${remaining} pending yang akan diproses; status lain tidak dikirim ulang.`
     )
 
-    if (!ok) return
-
-    setManualRunning(true)
-    setManualMessage('Menyiapkan Manual Run...')
+    // Paksa render Running/message sebelum request pertama.
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
 
     let totalProcessed = 0
     let totalSent = 0
@@ -404,6 +399,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
       let consecutiveTransportErrors = 0
       let noProgressRetries = 0
       let latestPendingRemaining = remaining
+      let firstRequest = true
 
       for (let guard = 0; guard < 5000; guard += 1) {
         let response
@@ -419,9 +415,11 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 'Content-Type': 'application/json',
                 Accept: 'application/json'
               },
+              credentials: 'same-origin',
+              cache: 'no-store',
               body: JSON.stringify({
                 job_id: item.id,
-                limit: 5,
+                limit: firstRequest ? 1 : 5,
                 force: 1,
                 manual_run: 1,
                 retry_failed: 0
@@ -448,9 +446,21 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
           continue
         }
 
-        const data = await response.json().catch(function () {
-          return {}
-        })
+        const responseText = await response.text()
+        let data = {}
+
+        try {
+          data = responseText
+            ? JSON.parse(responseText)
+            : {}
+        } catch (error) {
+          data = {
+            success: false,
+            message:
+              responseText ||
+              `Worker memberi response non-JSON (HTTP ${response.status}).`
+          }
+        }
 
         const transientStatus = [408, 425, 429, 502, 503, 504].includes(response.status)
 
@@ -476,6 +486,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
         }
 
         consecutiveTransportErrors = 0
+        firstRequest = false
 
         const processed = toNumber(data.processed)
         const sent = toNumber(data.sent)
@@ -737,6 +748,8 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   )
 }
 
+const JOBS_PER_PAGE = 10
+
 export default function JobPerformancePage() {
   const [rows, setRows] = useState([])
   const [summary, setSummary] = useState(null)
@@ -745,6 +758,17 @@ export default function JobPerformancePage() {
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
+  const [page, setPage] = useState(1)
+  const [pagination, setPagination] = useState({
+    page: 1,
+    page_size: JOBS_PER_PAGE,
+    total_jobs: 0,
+    total_pages: 1,
+    has_prev: false,
+    has_next: false,
+    from: 0,
+    to: 0
+  })
 
   const [filters, setFilters] = useState({
     start: '',
@@ -754,7 +778,7 @@ export default function JobPerformancePage() {
     search: ''
   })
 
-  function buildQuery() {
+  function buildQuery(targetPage = page, includePaging = true) {
     const params = new URLSearchParams()
 
     if (filters.start) params.set('start', filters.start)
@@ -763,17 +787,25 @@ export default function JobPerformancePage() {
     if (filters.status) params.set('status', filters.status)
     if (filters.search) params.set('search', filters.search)
 
+    if (includePaging) {
+      params.set(
+        'page',
+        String(Math.max(1, toNumber(targetPage) || 1))
+      )
+      params.set('page_size', String(JOBS_PER_PAGE))
+    }
+
     params.set('t', String(Date.now()))
 
     return params.toString()
   }
 
-  async function loadData() {
+  async function loadData(nextPage = page) {
     setLoading(true)
     setError('')
 
     try {
-      const response = await fetch('/api/job-performance/list?' + buildQuery(), {
+      const response = await fetch('/api/job-performance/list?' + buildQuery(nextPage, true), {
         method: 'GET',
         headers: {
           Accept: 'application/json'
@@ -797,8 +829,33 @@ export default function JobPerformancePage() {
             ? data.data
             : []
 
+      const nextPagination = data.pagination || {}
+      const resolvedPage = Math.max(
+        1,
+        toNumber(nextPagination.page) ||
+          toNumber(nextPage) ||
+          1
+      )
+
       setRows(items)
       setSummary(data.summary || null)
+      setPage(resolvedPage)
+      setPagination({
+        page: resolvedPage,
+        page_size:
+          toNumber(nextPagination.page_size) ||
+          JOBS_PER_PAGE,
+        total_jobs:
+          toNumber(nextPagination.total_jobs),
+        total_pages: Math.max(
+          1,
+          toNumber(nextPagination.total_pages) || 1
+        ),
+        has_prev: Boolean(nextPagination.has_prev),
+        has_next: Boolean(nextPagination.has_next),
+        from: toNumber(nextPagination.from),
+        to: toNumber(nextPagination.to)
+      })
     } catch (err) {
       setRows([])
       setSummary(null)
@@ -861,11 +918,11 @@ export default function JobPerformancePage() {
   }
 
   function exportCsv() {
-    window.open('/api/job-performance/export?' + buildQuery(), '_blank')
+    window.open('/api/job-performance/export?' + buildQuery(page, false), '_blank')
   }
 
   useEffect(function () {
-    loadData()
+    loadData(1)
   }, [])
 
   const items = useMemo(function () {
@@ -939,6 +996,9 @@ export default function JobPerformancePage() {
               <p className="mt-1 text-xs text-slate-400">
                 Avg Response = waktu rata-rata CS membalas setelah customer reply.
               </p>
+              <p className="mt-1 text-xs font-semibold text-cyan-700">
+                Maksimal 10 job per halaman agar loading cepat. Ringkasan mengikuti halaman aktif.
+              </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -952,7 +1012,7 @@ export default function JobPerformancePage() {
 
               <button
                 type="button"
-                onClick={loadData}
+                onClick={() => loadData(1)}
                 disabled={loading}
                 className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300"
               >
@@ -1053,7 +1113,7 @@ export default function JobPerformancePage() {
                   })
                 }}
                 onKeyDown={function (e) {
-                  if (e.key === 'Enter') loadData()
+                  if (e.key === 'Enter') loadData(1)
                 }}
                 placeholder="Cari job..."
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
@@ -1101,11 +1161,51 @@ export default function JobPerformancePage() {
                     key={item.id || index}
                     item={item}
                     onMetricClick={openMetricDetail}
-                    onManualRunDone={loadData}
+                    onManualRunDone={() => loadData(page)}
                   />
                 )
               })}
             </section>
+          ) : null}
+
+          {!loading && pagination.total_jobs > 0 ? (
+            <div className="mt-5 flex flex-col gap-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-slate-500">
+                Menampilkan{' '}
+                <b className="text-slate-800">
+                  {pagination.from}-{pagination.to}
+                </b>{' '}
+                dari{' '}
+                <b className="text-slate-800">
+                  {pagination.total_jobs}
+                </b>{' '}
+                job · maksimal 10 job/halaman
+              </p>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => loadData(page - 1)}
+                  disabled={loading || !pagination.has_prev}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  ← Sebelumnya
+                </button>
+
+                <span className="min-w-[120px] text-center text-sm font-bold text-slate-700">
+                  Halaman {pagination.page} / {pagination.total_pages}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => loadData(page + 1)}
+                  disabled={loading || !pagination.has_next}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  Berikutnya →
+                </button>
+              </div>
+            </div>
           ) : null}
         </div>
       </main>
