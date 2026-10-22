@@ -83,7 +83,7 @@ export default function HfWorkerStatus() {
     }
 
     load()
-    const timer = setInterval(load, 15000)
+    const timer = setInterval(load, 60000)
 
     return () => {
       cancelled = true

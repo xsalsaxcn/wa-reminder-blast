@@ -1,4 +1,3 @@
-import HfWorkerStatus from '../components/HfWorkerStatus'
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
@@ -1129,7 +1128,6 @@ export default function JobPerformancePage() {
 
   return (
     <div className="min-h-screen bg-slate-100 lg:flex">
-      <HfWorkerStatus />
       <Sidebar />
 
       <main className="flex-1 p-4 lg:p-8">
