@@ -44,7 +44,7 @@ export default async function handler(req, res) {
       'Cache-Control': 'no-cache',
     }
 
-    const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN
+    const hfToken = process.env.HF_WORKER_TOKEN || process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN
     if (hfToken) {
       headers.Authorization = `Bearer ${hfToken}`
     }
@@ -57,6 +57,30 @@ export default async function handler(req, res) {
     })
 
     const raw = await response.text()
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase()
+    const authRequired =
+      response.status === 401 ||
+      response.status === 403 ||
+      (!hfToken && contentType.includes('text/html'))
+
+    if (authRequired) {
+      return res.status(200).json({
+        success: false,
+        state: 'auth_required',
+        checkedAt: new Date().toISOString(),
+        workerUrl: DEFAULT_HF_WORKER_URL,
+        httpStatus: response.status,
+        keepalive: {
+          enabled: true,
+          ready: false,
+          provider: 'github_actions_to_notiva',
+          schedule: 'every_5_minutes',
+        },
+        message:
+          'HF Space private belum terautentikasi dari Vercel. Set HF_WORKER_TOKEN atau HF_TOKEN di Vercel Production lalu redeploy.',
+      })
+    }
+
     let worker = {}
 
     try {
@@ -107,6 +131,7 @@ export default async function handler(req, res) {
       state,
       checkedAt: new Date().toISOString(),
       workerUrl: DEFAULT_HF_WORKER_URL,
+      httpStatus: response.status,
       keepalive: {
         enabled: true,
         provider: 'github_actions_to_notiva',

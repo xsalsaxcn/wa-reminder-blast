@@ -1074,6 +1074,116 @@ async function safeFetchRecentAny(
   return []
 }
 
+
+async function safeFetchRecentByPhones(
+  table,
+  phoneColumns,
+  timeColumns,
+  phones,
+  sinceIso,
+  maxRows = 10000
+) {
+  const normalizedPhones = Array.from(
+    new Set((phones || []).map(cleanPhone).filter(Boolean))
+  )
+
+  if (!normalizedPhones.length) return []
+
+  const phoneChunkSize = 100
+  const concurrency = 6
+
+  for (const phoneColumn of phoneColumns || []) {
+    for (const timeColumn of timeColumns || []) {
+      const chunks = []
+
+      for (
+        let index = 0;
+        index < normalizedPhones.length;
+        index += phoneChunkSize
+      ) {
+        chunks.push(
+          normalizedPhones.slice(index, index + phoneChunkSize)
+        )
+      }
+
+      const rows = []
+      let schemaCompatible = true
+
+      for (
+        let index = 0;
+        index < chunks.length;
+        index += concurrency
+      ) {
+        const group = chunks.slice(index, index + concurrency)
+
+        const results = await Promise.all(
+          group.map(async (chunk) => {
+            try {
+              let query = supabaseAdmin
+                .from(table)
+                .select('*')
+                .in(phoneColumn, chunk)
+                .order(timeColumn, { ascending: false })
+                .limit(maxRows)
+
+              if (sinceIso) {
+                query = query.gte(timeColumn, sinceIso)
+              }
+
+              const result = await query
+
+              if (result.error) {
+                return {
+                  ok: false,
+                  error: result.error
+                }
+              }
+
+              return {
+                ok: true,
+                data: Array.isArray(result.data)
+                  ? result.data
+                  : []
+              }
+            } catch (error) {
+              return {
+                ok: false,
+                error
+              }
+            }
+          })
+        )
+
+        if (results.some((result) => !result.ok)) {
+          schemaCompatible = false
+          break
+        }
+
+        for (const result of results) {
+          rows.push(...result.data)
+
+          if (rows.length >= maxRows) {
+            return rows.slice(0, maxRows)
+          }
+        }
+      }
+
+      if (schemaCompatible) {
+        return rows.slice(0, maxRows)
+      }
+    }
+  }
+
+  // Compatibility fallback only when none of the candidate phone/time
+  // column combinations exist on the current schema.
+  return safeFetchRecentAny(
+    table,
+    timeColumns,
+    sinceIso,
+    maxRows
+  )
+}
+
 async function safeFetchDatabases(databaseIds) {
   const ids = Array.from(
     new Set((databaseIds || []).map(cleanText).filter(Boolean))
@@ -1321,19 +1431,25 @@ export default async function handler(req, res) {
         ).toISOString()
       : ''
 
+    const relevantPhoneList = Array.from(relevantPhones)
+
     const [
       incomingRecent,
       outgoingRecent
     ] = await Promise.all([
-      safeFetchRecentAny(
+      safeFetchRecentByPhones(
         'wa_incoming_messages',
+        ['phone', 'from', 'wa_id', 'sender_phone', 'customer_phone'],
         ['received_at', 'created_at'],
+        relevantPhoneList,
         analyticsSince,
         10000
       ),
-      safeFetchRecentAny(
+      safeFetchRecentByPhones(
         'wa_outgoing_messages',
+        ['phone', 'to', 'wa_id', 'customer_phone', 'recipient_phone'],
         ['sent_at', 'created_at'],
+        relevantPhoneList,
         analyticsSince,
         10000
       )

@@ -933,13 +933,19 @@ export default function JobPerformancePage() {
       setError('')
     }
 
+    const controller = new AbortController()
+    const timeout = window.setTimeout(function () {
+      controller.abort()
+    }, 30000)
+
     try {
       const response = await fetch('/api/job-performance/list?' + buildQuery(nextPage, true), {
         method: 'GET',
         headers: {
           Accept: 'application/json'
         },
-        cache: 'no-store'
+        cache: 'no-store',
+        signal: controller.signal
       })
 
       const data = await response.json().catch(function () {
@@ -986,17 +992,22 @@ export default function JobPerformancePage() {
         to: toNumber(nextPagination.to)
       })
     } catch (err) {
+      const message = err?.name === 'AbortError'
+        ? 'Job Performance terlalu lama memuat (>30 detik). Silakan Refresh; backend sedang diproses.'
+        : (err.message || 'Gagal load job performance.')
+
       if (!silent) {
         setRows([])
         setSummary(null)
-        setError(err.message || 'Gagal load job performance.')
+        setError(message)
       } else {
         console.warn(
           'Job Performance silent refresh gagal:',
-          err.message || 'Unknown error'
+          message || 'Unknown error'
         )
       }
     } finally {
+      window.clearTimeout(timeout)
       listRequestInFlightRef.current = false
 
       if (!silent) {

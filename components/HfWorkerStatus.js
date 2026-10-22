@@ -23,6 +23,15 @@ function formatTime(value) {
 }
 
 function stateMeta(state) {
+  if (state === 'auth_required') {
+    return {
+      label: 'AUTH REQUIRED',
+      dot: 'bg-amber-500',
+      badge: 'bg-amber-50 text-amber-700 ring-amber-200',
+      panel: 'border-amber-200 bg-amber-50/40',
+    }
+  }
+
   if (state === 'online') {
     return {
       label: 'ONLINE',
@@ -116,7 +125,7 @@ export default function HfWorkerStatus() {
           </div>
 
           <p className="mt-1 text-xs text-slate-500">
-            Keepalive: GitHub Actions → Notiva → HF setiap 5 menit · Status refresh setiap 15 detik
+            Keepalive: GitHub Actions → Notiva → HF setiap 5 menit · Status refresh berkala
           </p>
         </div>
 
