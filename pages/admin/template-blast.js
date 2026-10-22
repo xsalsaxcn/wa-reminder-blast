@@ -648,6 +648,53 @@ export default function TemplateBlastPage() {
     }
   }
 
+  async function startBackgroundJob(job) {
+    const targetJob = job || createdJob
+
+    if (!targetJob?.id) {
+      setMessage('Belum ada job. Klik Create Job dulu.')
+      return null
+    }
+
+    setProcessing(true)
+    setMessage('Starting background template blast...')
+    setDetail(null)
+
+    try {
+      const response = await fetch('/api/jobs/start-template-background', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          job_id: targetJob.id
+        })
+      })
+
+      const data = await readResponse(response)
+      setDetail(data)
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          getErrorMessage(data, 'Gagal memulai background template blast.')
+        )
+      }
+
+      setMessage(
+        data.message ||
+        'Background template blast aktif. Queue akan dilanjutkan server; halaman boleh ditutup.'
+      )
+
+      return data
+    } catch (error) {
+      setMessage(error.message || 'Gagal memulai background template blast.')
+      return null
+    } finally {
+      setProcessing(false)
+    }
+  }
+
   async function processJob(job) {
     const targetJob = job || createdJob
 
@@ -760,8 +807,9 @@ export default function TemplateBlastPage() {
 
   async function createAndProcess() {
     const job = await createJob()
+
     if (job?.id) {
-      await processJob(job)
+      await startBackgroundJob(job)
     }
   }
 
@@ -1082,11 +1130,11 @@ export default function TemplateBlastPage() {
 
                     <button
                       type="button"
-                      onClick={() => processJob()}
+                      onClick={() => startBackgroundJob()}
                       disabled={processing || !createdJob?.id}
                       className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
                     >
-                      Process Current Job
+                      Run Current Job in Background
                     </button>
                   </div>
 
