@@ -1,0 +1,30 @@
+name: HF Space Keepalive
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping-notiva-hf-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Ping Notiva HF status proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            --connect-timeout 15 \
+            --max-time 45 \
+            --retry 2 \
+            --retry-delay 5 \
+            -H "Cache-Control: no-cache" \
+            "https://wa-reminder-blast.vercel.app/api/hf-worker/status" \
+            >/tmp/notiva-hf-status.json
+
+          cat /tmp/notiva-hf-status.json
