@@ -8,23 +8,49 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: notiva-hf-space-keepalive
+  cancel-in-progress: true
+
+env:
+  HF_SPACE_URL: https://ai-think-wa-reminder-blast-runner.hf.space/
+
 jobs:
-  ping-notiva-hf-status:
+  keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
 
     steps:
-      - name: Ping Notiva HF status proxy
+      - name: Keep Hugging Face Space warm
         shell: bash
         run: |
-          set -euo pipefail
-          curl --fail --silent --show-error \
-            --connect-timeout 15 \
-            --max-time 45 \
-            --retry 2 \
-            --retry-delay 5 \
-            -H "Cache-Control: no-cache" \
-            "https://wa-reminder-blast.vercel.app/api/hf-worker/status" \
-            >/tmp/notiva-hf-status.json
+          set -u
 
-          cat /tmp/notiva-hf-status.json
+          success=0
+
+          for attempt in 1 2 3 4; do
+            echo "HF keepalive attempt ${attempt}/4"
+
+            http_code="$(
+              curl -L                 --silent                 --show-error                 --output /tmp/hf-keepalive-body.txt                 --write-out "%{http_code}"                 --connect-timeout 15                 --max-time 75                 -H "Accept: application/json,text/plain,*/*"                 -H "Cache-Control: no-cache"                 -H "User-Agent: Notiva-HF-Keepalive/2.0"                 "${HF_SPACE_URL}?keepalive=$(date +%s)"                 || true
+            )"
+
+            echo "HTTP ${http_code:-000}"
+
+            if [[ "${http_code:-000}" =~ ^2[0-9][0-9]$ ]] ||                [[ "${http_code:-000}" =~ ^3[0-9][0-9]$ ]]; then
+              success=1
+              break
+            fi
+
+            sleep 15
+          done
+
+          echo "---- HF response preview ----"
+          head -c 1200 /tmp/hf-keepalive-body.txt 2>/dev/null || true
+          echo
+          echo "-----------------------------"
+
+          if [ "${success}" -ne 1 ]; then
+            echo "HF Space did not become healthy during this keepalive run."
+            exit 1
+          fi
