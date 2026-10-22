@@ -115,11 +115,19 @@ function normalizeRow(row) {
     status: getFirst(row, ['status', 'job_status'], '-'),
     createdAt: getFirst(row, ['created_at', 'createdAt', 'started_at'], ''),
     updatedAt: getFirst(row, ['updated_at', 'updatedAt'], ''),
+    backgroundEnabled: Boolean(
+      getFirst(row, ['background_enabled', 'backgroundEnabled'], false)
+    ),
     backgroundActive: Boolean(
       getFirst(row, ['background_active', 'backgroundActive'], false)
     ),
     backgroundStale: Boolean(
       getFirst(row, ['background_stale', 'backgroundStale'], false)
+    ),
+    backgroundLastError: getFirst(
+      row,
+      ['background_last_error', 'backgroundLastError'],
+      ''
     ),
     backgroundHeartbeatAt: getFirst(
       row,
@@ -586,6 +594,7 @@ function DetailPanel({ detail, loading, error, onClose }) {
 function JobCard({ item, onMetricClick, onManualRunDone }) {
   const [manualRunning, setManualRunning] = useState(false)
   const [manualMessage, setManualMessage] = useState('')
+  const serverBackgroundEnabled = Boolean(item?.backgroundEnabled)
   const serverBackgroundActive = Boolean(item?.backgroundActive)
   const serverBackgroundStale = Boolean(item?.backgroundStale)
   const [backgroundStarted, setBackgroundStarted] = useState(
@@ -604,7 +613,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
   const canManualRun = Boolean(item?.id) && isTemplateJob && remaining > 0
 
   async function manualRun() {
-    if (!canManualRun || manualRunning || backgroundStarted || serverBackgroundActive) return
+    if (!canManualRun || manualRunning || backgroundStarted || serverBackgroundEnabled) return
 
     setManualRunning(true)
     setManualMessage(`Menyiapkan background runner untuk ${remaining} pending...`)
@@ -685,24 +694,24 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 disabled={
                   manualRunning ||
                   backgroundStarted ||
-                  serverBackgroundActive
+                  serverBackgroundEnabled
                 }
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                title={backgroundStarted || serverBackgroundActive
-                  ? 'Background masih aktif di server. Tombol dikunci untuk mencegah start berulang.'
-                  : (
+                title={serverBackgroundEnabled
+                  ? (
                       serverBackgroundStale
-                        ? 'Heartbeat background sudah stale. Klik untuk restart sisa pending.'
-                        : 'Jalankan sisa pending di background; browser boleh ditutup'
-                    )}
+                        ? 'Auto Recovery aktif. Server akan mencoba melanjutkan otomatis; tidak perlu klik ulang.'
+                        : 'Background masih aktif di server. Tombol dikunci untuk mencegah start berulang.'
+                    )
+                  : 'Jalankan sisa pending di background; browser boleh ditutup'}
               >
-                {backgroundStarted || serverBackgroundActive
-                  ? 'Background Running'
-                  : (
-                      manualRunning
-                        ? 'Starting...'
-                        : (serverBackgroundStale ? 'Restart Background' : 'Run Background')
-                    )}
+                {serverBackgroundEnabled
+                  ? (
+                      serverBackgroundStale
+                        ? 'Auto Recovery'
+                        : 'Background Running'
+                    )
+                  : (manualRunning ? 'Starting...' : 'Run Background')}
               </button>
             ) : null}
           </div>
@@ -723,10 +732,10 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
             </p>
           ) : null}
 
-          {!manualMessage && serverBackgroundStale ? (
+          {!manualMessage && serverBackgroundEnabled && serverBackgroundStale ? (
             <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
-              Background berhenti / heartbeat stale. Pending masih {remaining}.
-              Klik Restart Background untuk melanjutkan sisa pending.
+              Auto Recovery aktif. Pending masih {remaining}. Server akan mencoba
+              melanjutkan otomatis; tidak perlu klik ulang.
             </p>
           ) : null}
 
@@ -908,9 +917,13 @@ export default function JobPerformancePage() {
     return params.toString()
   }
 
-  async function loadData(nextPage = page) {
-    setLoading(true)
-    setError('')
+  async function loadData(nextPage = page, options = {}) {
+    const silent = Boolean(options?.silent)
+
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
 
     try {
       const response = await fetch('/api/job-performance/list?' + buildQuery(nextPage, true), {
@@ -965,11 +978,20 @@ export default function JobPerformancePage() {
         to: toNumber(nextPagination.to)
       })
     } catch (err) {
-      setRows([])
-      setSummary(null)
-      setError(err.message || 'Gagal load job performance.')
+      if (!silent) {
+        setRows([])
+        setSummary(null)
+        setError(err.message || 'Gagal load job performance.')
+      } else {
+        console.warn(
+          'Job Performance silent refresh gagal:',
+          err.message || 'Unknown error'
+        )
+      }
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }
 
@@ -1032,6 +1054,23 @@ export default function JobPerformancePage() {
   useEffect(function () {
     loadData(1)
   }, [])
+
+  useEffect(function () {
+    const timer = window.setInterval(function () {
+      loadData(page, { silent: true })
+    }, 15000)
+
+    return function () {
+      window.clearInterval(timer)
+    }
+  }, [
+    page,
+    filters.start,
+    filters.end,
+    filters.type,
+    filters.status,
+    filters.search
+  ])
 
   const items = useMemo(function () {
     return rows.map(normalizeRow)

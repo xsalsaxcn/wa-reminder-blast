@@ -110,7 +110,9 @@ async function recoverJob(req, job) {
     ? Math.max(0, Math.floor((Date.now() - heartbeatMs) / 1000))
     : Number.POSITIVE_INFINITY
 
-  if (heartbeatAgeSeconds <= STALE_SECONDS) {
+  const lastError = cleanText(job.background_last_error)
+
+  if (heartbeatAgeSeconds <= STALE_SECONDS && !lastError) {
     return {
       job_id: job.id,
       action: 'healthy',
@@ -210,7 +212,8 @@ export default async function handler(req, res) {
       .select(
         'id, status, send_mode, created_at, updated_at, ' +
         'background_run_enabled, background_started_at, ' +
-        'background_heartbeat_at, background_recovery_count'
+        'background_heartbeat_at, background_recovery_count, ' +
+        'background_last_error'
       )
       .eq('send_mode', 'template')
       .eq('background_run_enabled', true)

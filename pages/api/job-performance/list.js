@@ -716,21 +716,32 @@ function buildPerformanceForJob({
 
   const createdAt = job?.created_at || job?.scheduled_at || job?.updated_at || null
   const updatedAt = job?.updated_at || createdAt
-  const updatedAtMs = getTime(updatedAt)
-  const heartbeatAgeSeconds = updatedAtMs > 0
-    ? Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000))
+  const backgroundHeartbeatAt =
+    job?.background_heartbeat_at ||
+    updatedAt
+  const heartbeatAtMs = getTime(backgroundHeartbeatAt)
+  const heartbeatAgeSeconds = heartbeatAtMs > 0
+    ? Math.max(0, Math.floor((Date.now() - heartbeatAtMs) / 1000))
     : null
   const processingJob = normalizeStatus(job?.status) === 'processing'
+  const backgroundEnabled = job?.background_run_enabled === true
+  const backgroundLastError = cleanText(job?.background_last_error)
   const backgroundActive =
     processingJob &&
+    backgroundEnabled &&
     pendingItems > 0 &&
+    !backgroundLastError &&
     heartbeatAgeSeconds !== null &&
     heartbeatAgeSeconds <= 180
   const backgroundStale =
     processingJob &&
+    backgroundEnabled &&
     pendingItems > 0 &&
-    heartbeatAgeSeconds !== null &&
-    heartbeatAgeSeconds > 180
+    (
+      Boolean(backgroundLastError) ||
+      heartbeatAgeSeconds === null ||
+      heartbeatAgeSeconds > 180
+    )
 
   return {
     id: jobId,
@@ -745,10 +756,12 @@ function buildPerformanceForJob({
     database: getDatabaseName(job, databaseMap),
     created_at: createdAt,
     updated_at: updatedAt,
+    background_enabled: backgroundEnabled,
     background_active: backgroundActive,
     background_stale: backgroundStale,
-    background_heartbeat_at: updatedAt,
+    background_heartbeat_at: backgroundHeartbeatAt,
     background_heartbeat_age_seconds: heartbeatAgeSeconds,
+    background_last_error: backgroundLastError,
 
     target,
     target_count: target,
