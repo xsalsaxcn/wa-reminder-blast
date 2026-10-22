@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
 
@@ -895,6 +895,8 @@ export default function JobPerformancePage() {
     search: ''
   })
 
+  const listRequestInFlightRef = useRef(false)
+
   function buildQuery(targetPage = page, includePaging = true) {
     const params = new URLSearchParams()
 
@@ -919,6 +921,12 @@ export default function JobPerformancePage() {
 
   async function loadData(nextPage = page, options = {}) {
     const silent = Boolean(options?.silent)
+
+    if (silent && listRequestInFlightRef.current) {
+      return
+    }
+
+    listRequestInFlightRef.current = true
 
     if (!silent) {
       setLoading(true)
@@ -989,6 +997,8 @@ export default function JobPerformancePage() {
         )
       }
     } finally {
+      listRequestInFlightRef.current = false
+
       if (!silent) {
         setLoading(false)
       }
@@ -1058,7 +1068,7 @@ export default function JobPerformancePage() {
   useEffect(function () {
     const timer = window.setInterval(function () {
       loadData(page, { silent: true })
-    }, 15000)
+    }, 60000)
 
     return function () {
       window.clearInterval(timer)

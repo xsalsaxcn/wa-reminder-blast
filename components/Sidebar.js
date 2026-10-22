@@ -88,6 +88,11 @@ const OPERATIONAL_MENUS = [
     roles: ['master', 'admin', 'user', 'agent']
   },
   {
+    label: 'Worker Status',
+    href: '/worker-status',
+    roles: ['master', 'admin', 'user', 'agent']
+  },
+  {
     label: 'Logs',
     href: '/logs',
     roles: ['master', 'admin', 'user', 'agent']

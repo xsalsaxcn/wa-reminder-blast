@@ -888,7 +888,7 @@ function applyJobFilters(query, req) {
   return next
 }
 
-async function fetchByJobIds(table, jobIds, maxRows = 25000) {
+async function fetchByJobIds(table, jobIds, maxRows = 25000, selectFields = '*') {
   const ids = Array.from(
     new Set((jobIds || []).map(cleanText).filter(Boolean))
   )
@@ -904,7 +904,7 @@ async function fetchByJobIds(table, jobIds, maxRows = 25000) {
 
     const result = await supabaseAdmin
       .from(table)
-      .select('*')
+      .select(selectFields)
       .in('job_id', ids)
       .range(from, to)
 
@@ -923,7 +923,7 @@ async function fetchByJobIds(table, jobIds, maxRows = 25000) {
   return rows
 }
 
-async function safeFetchByJobIds(table, jobIds, maxRows = 25000) {
+async function safeFetchByJobIds(table, jobIds, maxRows = 25000, selectFields = '*') {
   const ids = Array.from(
     new Set((jobIds || []).map(cleanText).filter(Boolean))
   )
@@ -931,7 +931,7 @@ async function safeFetchByJobIds(table, jobIds, maxRows = 25000) {
   if (!ids.length) return []
 
   try {
-    const bulkRows = await fetchByJobIds(table, ids, maxRows)
+    const bulkRows = await fetchByJobIds(table, ids, maxRows, selectFields)
 
     if (bulkRows.length) return bulkRows
   } catch (error) {
@@ -945,7 +945,7 @@ async function safeFetchByJobIds(table, jobIds, maxRows = 25000) {
     try {
       const result = await supabaseAdmin
         .from(table)
-        .select('*')
+        .select(selectFields)
         .eq('job_id', jobId)
         .limit(maxRows)
 
@@ -963,7 +963,8 @@ async function safeFetchByJobIds(table, jobIds, maxRows = 25000) {
 async function safeFetchByMetaIds(
   table,
   metaIds,
-  maxRows = 25000
+  maxRows = 25000,
+  selectFields = '*'
 ) {
   const ids = Array.from(
     new Set((metaIds || []).map(cleanText).filter(Boolean))
@@ -973,22 +974,38 @@ async function safeFetchByMetaIds(
 
   const rows = []
   const chunkSize = 100
+  const concurrency = 6
+  const chunks = []
 
   for (let index = 0; index < ids.length; index += chunkSize) {
-    const chunk = ids.slice(index, index + chunkSize)
+    chunks.push(ids.slice(index, index + chunkSize))
+  }
 
-    try {
-      const result = await supabaseAdmin
-        .from(table)
-        .select('*')
-        .in('meta_message_id', chunk)
-        .limit(maxRows)
+  for (let index = 0; index < chunks.length; index += concurrency) {
+    const group = chunks.slice(index, index + concurrency)
 
-      if (!result.error && Array.isArray(result.data)) {
-        rows.push(...result.data)
-      }
-    } catch (error) {
-      // A failed callback lookup must not break the whole page.
+    const results = await Promise.all(
+      group.map(async (chunk) => {
+        try {
+          const result = await supabaseAdmin
+            .from(table)
+            .select(selectFields)
+            .in('meta_message_id', chunk)
+            .limit(maxRows)
+
+          if (!result.error && Array.isArray(result.data)) {
+            return result.data
+          }
+        } catch (error) {
+          // A failed callback lookup must not break the whole page.
+        }
+
+        return []
+      })
+    )
+
+    for (const batch of results) {
+      rows.push(...batch)
     }
   }
 
@@ -1141,6 +1158,8 @@ function summarizePerformanceRows(rows) {
 }
 
 export default async function handler(req, res) {
+  const requestStartedAt = Date.now()
+
   res.setHeader(
     'Cache-Control',
     'no-store, no-cache, must-revalidate, proxy-revalidate'
@@ -1243,8 +1262,18 @@ export default async function handler(req, res) {
       deliveryAttemptRows,
       databases
     ] = await Promise.all([
-      safeFetchByJobIds('send_job_items', jobIds, 20000),
-      safeFetchByJobIds('send_delivery_logs', jobIds, 25000),
+      safeFetchByJobIds(
+        'send_job_items',
+        jobIds,
+        20000,
+        'id,job_id,phone,status,processed_at,created_at,updated_at,error_message'
+      ),
+      safeFetchByJobIds(
+        'send_delivery_logs',
+        jobIds,
+        25000,
+        'id,job_id,item_id,status,mode,error_message,meta_message_id,created_at'
+      ),
       safeFetchDatabases(databaseIds)
     ])
 
@@ -1262,7 +1291,8 @@ export default async function handler(req, res) {
     const deliveryCallbackRows = await safeFetchByMetaIds(
       'send_delivery_logs',
       metaMessageIds,
-      25000
+      25000,
+      'id,job_id,item_id,status,mode,error_message,meta_message_id,created_at'
     )
 
     const deliveryRows = [
@@ -1397,7 +1427,10 @@ export default async function handler(req, res) {
         delivery_logs_loaded: deliveryRows.length,
         delivery_meta_ids: metaMessageIds.length,
         analytics_since: analyticsSince || null,
-        final_delivery_status: true
+        final_delivery_status: true,
+        request_duration_ms: Date.now() - requestStartedAt,
+        optimized_query_payloads: true,
+        callback_lookup_concurrency: 6
       }
     })
   } catch (error) {
