@@ -973,8 +973,8 @@ async function safeFetchByMetaIds(
   if (!ids.length) return []
 
   const rows = []
-  const chunkSize = 100
-  const concurrency = 6
+  const chunkSize = 250
+  const concurrency = 10
   const chunks = []
 
   for (let index = 0; index < ids.length; index += chunkSize) {
@@ -1546,7 +1546,8 @@ export default async function handler(req, res) {
         final_delivery_status: true,
         request_duration_ms: Date.now() - requestStartedAt,
         optimized_query_payloads: true,
-        callback_lookup_concurrency: 6
+        callback_lookup_chunk_size: 250,
+        callback_lookup_concurrency: 10
       }
     })
   } catch (error) {
