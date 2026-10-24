@@ -896,6 +896,7 @@ export default function JobPerformancePage() {
   })
 
   const listRequestInFlightRef = useRef(false)
+  const listRequestSequenceRef = useRef(0)
 
   function buildQuery(targetPage = page, includePaging = true) {
     const params = new URLSearchParams()
@@ -926,6 +927,8 @@ export default function JobPerformancePage() {
       return
     }
 
+    const requestSequence = listRequestSequenceRef.current + 1
+    listRequestSequenceRef.current = requestSequence
     listRequestInFlightRef.current = true
 
     if (!silent) {
@@ -954,6 +957,12 @@ export default function JobPerformancePage() {
 
       if (!response.ok || data.success === false) {
         throw new Error(data.message || 'Gagal load job performance.')
+      }
+
+      // Response lama (misalnya silent refresh page sebelumnya)
+      // tidak boleh menimpa page terbaru yang dipilih user.
+      if (requestSequence !== listRequestSequenceRef.current) {
+        return
       }
 
       const items = Array.isArray(data.items)
