@@ -694,13 +694,13 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 disabled={
                   manualRunning ||
                   backgroundStarted ||
-                  serverBackgroundEnabled
+                  (serverBackgroundEnabled && !serverBackgroundStale)
                 }
                 className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white shadow-sm hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 title={serverBackgroundEnabled
                   ? (
                       serverBackgroundStale
-                        ? 'Auto Recovery aktif. Server akan mencoba melanjutkan otomatis; tidak perlu klik ulang.'
+                        ? 'Background terdeteksi stale. Klik Restart Background untuk membangunkan worker sekarang; supervisor tetap akan mencoba otomatis.'
                         : 'Background masih aktif di server. Tombol dikunci untuk mencegah start berulang.'
                     )
                   : 'Jalankan sisa pending di background; browser boleh ditutup'}
@@ -708,7 +708,7 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
                 {serverBackgroundEnabled
                   ? (
                       serverBackgroundStale
-                        ? 'Auto Recovery'
+                        ? 'Restart Background'
                         : 'Background Running'
                     )
                   : (manualRunning ? 'Starting...' : 'Run Background')}
@@ -734,8 +734,8 @@ function JobCard({ item, onMetricClick, onManualRunDone }) {
 
           {!manualMessage && serverBackgroundEnabled && serverBackgroundStale ? (
             <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
-              Auto Recovery aktif. Pending masih {remaining}. Server akan mencoba
-              melanjutkan otomatis; tidak perlu klik ulang.
+              Background terdeteksi stale. Pending masih {remaining}. Supervisor akan
+              mencoba otomatis, atau klik Restart Background untuk bangunkan sekarang.
             </p>
           ) : null}
 
