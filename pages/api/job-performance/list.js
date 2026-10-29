@@ -960,6 +960,146 @@ async function safeFetchByJobIds(table, jobIds, maxRows = 25000, selectFields = 
   return rows
 }
 
+
+function expandHistoryPhoneVariants(values) {
+  const out = new Set()
+
+  for (const value of values || []) {
+    const raw = cleanText(value)
+    if (!raw) continue
+
+    out.add(raw)
+
+    const digits = raw.replace(/\D/g, '')
+    if (!digits) continue
+
+    out.add(digits)
+
+    if (digits.startsWith('62') && digits.length > 2) {
+      out.add(`+${digits}`)
+      out.add(`0${digits.slice(2)}`)
+    } else if (digits.startsWith('0') && digits.length > 1) {
+      out.add(`62${digits.slice(1)}`)
+      out.add(`+62${digits.slice(1)}`)
+    } else if (digits.startsWith('8')) {
+      out.add(`62${digits}`)
+      out.add(`+62${digits}`)
+      out.add(`0${digits}`)
+    }
+  }
+
+  return Array.from(out)
+}
+
+async function safeFetchRecentByPhonesScoped(
+  table,
+  phones,
+  timestampColumns,
+  sinceIso,
+  maxRows = 10000
+) {
+  const ids = expandHistoryPhoneVariants(phones)
+
+  if (!ids.length) {
+    return {
+      ok: true,
+      rows: [],
+      query_mode: 'phone_scoped_empty'
+    }
+  }
+
+  const chunkSize = 200
+  const concurrency = 6
+  const chunks = []
+
+  for (let index = 0; index < ids.length; index += chunkSize) {
+    chunks.push(ids.slice(index, index + chunkSize))
+  }
+
+  const rows = []
+  let cursor = 0
+  let firstError = null
+
+  async function worker() {
+    while (true) {
+      const index = cursor
+      cursor += 1
+      if (index >= chunks.length) return
+
+      const chunk = chunks[index]
+      let success = false
+      let lastError = null
+
+      for (const timestampColumn of timestampColumns || []) {
+        try {
+          let query = supabaseAdmin
+            .from(table)
+            .select('*')
+            .in('phone', chunk)
+            .order(timestampColumn, { ascending: false })
+            .limit(Math.min(1500, maxRows))
+
+          if (sinceIso) {
+            query = query.gte(timestampColumn, sinceIso)
+          }
+
+          const result = await query
+
+          if (!result.error && Array.isArray(result.data)) {
+            rows.push(...result.data)
+            success = true
+            break
+          }
+
+          lastError = result.error || null
+        } catch (error) {
+          lastError = error
+        }
+      }
+
+      if (!success && !firstError) {
+        firstError = lastError || new Error(`Scoped query ${table} gagal.`)
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, chunks.length) },
+      () => worker()
+    )
+  )
+
+  if (firstError && rows.length === 0) {
+    return {
+      ok: false,
+      rows: [],
+      query_mode: 'compat_fallback',
+      error: firstError?.message || String(firstError)
+    }
+  }
+
+  const seen = new Set()
+  const unique = []
+
+  for (const row of rows) {
+    const id = cleanText(row?.id || '')
+    const key = id || JSON.stringify(row)
+    if (seen.has(key)) continue
+
+    seen.add(key)
+    unique.push(row)
+
+    if (unique.length >= maxRows) break
+  }
+
+  return {
+    ok: true,
+    rows: unique,
+    query_mode: 'phone_scoped'
+  }
+}
+
 async function safeFetchByMetaIds(
   table,
   metaIds,
@@ -1400,17 +1540,14 @@ export default async function handler(req, res) {
       )
     )
 
-    const deliveryCallbackRows = await safeFetchByMetaIds(
+    const deliveryCallbackPromise = safeFetchByMetaIds(
       'send_delivery_logs',
       metaMessageIds,
       25000,
       'id,job_id,item_id,status,mode,error_message,meta_message_id,created_at'
     )
 
-    const deliveryRows = [
-      ...(deliveryAttemptRows || []),
-      ...(deliveryCallbackRows || [])
-    ]
+
 
     const relevantPhones = new Set(
       items.map(getItemPhone).filter(Boolean)
@@ -1434,28 +1571,56 @@ export default async function handler(req, res) {
       : ''
 
     const relevantPhoneList = Array.from(relevantPhones)
+    const historyQueryPhones = items
+      .map((row) => cleanText(row?.phone || ''))
+      .filter(Boolean)
 
-    const [
-      incomingRecent,
-      outgoingRecent
-    ] = await Promise.all([
-      safeFetchRecentByPhones(
+    const [incomingScoped, outgoingScoped] = await Promise.all([
+      safeFetchRecentByPhonesScoped(
+        'wa_incoming_messages',
+        historyQueryPhones,
+        ['received_at', 'created_at'],
+        analyticsSince,
+        10000
+      ),
+      safeFetchRecentByPhonesScoped(
+        'wa_outgoing_messages',
+        historyQueryPhones,
+        ['sent_at', 'created_at'],
+        analyticsSince,
+        10000
+      )
+    ])
+
+    const [incomingRecent, outgoingRecent] = await Promise.all([
+      incomingScoped.ok
+        ? Promise.resolve(incomingScoped.rows)
+        : (safeFetchRecentByPhones(
         'wa_incoming_messages',
         ['phone', 'from', 'wa_id', 'sender_phone', 'customer_phone'],
         ['received_at', 'created_at'],
         relevantPhoneList,
         analyticsSince,
         10000
-      ),
-      safeFetchRecentByPhones(
+      )),
+      outgoingScoped.ok
+        ? Promise.resolve(outgoingScoped.rows)
+        : (safeFetchRecentByPhones(
         'wa_outgoing_messages',
         ['phone', 'to', 'wa_id', 'customer_phone', 'recipient_phone'],
         ['sent_at', 'created_at'],
         relevantPhoneList,
         analyticsSince,
         10000
-      )
+      ))
     ])
+
+    const deliveryCallbackRows = await deliveryCallbackPromise
+    const deliveryRows = [
+      ...(deliveryAttemptRows || []),
+      ...(deliveryCallbackRows || [])
+    ]
+
 
     const incomingRows = incomingRecent.filter((row) => {
       return relevantPhones.has(getIncomingPhone(row))
@@ -1537,6 +1702,11 @@ export default async function handler(req, res) {
         total_jobs: totalJobs,
         job_items_loaded: items.length,
         incoming_loaded: incomingRecent.length,
+        history_query_mode:
+          incomingScoped.ok && outgoingScoped.ok
+            ? 'phone_scoped'
+            : 'compat_fallback',
+        history_query_phone_count: historyQueryPhones.length,
         incoming_relevant: incomingRows.length,
         outgoing_loaded: outgoingRecent.length,
         outgoing_relevant: outgoingRows.length,
@@ -1550,7 +1720,8 @@ export default async function handler(req, res) {
         optimized_query_payloads: true,
         callback_lookup_chunk_size: 80,
         callback_lookup_concurrency: 6,
-        callback_lookup_url_safe: true
+        callback_lookup_url_safe: true,
+        callback_lookup_parallel: true
       }
     })
   } catch (error) {
