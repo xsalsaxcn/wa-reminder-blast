@@ -968,23 +968,17 @@ function expandHistoryPhoneVariants(values) {
     const raw = cleanText(value)
     if (!raw) continue
 
-    out.add(raw)
-
     const digits = raw.replace(/\D/g, '')
     if (!digits) continue
 
-    out.add(digits)
-
     if (digits.startsWith('62') && digits.length > 2) {
-      out.add(`+${digits}`)
-      out.add(`0${digits.slice(2)}`)
+      out.add(digits)
     } else if (digits.startsWith('0') && digits.length > 1) {
       out.add(`62${digits.slice(1)}`)
-      out.add(`+62${digits.slice(1)}`)
     } else if (digits.startsWith('8')) {
       out.add(`62${digits}`)
-      out.add(`+62${digits}`)
-      out.add(`0${digits}`)
+    } else {
+      out.add(digits)
     }
   }
 
@@ -1707,6 +1701,7 @@ export default async function handler(req, res) {
             ? 'phone_scoped'
             : 'compat_fallback',
         history_query_phone_count: historyQueryPhones.length,
+        history_phone_strategy: 'canonical_62_indexed',
         incoming_relevant: incomingRows.length,
         outgoing_loaded: outgoingRecent.length,
         outgoing_relevant: outgoingRows.length,
