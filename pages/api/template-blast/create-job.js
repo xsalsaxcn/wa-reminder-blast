@@ -418,9 +418,26 @@ export default async function handler(req, res) {
       .insert(rows)
 
     if (insertResult.error) {
+      // Parent job was created before its items. Never leave a target>0
+      // orphan job behind when the item insert fails.
+      let cleanupError = null
+
+      try {
+        const cleanupResult = await supabaseAdmin
+          .from('send_jobs')
+          .delete()
+          .eq('id', job.id)
+
+        cleanupError = cleanupResult.error || null
+      } catch (error) {
+        cleanupError = error
+      }
+
       return res.status(500).json({
         success: false,
-        message: insertResult.error.message
+        message: insertResult.error.message,
+        job_cleanup: cleanupError ? 'failed' : 'deleted',
+        cleanup_error: cleanupError?.message || null
       })
     }
 

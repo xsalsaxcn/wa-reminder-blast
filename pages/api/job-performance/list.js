@@ -1610,9 +1610,37 @@ export default async function handler(req, res) {
     ])
 
     const deliveryCallbackRows = await deliveryCallbackPromise
+
+    // Webhook callback rows are keyed by Meta message ID and may not have job_id.
+    // Link them to the originating job in memory from the accepted attempt.
+    // This keeps per-job aggregation correct without any extra DB query.
+    const deliveryJobByMeta = new Map()
+
+    for (const row of deliveryAttemptRows || []) {
+      const metaId = cleanText(row?.meta_message_id || '')
+      const jobId = cleanText(row?.job_id || '')
+
+      if (metaId && jobId && !deliveryJobByMeta.has(metaId)) {
+        deliveryJobByMeta.set(metaId, jobId)
+      }
+    }
+
+    const linkedDeliveryCallbackRows = (deliveryCallbackRows || []).map((row) => {
+      const metaId = cleanText(row?.meta_message_id || '')
+      const existingJobId = cleanText(row?.job_id || '')
+      const linkedJobId = existingJobId || deliveryJobByMeta.get(metaId) || ''
+
+      if (!linkedJobId || existingJobId) return row
+
+      return {
+        ...row,
+        job_id: linkedJobId
+      }
+    })
+
     const deliveryRows = [
       ...(deliveryAttemptRows || []),
-      ...(deliveryCallbackRows || [])
+      ...linkedDeliveryCallbackRows
     ]
 
 
@@ -1707,6 +1735,7 @@ export default async function handler(req, res) {
         outgoing_relevant: outgoingRows.length,
         delivery_attempt_logs_loaded: deliveryAttemptRows.length,
         delivery_callback_logs_loaded: deliveryCallbackRows.length,
+        delivery_callback_linked_in_memory: linkedDeliveryCallbackRows.filter((row) => cleanText(row?.job_id || '')).length,
         delivery_logs_loaded: deliveryRows.length,
         delivery_meta_ids: metaMessageIds.length,
         analytics_since: analyticsSince || null,
