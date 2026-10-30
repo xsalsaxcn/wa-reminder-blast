@@ -1533,17 +1533,7 @@ export default async function handler(req, res) {
           .filter(Boolean)
       )
     )
-
-    const deliveryCallbackPromise = safeFetchByMetaIds(
-      'send_delivery_logs',
-      metaMessageIds,
-      25000,
-      'id,job_id,item_id,status,mode,error_message,meta_message_id,created_at'
-    )
-
-
-
-    const relevantPhones = new Set(
+const relevantPhones = new Set(
       items.map(getItemPhone).filter(Boolean)
     )
 
@@ -1609,7 +1599,38 @@ export default async function handler(req, res) {
       ))
     ])
 
-    const deliveryCallbackRows = await deliveryCallbackPromise
+    // Reuse outgoing history already loaded for reply analytics.
+    // Meta webhook updates wa_outgoing_messages.status by meta_message_id,
+    // so this avoids a second, expensive send_delivery_logs callback lookup.
+    const activeMetaIds = new Set(metaMessageIds)
+
+    const deliveryCallbackRows = (outgoingRecent || [])
+      .map((row) => {
+        const metaId = cleanText(
+          row?.meta_message_id ||
+          row?.message_id ||
+          row?.wamid ||
+          ''
+        )
+
+        if (!metaId || !activeMetaIds.has(metaId)) return null
+
+        return {
+          id: row?.id || null,
+          job_id: null,
+          item_id: null,
+          status: row?.status || 'sent',
+          mode: 'webhook_status',
+          error_message: row?.error_message || row?.error || null,
+          meta_message_id: metaId,
+          created_at:
+            row?.updated_at ||
+            row?.sent_at ||
+            row?.created_at ||
+            null
+        }
+      })
+      .filter(Boolean)
 
     // Webhook callback rows are keyed by Meta message ID and may not have job_id.
     // Link them to the originating job in memory from the accepted attempt.
@@ -1742,10 +1763,12 @@ export default async function handler(req, res) {
         final_delivery_status: true,
         request_duration_ms: Date.now() - requestStartedAt,
         optimized_query_payloads: true,
-        callback_lookup_chunk_size: 80,
-        callback_lookup_concurrency: 6,
+        callback_lookup_chunk_size: 0,
+        callback_lookup_concurrency: 0,
         callback_lookup_url_safe: true,
-        callback_lookup_parallel: true
+        callback_lookup_parallel: false,
+        callback_lookup_strategy: 'reuse_outgoing_history',
+        callback_lookup_extra_db_queries: 0
       }
     })
   } catch (error) {
