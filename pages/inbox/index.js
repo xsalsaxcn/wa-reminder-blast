@@ -144,6 +144,7 @@ export default function InboxPage() {
   const pollingRef = useRef(null)
   const sendBusyRef = useRef(false)
   const pendingTextSendQueueRef = useRef([])
+  const messageRequestSeqRef = useRef(0)
   const messagesEndRef = useRef(null)
   const messagesScrollRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -403,6 +404,8 @@ export default function InboxPage() {
   async function loadMessages(phone, silent = false, forceScroll = false, before = '') {
     if (!phone) return
 
+    const requestPhone = String(phone || '').trim()
+    const requestSeq = ++messageRequestSeqRef.current
     const appendOlder = Boolean(before)
     const scrollEl = messagesScrollRef.current
     const previousScrollHeight = scrollEl ? scrollEl.scrollHeight : 0
@@ -421,7 +424,7 @@ export default function InboxPage() {
           ? router.query.job_item_id
           : ''
 
-      params.set('phone', phone)
+      params.set('phone', requestPhone)
       params.set('limit', appendOlder ? '50' : '50')
       params.set('t', String(Date.now()))
 
@@ -443,6 +446,16 @@ export default function InboxPage() {
 
       const nextMessages = data.messages || []
       const messagePage = data.page || data || {}
+
+      // NOTIVA_INBOX_V14_FINAL_STALE_HISTORY_GUARD
+      // Ignore late/out-of-order room responses. They must never overwrite
+      // the message pane after the admin has switched to another customer.
+      if (
+        selectedPhoneRef.current !== requestPhone ||
+        requestSeq !== messageRequestSeqRef.current
+      ) {
+        return
+      }
 
       setHasMoreMessages(Boolean(messagePage.has_more ?? messagePage.hasMore))
       setOldestCursor(messagePage.oldest_cursor || messagePage.oldestCursor || '')
@@ -531,10 +544,14 @@ export default function InboxPage() {
         }
       }
     } catch (err) {
-      setError(err.message || 'Gagal memuat pesan')
+      if (selectedPhoneRef.current === requestPhone) {
+        setError(err.message || 'Gagal memuat pesan')
+      }
     } finally {
-      if (appendOlder) setLoadingOlder(false)
-      else if (!silent) setLoadingMessages(false)
+      if (selectedPhoneRef.current === requestPhone) {
+        if (appendOlder) setLoadingOlder(false)
+        else if (!silent) setLoadingMessages(false)
+      }
     }
   }
 
@@ -549,10 +566,14 @@ export default function InboxPage() {
 
     try {
       const params = new URLSearchParams()
-      const queryPhone =
+      const routePhone =
         router?.query?.phone && typeof router.query.phone === 'string'
           ? router.query.phone
           : ''
+      const queryPhone =
+        !loadSelectedMessages && selectedPhoneRef.current
+          ? selectedPhoneRef.current
+          : routePhone
 
       params.set('limit', String(CONVERSATION_PAGE_SIZE))
       if (queryPhone) params.set('focus_phone', queryPhone)
@@ -588,6 +609,28 @@ export default function InboxPage() {
       )
       setLastUpdated(new Date())
       setLoading(false)
+
+      // NOTIVA_INBOX_V14_FINAL_BACKGROUND_ROOM_GUARD
+      // Polling/post-send quick refresh updates list metadata only.
+      // It must never switch the active room or rewrite selectedPhoneRef.
+      if (!loadSelectedMessages && selectedPhoneRef.current) {
+        const activePhone = selectedPhoneRef.current
+        const activeFromList = list.find((item) => item?.phone === activePhone)
+
+        if (activeFromList) {
+          setSelectedConversation((current) =>
+            current?.phone === activePhone
+              ? {
+                  ...current,
+                  ...activeFromList,
+                  unread_count: 0
+                }
+              : current
+          )
+        }
+
+        return true
+      }
 
       const requestedPhone = queryPhone
       const nextSelected =
@@ -980,16 +1023,24 @@ export default function InboxPage() {
     const isQueuedReplay = Boolean(queuedMessageText)
 
     const targetConversation = selectedConversation
-    const targetPhone = queuedPhone || selectedPhoneRef.current || targetConversation?.phone || ''
-    const visiblePhone = targetConversation?.phone || ''
+    const visiblePhone = String(targetConversation?.phone || '').trim()
+    const refPhone = String(selectedPhoneRef.current || '').trim()
+    const targetPhone = isQueuedReplay ? queuedPhone : visiblePhone
     const messageToSend = (queuedMessageText || replyText).trim()
     const fileToSend = isQueuedReplay ? null : attachmentFile
 
-    if (!targetPhone || !visiblePhone) return
+    // NOTIVA_INBOX_V14_FINAL_SEND_FAIL_CLOSED
+    // Direct send is allowed only when visible room and synchronous ref agree.
+    // Queued replay keeps the immutable phone captured when Send was clicked.
+    if (isQueuedReplay) {
+      if (!targetPhone) return
+    } else {
+      if (!visiblePhone || !refPhone) return
 
-    if (targetPhone !== visiblePhone) {
-      setError('Room chat berubah saat akan mengirim. Pilih ulang chat customer supaya tidak salah kirim.')
-      return
+      if (visiblePhone !== refPhone) {
+        setError('Room chat belum sinkron. Pesan TIDAK dikirim. Klik ulang room customer lalu kirim kembali.')
+        return
+      }
     }
 
     if (!messageToSend && !fileToSend) return
@@ -1061,20 +1112,31 @@ export default function InboxPage() {
           throw new Error(data.message || 'Gagal mengirim balasan')
         }
       }
-      void loadMessages(targetPhone, true, true)
-      await loadConversations(true)
+      // Refresh history only if this recipient is still the active room.
+      if (selectedPhoneRef.current === targetPhone) {
+        void loadMessages(targetPhone, true, true)
+      }
+
+      // Lightweight metadata refresh only; never block queue drain.
+      void loadQuickConversations(false)
     } catch (err) {
-      setReplyText((current) => current || messageToSend)
-      setError(err.message || 'Gagal mengirim balasan')
+      // Never restore a failed draft into a different customer's room.
+      if (selectedPhoneRef.current === targetPhone) {
+        setReplyText((current) => current || messageToSend)
+        setError(err.message || 'Gagal mengirim balasan')
+      } else {
+        setError(
+          `Pesan ke ${targetPhone} gagal: ${err.message || 'Gagal mengirim balasan'}. Draft tidak dipindahkan ke room aktif.`
+        )
+      }
     } finally {
       sendBusyRef.current = false
       setSending(false)
 
       const nextQueuedText = pendingTextSendQueueRef.current.shift()
       if (nextQueuedText?.text && nextQueuedText?.phone) {
-        setTimeout(() => {
-          void sendReply(null, nextQueuedText)
-        }, 0)
+        // FIFO replay starts immediately after the previous API call settles.
+        void sendReply(null, nextQueuedText)
       }
     }
   }
