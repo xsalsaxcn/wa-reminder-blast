@@ -142,6 +142,8 @@ export default function InboxPage() {
     Math.max(1, Number(initialInboxCache?.conversation_page || 1))
   )
   const pollingRef = useRef(null)
+  const sendBusyRef = useRef(false)
+  const pendingTextSendQueueRef = useRef([])
   const messagesEndRef = useRef(null)
   const messagesScrollRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -466,6 +468,62 @@ export default function InboxPage() {
         }, 50)
       } else {
         setMessages(nextMessages)
+
+        // NOTIVA_INBOX_V121_HISTORY_WINDOW_RECONCILE
+        // quick-list may have stale/null last_incoming_at. Reconcile from
+        // message history already loaded for this room; no extra DB request.
+        const latestIncoming = (nextMessages || [])
+          .filter((item) => {
+            const direction = String(item?.direction || item?.type || '').toLowerCase()
+            return direction === 'incoming' || direction === 'inbound' || direction === 'in'
+          })
+          .map((item) => {
+            const raw =
+              item?.created_at ||
+              item?.received_at ||
+              item?.message_at ||
+              item?.timestamp ||
+              null
+
+            let time = raw ? new Date(raw).getTime() : 0
+            if ((!Number.isFinite(time) || time <= 0) && Number.isFinite(Number(raw))) {
+              const numeric = Number(raw)
+              time = numeric < 100000000000 ? numeric * 1000 : numeric
+            }
+
+            return { item, time }
+          })
+          .filter((entry) => Number.isFinite(entry.time) && entry.time > 0)
+          .sort((a, b) => b.time - a.time)[0]
+
+        if (latestIncoming) {
+          const lastIncomingAt = new Date(latestIncoming.time).toISOString()
+          const ageMs = Math.max(0, Date.now() - latestIncoming.time)
+          const expired = ageMs > 24 * 60 * 60 * 1000
+          const hours = Math.floor(ageMs / (60 * 60 * 1000))
+          const windowPatch = {
+            last_incoming_at: lastIncomingAt,
+            has_customer_inbound: true,
+            can_send_free_text: !expired,
+            is_expired_24h: expired,
+            hours_since_last_incoming: hours,
+            window_status: expired ? 'expired' : 'open',
+            window_note: expired
+              ? 'Expired >24 jam. Free text berisiko gagal, gunakan template untuk follow-up.'
+              : 'Masih dalam window 24 jam. Free text masih bisa digunakan.'
+          }
+
+          setSelectedConversation((current) =>
+            current?.phone === phone ? { ...current, ...windowPatch } : current
+          )
+
+          setConversations((current) =>
+            current.map((item) =>
+              item?.phone === phone ? { ...item, ...windowPatch } : item
+            )
+          )
+        }
+
         markLocalConversationRead(phone)
 
         if (forceScroll || shouldKeepBottom) {
@@ -912,14 +970,20 @@ export default function InboxPage() {
     }
   }
 
-  async function sendReply(e) {
-    e.preventDefault()
+  async function sendReply(e, queuedPayload = null) {
+    e?.preventDefault?.()
+
+    const queuedMessageText =
+      typeof queuedPayload?.text === 'string' ? queuedPayload.text : ''
+    const queuedPhone =
+      typeof queuedPayload?.phone === 'string' ? queuedPayload.phone : ''
+    const isQueuedReplay = Boolean(queuedMessageText)
 
     const targetConversation = selectedConversation
-    const targetPhone = selectedPhoneRef.current || targetConversation?.phone || ''
+    const targetPhone = queuedPhone || selectedPhoneRef.current || targetConversation?.phone || ''
     const visiblePhone = targetConversation?.phone || ''
-    const messageToSend = replyText.trim()
-    const fileToSend = attachmentFile
+    const messageToSend = (queuedMessageText || replyText).trim()
+    const fileToSend = isQueuedReplay ? null : attachmentFile
 
     if (!targetPhone || !visiblePhone) return
 
@@ -930,9 +994,28 @@ export default function InboxPage() {
 
     if (!messageToSend && !fileToSend) return
 
-    setSending(true)
+    // NOTIVA_INBOX_V121_SEND_QUEUE
+    // Keep text sending sequential without freezing the composer/send button.
+    if (sendBusyRef.current) {
+      if (messageToSend && !fileToSend) {
+        pendingTextSendQueueRef.current.push({
+          phone: targetPhone,
+          text: messageToSend
+        })
+
+        if (!isQueuedReplay) setReplyText('')
+      } else if (fileToSend) {
+        setError('Tunggu pengiriman sebelumnya selesai sebelum mengirim lampiran.')
+      }
+
+      return
+    }
+
+    sendBusyRef.current = true
+    // Text-only send stays interactive; attachment send remains blocking.
+    setSending(Boolean(fileToSend))
     // Free the composer immediately; the request can finish in background.
-    setReplyText('')
+    if (!isQueuedReplay) setReplyText('')
     setError('')
 
     try {
@@ -984,7 +1067,15 @@ export default function InboxPage() {
       setReplyText((current) => current || messageToSend)
       setError(err.message || 'Gagal mengirim balasan')
     } finally {
+      sendBusyRef.current = false
       setSending(false)
+
+      const nextQueuedText = pendingTextSendQueueRef.current.shift()
+      if (nextQueuedText?.text && nextQueuedText?.phone) {
+        setTimeout(() => {
+          void sendReply(null, nextQueuedText)
+        }, 0)
+      }
     }
   }
 
