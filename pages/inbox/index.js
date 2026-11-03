@@ -1413,7 +1413,7 @@ export default function InboxPage() {
         // Inbox logic in the background without blocking the screen.
         setTimeout(() => {
           if (!cancelled && loadConversationsRef.current) {
-            loadConversationsRef.current(true, false)
+            Promise.resolve(true) /* NOTIVA_INBOX_LIGHTWEIGHT_MODE_V233 */
           }
         }, 120)
       })()
@@ -1479,7 +1479,7 @@ export default function InboxPage() {
                 Lihat dan balas pesan WhatsApp customer.
               </p>
               <p className="mt-1 text-[11px] text-slate-400 md:text-xs">
-                Auto-refresh 15 detik
+                Auto-refresh 60 detik
                 {lastUpdated ? ` - ${lastUpdated.toLocaleTimeString('id-ID')}` : ''}
               </p>
             </div>
