@@ -2065,8 +2065,8 @@ export default function InboxPage() {
                     onChange={(e) => setReplyText(e.target.value)}
                     placeholder={attachmentFile ? 'Tulis caption...' : 'Tulis balasan...'}
                     rows={1}
-                    disabled={!selectedConversation || sending}
-                    className="max-h-28 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100"
+                    disabled={sending}
+                    className="max-h-28 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100 pointer-events-auto cursor-text"
                   />
 
                   <button
