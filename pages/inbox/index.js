@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
 import Link from 'next/link'
 import Sidebar from '../../components/Sidebar'
@@ -40,15 +40,42 @@ export default function InboxPage() {
       ? router.query.phone
       : ''
   const cachedInboxSnapshot = getNotivaInboxRouteCache()
-  const initialInboxCache = requestedInitialPhone ? null : cachedInboxSnapshot
+  // Keep warm route cache even for ?phone= deep-links. On a hard reload the
+  // in-memory cache is naturally empty, but the requested phone still gets
+  // an instant local chat shell so the composer never waits on the API.
+  const initialInboxCache = cachedInboxSnapshot
 
   const cachedConversations = Array.isArray(initialInboxCache?.conversations)
     ? initialInboxCache.conversations
     : []
-  const cachedFirstConversation = cachedConversations[0] || null
+
+  const cachedRequestedConversation = requestedInitialPhone
+    ? cachedConversations.find((item) => item?.phone === requestedInitialPhone) || null
+    : null
+
+  const requestedConversationShell = requestedInitialPhone
+    ? {
+        id: requestedInitialPhone,
+        phone: requestedInitialPhone,
+        profile_name: requestedInitialPhone,
+        unread_count: 0,
+        status: 'open',
+        window_status: 'loading',
+        can_send_free_text: false,
+        is_expired_24h: false,
+        hours_since_last_incoming: null,
+        window_note: 'Memuat status percakapan...'
+      }
+    : null
+
+  const initialSelectedConversation =
+    cachedRequestedConversation ||
+    requestedConversationShell ||
+    cachedConversations[0] ||
+    null
 
   const [conversations, setConversations] = useState(cachedConversations)
-  const [selectedConversation, setSelectedConversation] = useState(cachedFirstConversation)
+  const [selectedConversation, setSelectedConversation] = useState(initialSelectedConversation)
   const [messages, setMessages] = useState([])
   const [hasMoreMessages, setHasMoreMessages] = useState(false)
   const [oldestCursor, setOldestCursor] = useState('')
@@ -108,7 +135,7 @@ export default function InboxPage() {
   const CONVERSATION_PAGING_SIZE = 100
   const CONVERSATION_FILTER_DEBOUNCE_MS = 350
 
-  const selectedPhoneRef = useRef(cachedFirstConversation?.phone || null)
+  const selectedPhoneRef = useRef(initialSelectedConversation?.phone || null)
   // Track the page the admin most recently requested. A slower background
   // Page 1 response is ignored if the admin already requested Page 2/3/etc.
   const conversationPageTargetRef = useRef(
@@ -459,7 +486,7 @@ export default function InboxPage() {
     await loadMessages(selectedConversation.phone, true, false, oldestCursor)
   }
 
-  async function loadQuickConversations() {
+  async function loadQuickConversations(loadSelectedMessages = true) {
     setError('')
 
     try {
@@ -518,7 +545,10 @@ export default function InboxPage() {
           setMobileView('chat')
         }
 
-        await loadMessages(nextSelected.phone, true, true)
+        if (loadSelectedMessages) {
+          // History is background work; never block the composer on it.
+          void loadMessages(nextSelected.phone, true, true)
+        }
       }
 
       return true
@@ -699,7 +729,9 @@ export default function InboxPage() {
         setMobileView('chat')
       }
 
-      await loadMessages(nextSelected.phone, true, !silent)
+      // Conversation metadata renders immediately; message history follows
+      // asynchronously so typing stays responsive.
+      void loadMessages(nextSelected.phone, true, !silent)
     } catch (err) {
       if (isPageNavigation && conversationPageTargetRef.current === requestedPage) {
         conversationPageTargetRef.current = conversationPage
@@ -1390,10 +1422,11 @@ export default function InboxPage() {
     loadQuickReplies()
 
     pollingRef.current = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
       if (document.visibilityState === 'visible' && loadConversationsRef.current) {
-        loadConversationsRef.current(true)
+        loadQuickConversations(false)
       }
-    }, 15000)
+    }, 60000)
 
     return () => {
       cancelled = true
@@ -1408,6 +1441,7 @@ export default function InboxPage() {
     if (!router.isReady) return
 
     const interval = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return
       const activePhone = selectedPhoneRef.current
 
       if (!activePhone) return
@@ -1425,7 +1459,7 @@ export default function InboxPage() {
       } finally {
         activeMessagePollingRef.current = false
       }
-    }, 5000)
+    }, 12000)
 
     return () => {
       clearInterval(interval)
