@@ -1533,7 +1533,17 @@ export default async function handler(req, res) {
           .filter(Boolean)
       )
     )
-const relevantPhones = new Set(
+
+    const deliveryCallbackPromise = safeFetchByMetaIds(
+      'send_delivery_logs',
+      metaMessageIds,
+      25000,
+      'id,job_id,item_id,status,mode,error_message,meta_message_id,created_at'
+    )
+
+
+
+    const relevantPhones = new Set(
       items.map(getItemPhone).filter(Boolean)
     )
 
@@ -1599,69 +1609,10 @@ const relevantPhones = new Set(
       ))
     ])
 
-    // Reuse outgoing history already loaded for reply analytics.
-    // Meta webhook updates wa_outgoing_messages.status by meta_message_id,
-    // so this avoids a second, expensive send_delivery_logs callback lookup.
-    const activeMetaIds = new Set(metaMessageIds)
-
-    const deliveryCallbackRows = (outgoingRecent || [])
-      .map((row) => {
-        const metaId = cleanText(
-          row?.meta_message_id ||
-          row?.message_id ||
-          row?.wamid ||
-          ''
-        )
-
-        if (!metaId || !activeMetaIds.has(metaId)) return null
-
-        return {
-          id: row?.id || null,
-          job_id: null,
-          item_id: null,
-          status: row?.status || 'sent',
-          mode: 'webhook_status',
-          error_message: row?.error_message || row?.error || null,
-          meta_message_id: metaId,
-          created_at:
-            row?.updated_at ||
-            row?.sent_at ||
-            row?.created_at ||
-            null
-        }
-      })
-      .filter(Boolean)
-
-    // Webhook callback rows are keyed by Meta message ID and may not have job_id.
-    // Link them to the originating job in memory from the accepted attempt.
-    // This keeps per-job aggregation correct without any extra DB query.
-    const deliveryJobByMeta = new Map()
-
-    for (const row of deliveryAttemptRows || []) {
-      const metaId = cleanText(row?.meta_message_id || '')
-      const jobId = cleanText(row?.job_id || '')
-
-      if (metaId && jobId && !deliveryJobByMeta.has(metaId)) {
-        deliveryJobByMeta.set(metaId, jobId)
-      }
-    }
-
-    const linkedDeliveryCallbackRows = (deliveryCallbackRows || []).map((row) => {
-      const metaId = cleanText(row?.meta_message_id || '')
-      const existingJobId = cleanText(row?.job_id || '')
-      const linkedJobId = existingJobId || deliveryJobByMeta.get(metaId) || ''
-
-      if (!linkedJobId || existingJobId) return row
-
-      return {
-        ...row,
-        job_id: linkedJobId
-      }
-    })
-
+    const deliveryCallbackRows = await deliveryCallbackPromise
     const deliveryRows = [
       ...(deliveryAttemptRows || []),
-      ...linkedDeliveryCallbackRows
+      ...(deliveryCallbackRows || [])
     ]
 
 
@@ -1756,19 +1707,16 @@ const relevantPhones = new Set(
         outgoing_relevant: outgoingRows.length,
         delivery_attempt_logs_loaded: deliveryAttemptRows.length,
         delivery_callback_logs_loaded: deliveryCallbackRows.length,
-        delivery_callback_linked_in_memory: linkedDeliveryCallbackRows.filter((row) => cleanText(row?.job_id || '')).length,
         delivery_logs_loaded: deliveryRows.length,
         delivery_meta_ids: metaMessageIds.length,
         analytics_since: analyticsSince || null,
         final_delivery_status: true,
         request_duration_ms: Date.now() - requestStartedAt,
         optimized_query_payloads: true,
-        callback_lookup_chunk_size: 0,
-        callback_lookup_concurrency: 0,
+        callback_lookup_chunk_size: 80,
+        callback_lookup_concurrency: 6,
         callback_lookup_url_safe: true,
-        callback_lookup_parallel: false,
-        callback_lookup_strategy: 'reuse_outgoing_history',
-        callback_lookup_extra_db_queries: 0
+        callback_lookup_parallel: true
       }
     })
   } catch (error) {
