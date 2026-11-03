@@ -1610,9 +1610,37 @@ export default async function handler(req, res) {
     ])
 
     const deliveryCallbackRows = await deliveryCallbackPromise
+
+    // Webhook callback rows may only carry meta_message_id. Link them to
+    // the accepted attempt's job_id in memory so per-job Delivered/Read
+    // metrics are correct without adding any database query.
+    const deliveryJobByMeta = new Map()
+
+    for (const row of deliveryAttemptRows || []) {
+      const metaId = cleanText(row?.meta_message_id || '')
+      const jobId = cleanText(row?.job_id || '')
+
+      if (metaId && jobId && !deliveryJobByMeta.has(metaId)) {
+        deliveryJobByMeta.set(metaId, jobId)
+      }
+    }
+
+    const linkedDeliveryCallbackRows = (deliveryCallbackRows || []).map((row) => {
+      const metaId = cleanText(row?.meta_message_id || '')
+      const existingJobId = cleanText(row?.job_id || '')
+      const linkedJobId = existingJobId || deliveryJobByMeta.get(metaId) || ''
+
+      if (!linkedJobId || existingJobId) return row
+
+      return {
+        ...row,
+        job_id: linkedJobId
+      }
+    })
+
     const deliveryRows = [
       ...(deliveryAttemptRows || []),
-      ...(deliveryCallbackRows || [])
+      ...linkedDeliveryCallbackRows
     ]
 
 

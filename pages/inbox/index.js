@@ -931,6 +931,8 @@ export default function InboxPage() {
     if (!messageToSend && !fileToSend) return
 
     setSending(true)
+    // Free the composer immediately; the request can finish in background.
+    setReplyText('')
     setError('')
 
     try {
@@ -976,11 +978,10 @@ export default function InboxPage() {
           throw new Error(data.message || 'Gagal mengirim balasan')
         }
       }
-
-      setReplyText('')
-      await loadMessages(targetPhone, true, true)
+      void loadMessages(targetPhone, true, true)
       await loadConversations(true)
     } catch (err) {
+      setReplyText((current) => current || messageToSend)
       setError(err.message || 'Gagal mengirim balasan')
     } finally {
       setSending(false)
@@ -2065,7 +2066,7 @@ export default function InboxPage() {
                     onChange={(e) => setReplyText(e.target.value)}
                     placeholder={attachmentFile ? 'Tulis caption...' : 'Tulis balasan...'}
                     rows={1}
-                    disabled={sending}
+                    aria-busy={sending}
                     className="max-h-28 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-slate-900 disabled:bg-slate-100 pointer-events-auto cursor-text"
                   />
 
